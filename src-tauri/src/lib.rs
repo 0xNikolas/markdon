@@ -1,4 +1,7 @@
 mod commands;
+mod menu;
+
+use tauri::Emitter;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -11,6 +14,14 @@ pub fn run() {
             .build(),
         )?;
       }
+
+      let menu = menu::build(app)?;
+      app.set_menu(menu)?;
+      app.on_menu_event(|app_handle, event| {
+        // Menu item ids ARE the event names (e.g. "menu:open").
+        let _ = app_handle.emit(event.id().0.as_str(), ());
+      });
+
       Ok(())
     })
     .plugin(tauri_plugin_dialog::init())
