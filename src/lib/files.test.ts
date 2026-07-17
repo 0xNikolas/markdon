@@ -13,6 +13,7 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 
 import { document, newDoc, edit } from './document'
 import { open, save, saveAs } from './files'
+import { errorMessage } from './errors'
 
 beforeEach(() => {
   invoke.mockReset()
@@ -69,6 +70,25 @@ describe('saveAs', () => {
     saveDialog.mockResolvedValue(null)
     await saveAs()
     expect(invoke).not.toHaveBeenCalled()
+    expect(get(document).dirty).toBe(true)
+  })
+})
+
+describe('error handling', () => {
+  it('reports an error when read_file rejects', async () => {
+    errorMessage.set(null)
+    openDialog.mockResolvedValue('/tmp/a.md')
+    invoke.mockRejectedValue('boom')
+    await open()
+    expect(get(errorMessage)).toContain('Could not open file')
+  })
+
+  it('reports an error when write_file rejects and keeps dirty', async () => {
+    errorMessage.set(null)
+    document.set({ path: '/tmp/a.md', content: 'body', dirty: true, loadId: 1 })
+    invoke.mockRejectedValue('disk full')
+    await save()
+    expect(get(errorMessage)).toContain('Could not save file')
     expect(get(document).dirty).toBe(true)
   })
 })
