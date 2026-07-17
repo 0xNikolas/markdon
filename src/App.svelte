@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { listen } from '@tauri-apps/api/event'
+  import { invoke } from '@tauri-apps/api/core'
   import { getCurrentWindow } from '@tauri-apps/api/window'
   import { get } from 'svelte/store'
   import { document, edit, newDoc } from './lib/document'
-  import { open, save, saveAs } from './lib/files'
+  import { open, save, saveAs, openPath } from './lib/files'
   import Editor from './Editor.svelte'
   import StatusBar from './StatusBar.svelte'
   import Banner from './Banner.svelte'
@@ -20,6 +21,14 @@
     else action()
   }
 
+  // Open a file the OS handed us via a .md file association (Finder double-click).
+  // Drains the Rust-side buffer; opens the first path through the same guard as
+  // File → Open. Called on mount (cold launch) and on each `file:opened` ping.
+  async function drainOpenedFiles() {
+    const paths = await invoke<string[]>('take_opened_files')
+    if (paths.length > 0) guarded(() => openPath(paths[0]))
+  }
+
   onMount(() => {
     const unsub = Promise.all([
       listen('menu:new', () => guarded(() => newDoc())),
@@ -27,7 +36,9 @@
       listen('menu:save', () => save()),
       listen('menu:save_as', () => saveAs()),
       listen('window:close-requested', () => guarded(() => getCurrentWindow().destroy())),
+      listen('file:opened', () => drainOpenedFiles()),
     ])
+    drainOpenedFiles() // cold launch: pick up the file the app was opened with
     return () => { unsub.then((fns) => fns.forEach((f) => f())) }
   })
 
