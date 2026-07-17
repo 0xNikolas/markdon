@@ -12,7 +12,7 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 }))
 
 import { document, newDoc, edit } from './document'
-import { open, save, saveAs } from './files'
+import { open, save, saveAs, openPath } from './files'
 import { errorMessage } from './errors'
 
 beforeEach(() => {
@@ -20,6 +20,26 @@ beforeEach(() => {
   openDialog.mockReset()
   saveDialog.mockReset()
   newDoc()
+})
+
+describe('openPath', () => {
+  it('loads the given path into the store without a dialog', async () => {
+    invoke.mockResolvedValue('# From association')
+    await openPath('/tmp/assoc.md')
+    expect(openDialog).not.toHaveBeenCalled()
+    expect(invoke).toHaveBeenCalledWith('read_file', { path: '/tmp/assoc.md' })
+    const s = get(document)
+    expect(s.path).toBe('/tmp/assoc.md')
+    expect(s.content).toBe('# From association')
+    expect(s.dirty).toBe(false)
+  })
+
+  it('reports an error when the read fails', async () => {
+    errorMessage.set(null)
+    invoke.mockRejectedValue('nope')
+    await openPath('/tmp/missing.md')
+    expect(get(errorMessage)).toContain('Could not open file')
+  })
 })
 
 describe('open', () => {

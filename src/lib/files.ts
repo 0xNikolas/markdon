@@ -6,15 +6,19 @@ import { reportError } from './errors'
 
 const MD_FILTER = { name: 'Markdown', extensions: ['md', 'markdown'] }
 
-export async function open(): Promise<void> {
-  const selected = await openDialog({ filters: [MD_FILTER], multiple: false, directory: false })
-  if (typeof selected !== 'string') return // cancelled
+export async function openPath(path: string): Promise<void> {
   try {
-    const content = await invoke<string>('read_file', { path: selected })
-    openDoc(selected, content)
+    const content = await invoke<string>('read_file', { path })
+    openDoc(path, content)
   } catch (e) {
     reportError(`Could not open file: ${String(e)}`)
   }
+}
+
+export async function open(): Promise<void> {
+  const selected = await openDialog({ filters: [MD_FILTER], multiple: false, directory: false })
+  if (typeof selected !== 'string') return // cancelled
+  await openPath(selected)
 }
 
 export async function save(): Promise<void> {
