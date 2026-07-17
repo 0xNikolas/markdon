@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "markdon",
   "version": "0.1.0",
-  "identifier": "com.markdon.app",
+  "identifier": "com.markdon.editor",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
