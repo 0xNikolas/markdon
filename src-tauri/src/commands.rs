@@ -3,7 +3,7 @@ use std::fs;
 /// Reject UNC and DOS device paths (Windows SSRF / NTLM-credential-theft vector).
 /// Backslash-prefixed paths are never legitimate on unix, so they are rejected on
 /// all platforms; forward-slash UNC and verbatim device prefixes matter on Windows.
-fn reject_unsafe_path(path: &str) -> Result<(), String> {
+pub(crate) fn reject_unsafe_path(path: &str) -> Result<(), String> {
     if path.starts_with(r"\\") {
         return Err("Refusing UNC path".into());
     }
