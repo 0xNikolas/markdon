@@ -7,7 +7,11 @@
   let { path, dirty, content }: Props = $props()
 
   const filename = $derived(path ? path.split('/').pop() : 'Untitled')
-  const words = $derived(content.trim() ? content.trim().split(/\s+/).length : 0)
+  // Count runs of letters/digits (keeping apostrophes/hyphens inside words) so
+  // markdown syntax tokens like `#`, `*`, `>` aren't counted as words.
+  const words = $derived(
+    (content.match(/[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*/gu) ?? []).length,
+  )
 </script>
 
 <footer class="status">
