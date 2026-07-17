@@ -7,9 +7,11 @@ fn reject_unsafe_path(path: &str) -> Result<(), String> {
     if path.starts_with(r"\\") {
         return Err("Refusing UNC path".into());
     }
+    // Windows also treats a forward-slash prefix as UNC; backslash prefixes
+    // (incl. `\\?\` / `\\.\` device paths) are already caught above on all platforms.
     #[cfg(windows)]
-    if path.starts_with("//") || path.starts_with(r"\\?\") || path.starts_with(r"\\.\") {
-        return Err("Refusing UNC or device path".into());
+    if path.starts_with("//") {
+        return Err("Refusing UNC path".into());
     }
     Ok(())
 }
