@@ -6,6 +6,7 @@
   import { get } from 'svelte/store'
   import { document, edit, newDoc } from './lib/document'
   import { open, save, saveAs, openPath } from './lib/files'
+  import { conflict, reloadFromDisk, dismissConflict, initFileSync } from './lib/fileSync'
   import Editor from './Editor.svelte'
   import StatusBar from './StatusBar.svelte'
   import Banner from './Banner.svelte'
@@ -39,7 +40,11 @@
       listen('file:opened', () => drainOpenedFiles()),
     ])
     drainOpenedFiles() // cold launch: pick up the file the app was opened with
-    return () => { unsub.then((fns) => fns.forEach((f) => f())) }
+    const teardownSync = initFileSync() // watch the open file for external changes
+    return () => {
+      unsub.then((fns) => fns.forEach((f) => f()))
+      teardownSync.then((fn) => fn())
+    }
   })
 
   function discard() {
@@ -52,6 +57,15 @@
 
 <main class="app">
   <Banner />
+  {#if $conflict !== null}
+    <div class="reload-bar" role="alert">
+      <span>This file changed on disk. You have unsaved changes.</span>
+      <div class="reload-actions">
+        <button onclick={dismissConflict}>Keep mine</button>
+        <button class="reload" onclick={() => reloadFromDisk($conflict!)}>Reload from disk</button>
+      </div>
+    </div>
+  {/if}
   {#key $document.loadId}
     <Editor initialContent={$document.content} onChange={edit} />
   {/key}
@@ -82,4 +96,19 @@
   }
   .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
   .danger { color: #b3261e; }
+
+  .reload-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 12px;
+    background: #fff8e1;
+    color: #5f4b00;
+    font: 13px system-ui, sans-serif;
+    border-bottom: 1px solid #f0e0a0;
+  }
+  .reload-actions { display: flex; gap: 8px; flex-shrink: 0; }
+  .reload-bar button { font: inherit; cursor: pointer; }
+  .reload-bar .reload { font-weight: 600; }
 </style>

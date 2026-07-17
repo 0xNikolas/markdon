@@ -1,5 +1,6 @@
 mod commands;
 mod menu;
+mod watcher;
 
 use std::sync::Mutex;
 
@@ -42,6 +43,7 @@ fn queue_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
 pub fn run() {
   tauri::Builder::default()
     .manage(OpenedFiles::default())
+    .manage(watcher::FileWatcher::default())
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
@@ -73,7 +75,9 @@ pub fn run() {
     .invoke_handler(tauri::generate_handler![
       commands::read_file,
       commands::write_file,
-      take_opened_files
+      take_opened_files,
+      watcher::watch_file,
+      watcher::unwatch
     ])
     .build(tauri::generate_context!())
     .expect("error while building tauri application")
