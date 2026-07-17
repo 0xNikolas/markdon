@@ -66,9 +66,10 @@ dialogs, disk I/O); the web UI owns editing and rendering.
 ### Frontend (`src/`)
 
 - **`lib/document.ts`** — the `document` store:
-  `{ path: string | null, content: string, dirty: boolean }`, plus typed
-  transitions (`openDoc`, `markSaved`, `edit`, `newDoc`). Pure logic,
-  unit-tested.
+  `{ path: string | null, content: string, dirty: boolean, loadId: number }`,
+  plus typed transitions (`openDoc`, `markSaved`, `edit`, `newDoc`). `loadId` is
+  a monotonic counter bumped by `openDoc` / `newDoc` to force editor re-mounts
+  (see re-mount detail). Pure logic, unit-tested.
 - **`lib/files.ts`** — orchestration wrappers: `open()`, `save()`, `saveAs()` —
   call the dialog plugin for pickers and `invoke` the Rust commands.
 - **`Editor.svelte`** — wraps Crepe; renders current content, emits changes back
@@ -80,8 +81,8 @@ dialogs, disk I/O); the web UI owns editing and rendering.
 ## Data flow
 
 - **Open:** menu / ⌘O → `files.open()` → dialog returns a path →
-  `invoke("read_file")` → `openDoc({path, content})` → Editor re-mounts with new
-  content.
+  `invoke("read_file")` → `openDoc({path, content})` → Editor re-mounts (see
+  re-mount detail) with new content.
 - **Edit:** Crepe change → `edit(content)` → `dirty = true`.
 - **Save:** ⌘S → if `path` is null, fall through to Save As; else
   `invoke("write_file")` → `markSaved()`.
@@ -92,10 +93,11 @@ dialogs, disk I/O); the web UI owns editing and rendering.
 
 ProseMirror/Crepe does not cleanly swap its whole document from outside. On open
 or New, the Crepe instance is destroyed and recreated using Svelte's
-`{#key document.path}` block. Typing edits stay in-place and fast; only load/new
-triggers a rebuild. (Note: when two distinct opened files could share a `null`
-or identical path key, keying additionally on a monotonic "load id" bumped by
-`openDoc`/`newDoc` guarantees a rebuild. Use `{#key loadId}`.)
+`{#key loadId}` block, where `loadId` is a monotonic counter bumped by every
+`openDoc` / `newDoc` transition. Keying on `loadId` (rather than `path`)
+guarantees a rebuild even when two loads share the same path — e.g. re-opening
+the same file, or two `newDoc` calls that both have `path = null`. Typing edits
+stay in-place and fast; only load/new triggers a rebuild.
 
 ## Error handling
 
