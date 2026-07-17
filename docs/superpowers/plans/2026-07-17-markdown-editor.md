@@ -18,6 +18,7 @@
 - **Vite dev server:** port `1420`, `strictPort: true`, to match `tauri.conf.json`.
 - **Rust command signatures are the contract** — frontend `invoke` argument keys must match Rust parameter names exactly (`path`, `contents`).
 - **Commit messages:** conventional-commit style, **no `Co-Authored-By` trailer of any kind**.
+- **Package manager & runner: bun** (not npm/npx). Use `bun install`, `bun add`, `bun add -d`, `bun run <script>`, `bunx <bin>`. Commit `bun.lockb`. The `node_modules` dir is still used and stays git-ignored. Vitest remains the test framework (its `vi.mock` / `describe`/`it`/`expect` APIs are used) — run it via `bun run test` (the npm-script `vitest run`), **never** `bun test` (that invokes Bun's own incompatible runner).
 - Target platform: macOS (Darwin). Menu includes a macOS app submenu + native Edit submenu so system shortcuts (⌘C/⌘V/⌘Z) work.
 
 ---
@@ -31,6 +32,7 @@ Foundation task: produces a running (empty-window) Tauri app plus a working Vite
 - Create: `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, `src-tauri/build.rs`, `src-tauri/src/main.rs`, `src-tauri/src/lib.rs`, `src-tauri/capabilities/default.json`
 - Create: `vitest.config.ts`
 - Modify: `.gitignore` (add `node_modules`, `dist`, `src-tauri/target`)
+- Note: current create-vite emits `tsconfig.json` + `tsconfig.app.json` + `tsconfig.node.json` — copy all `tsconfig*.json`.
 
 **Interfaces:**
 - Produces: a `src-tauri/src/lib.rs` exposing `pub fn run()` called by `main.rs`; a `run()` builder that later tasks extend with `.plugin(...)`, `.invoke_handler(...)`, `.setup(...)`.
@@ -42,10 +44,12 @@ Run (adjust the scratchpad path if different):
 ```bash
 TMP="/private/tmp/claude-501/scaffold-markdon"
 rm -rf "$TMP" && mkdir -p "$TMP"
-cd "$TMP" && npm create vite@latest app -- --template svelte-ts
-# Copy everything except node_modules into the project root, preserving .git/README/docs
+# bun create scaffolds a Vite Svelte-TS project (non-interactive)
+cd "$TMP" && bun create vite app --template svelte-ts
+# Copy config + source into the project root, preserving .git/README/docs.
+# Copy all tsconfig*.json (create-vite splits tsconfig.app.json / tsconfig.node.json).
 cd "$TMP/app"
-cp -R index.html package.json svelte.config.js tsconfig.json tsconfig.node.json vite.config.ts src /Users/nicu/Projects/markdon/
+cp -R index.html package.json svelte.config.js tsconfig*.json vite.config.ts src /Users/nicu/Projects/markdon/
 ```
 
 Expected: project root now has `src/`, `index.html`, `package.json`, `vite.config.ts`, etc. `.git`, `README.md`, `docs/` untouched.
@@ -71,12 +75,12 @@ Run:
 
 ```bash
 cd /Users/nicu/Projects/markdon
-npm install
-npm install @tauri-apps/api@^2 @tauri-apps/plugin-dialog@^2 @milkdown/crepe@^7
-npm install -D @tauri-apps/cli@^2 vitest@^2
+bun install
+bun add @tauri-apps/api@^2 @tauri-apps/plugin-dialog@^2 @milkdown/crepe@^7
+bun add -d @tauri-apps/cli@^2 vitest@^2
 ```
 
-Expected: installs succeed; `@tauri-apps/cli` available via `npx tauri`.
+Expected: installs succeed; `bun.lockb` is created; `@tauri-apps/cli` available via `bunx tauri`.
 
 - [ ] **Step 4: Initialize the Tauri Rust project non-interactively**
 
@@ -84,18 +88,24 @@ Run:
 
 ```bash
 cd /Users/nicu/Projects/markdon
-npx tauri init --ci \
+bunx tauri init --ci \
   --app-name markdon \
   --window-title markdon \
   --frontend-dist ../dist \
   --dev-url http://localhost:1420 \
-  --before-dev-command "npm run dev" \
-  --before-build-command "npm run build"
+  --before-dev-command "bun run dev" \
+  --before-build-command "bun run build"
 ```
 
 Expected: creates `src-tauri/` with `Cargo.toml`, `tauri.conf.json`, `src/main.rs`, `src/lib.rs`, `build.rs`, `capabilities/default.json`, and icons.
 
-- [ ] **Step 5: Add the `tauri` npm script**
+Then set a real bundle identifier (the generated placeholder `com.tauri.dev` is rejected by `tauri build`). In `src-tauri/tauri.conf.json`, set:
+
+```json
+"identifier": "com.markdon.app"
+```
+
+- [ ] **Step 5: Add the `tauri` script**
 
 Edit `package.json` `"scripts"` to include:
 
@@ -114,6 +124,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts'],
+    passWithNoTests: true, // vitest@2 exits 1 with no test files otherwise
   },
 })
 ```
@@ -130,21 +141,21 @@ dist
 src-tauri/target
 ```
 
-- [ ] **Step 8: Verify the app builds and runs**
+- [ ] **Step 8: Verify the app compiles**
 
-Run:
+Run the non-blocking build check (do **not** run `bun run tauri dev` in an automated/non-interactive session — it opens a blocking GUI window that hangs):
 
 ```bash
 cd /Users/nicu/Projects/markdon
-npm run tauri dev
+bunx tauri build --no-bundle
 ```
 
-Expected: a native window opens showing the default Vite+Svelte page. Close it (⌘Q). (In a headless CI context, substitute `npx tauri build --no-bundle` and expect a successful Rust compile.)
+Expected: Vite build + Rust release compile both succeed. (Interactively, `bun run tauri dev` opens a native window showing the default page.)
 
 - [ ] **Step 9: Verify Vitest runs**
 
-Run: `npm test`
-Expected: `No test files found` (exit 0) — the runner is wired; tests come in later tasks.
+Run: `bun run test`
+Expected: "No test files found" and exit 0 (`passWithNoTests`) — the runner is wired; tests come in later tasks.
 
 - [ ] **Step 10: Commit**
 
@@ -359,7 +370,7 @@ describe('document store', () => {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `npm test`
+Run: `bun run test`
 Expected: FAIL — cannot resolve `./document` (module not created yet).
 
 - [ ] **Step 3: Implement the store**
@@ -399,7 +410,7 @@ export function markSaved(path: string): void {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `npm test`
+Run: `bun run test`
 Expected: PASS — 4 passed.
 
 - [ ] **Step 5: Commit**
@@ -509,7 +520,7 @@ describe('saveAs', () => {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `npm test`
+Run: `bun run test`
 Expected: FAIL — cannot resolve `./files`.
 
 - [ ] **Step 3: Implement the orchestration**
@@ -552,7 +563,7 @@ export async function saveAs(): Promise<void> {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `npm test`
+Run: `bun run test`
 Expected: PASS — all `files` + `document` tests pass.
 
 - [ ] **Step 5: Register the dialog plugin (Rust + capabilities)**
@@ -677,7 +688,7 @@ Create `src/StatusBar.svelte`:
 
 - [ ] **Step 3: Verify components compile via a type/build check**
 
-Run: `cd /Users/nicu/Projects/markdon && npx vite build`
+Run: `cd /Users/nicu/Projects/markdon && bunx vite build`
 Expected: build succeeds (components are syntactically valid and imports resolve). Wiring into the app happens in Task 6; a temporary unused-component warning is acceptable.
 
 - [ ] **Step 4: Commit**
@@ -818,10 +829,18 @@ html, body { margin: 0; height: 100%; }
 #app { height: 100%; }
 ```
 
-- [ ] **Step 6: Run the app and verify the full loop manually**
+- [ ] **Step 6: Verify it compiles (automated) + note the interactive checklist**
 
-Run: `npm run tauri dev`
-Expected, verify each:
+Automated check (do **not** launch `bun run tauri dev` in a non-interactive session — it blocks on a GUI window):
+
+```bash
+cd /Users/nicu/Projects/markdon
+bunx tauri build --no-bundle
+```
+
+Expected: Vite build + Rust compile succeed.
+
+Interactive verification (deferred to the end-of-branch human `/verify` pass; run `bun run tauri dev` and check each):
 - Window shows the Crepe editor + status bar reading `Untitled`.
 - Type text → renders WYSIWYG (e.g. `# ` becomes a heading); status bar shows `•` and word count climbs.
 - **File → Save** (⌘S) → native save dialog → save → `•` disappears, status bar shows filename.
@@ -982,7 +1001,7 @@ describe('error handling', () => {
 })
 ```
 
-Run: `npm test`
+Run: `bun run test`
 Expected: PASS — all prior tests plus the two new failure-path tests.
 
 - [ ] **Step 7: Add the error banner component**
@@ -1086,10 +1105,18 @@ Update `src/App.svelte`: add imports, close-request handling, and markup. Replac
 </style>
 ```
 
-- [ ] **Step 9: Manually verify the guard and error banner**
+- [ ] **Step 9: Verify it compiles (automated) + note the interactive checklist**
 
-Run: `npm run tauri dev`
-Expected, verify each:
+Automated check (do **not** launch `bun run tauri dev` in a non-interactive session — it blocks on a GUI window):
+
+```bash
+cd /Users/nicu/Projects/markdon
+bunx tauri build --no-bundle
+```
+
+Expected: Vite build + Rust compile succeed.
+
+Interactive verification (deferred to the end-of-branch human `/verify` pass; run `bun run tauri dev` and check each):
 - Edit without saving → press ⌘W / click the window close button → modal appears; **Cancel** keeps the window; re-trigger → **Discard & Close** closes it.
 - With no unsaved changes, closing the window closes immediately (no modal).
 - Trigger a save failure (e.g. Save As into a non-writable path like `/note.md`) → red banner appears with the message; document stays dirty; **×** dismisses the banner.
