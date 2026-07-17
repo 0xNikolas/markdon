@@ -691,7 +691,11 @@ Create `src/StatusBar.svelte`:
 Run: `cd /Users/nicu/Projects/markdon && bunx vite build`
 Expected: build succeeds (components are syntactically valid and imports resolve). Wiring into the app happens in Task 6; a temporary unused-component warning is acceptable.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Note the HTML-sanitization check (security)**
+
+Milkdown Crepe is built on ProseMirror + Remark, which parse markdown into a structured document model rather than injecting raw HTML — so inline `<script>`/`<img onerror=...>` in markdown is not rendered as live DOM by default. Do NOT enable any raw-HTML passthrough feature. This is verified interactively during the end-of-branch `/verify` pass: paste `<img src=x onerror="alert(1)">` and a `<script>` tag into the editor and confirm no script executes (the strict CSP from Task 8 is the second line of defense). No code change here — this step records the requirement so the reviewer and verifier check it.
+
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src/Editor.svelte src/StatusBar.svelte
@@ -1130,9 +1134,97 @@ git commit -m "feat: add unsaved-changes guard and error banner"
 
 ---
 
+### Task 8: Security hardening (strict CSP + UNC/device path rejection)
+
+Added per a security review of the file-I/O commands and an explicit user decision: the app intentionally reads/writes any user-selected file (native dialog = trust boundary), so we do NOT sandbox to a base dir. Instead we close the real exploit path — script injected into the webview (XSS) silently invoking the file commands — by setting a strict CSP, and we add cheap defense-in-depth against Windows UNC/device paths. (Milkdown HTML-render sanitization is verified in Task 5.)
+
+**Files:**
+- Modify: `src-tauri/tauri.conf.json` (`app.security.csp`)
+- Modify: `src-tauri/src/commands.rs` (add `reject_unsafe_path` guard + call it in both commands; add tests)
+
+**Interfaces:**
+- Consumes: existing `read_file` / `write_file` in `commands.rs`.
+- Produces: `fn reject_unsafe_path(path: &str) -> Result<(), String>` (private helper); both commands return `Err` for UNC/device paths before touching disk. Command signatures and the `path` / `contents` parameter names are unchanged.
+
+- [ ] **Step 1: Set a strict CSP**
+
+In `src-tauri/tauri.conf.json`, replace `"csp": null` under `app.security` with (the key protection is `script-src 'self'` — no `unsafe-inline` for scripts — so injected inline `<script>`/handlers cannot run and reach the IPC commands; Milkdown needs inline **styles**, hence `style-src ... 'unsafe-inline'`):
+
+```json
+"security": {
+  "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost; font-src 'self' data:"
+}
+```
+
+- [ ] **Step 2: Write the failing path-guard tests**
+
+Add to the `tests` module in `src-tauri/src/commands.rs`:
+
+```rust
+#[test]
+fn read_file_rejects_unc_path() {
+    let res = read_file(r"\\evil-server\share\x".to_string());
+    assert!(res.is_err());
+    assert!(res.unwrap_err().contains("UNC"));
+}
+
+#[test]
+fn write_file_rejects_unc_path() {
+    let res = write_file(r"\\evil-server\share\x".to_string(), "x".into());
+    assert!(res.is_err());
+}
+```
+
+- [ ] **Step 3: Run to verify they fail**
+
+Run: `cd src-tauri && cargo test`
+Expected: FAIL — the UNC path is currently passed straight to `fs`, so it does not return an error containing "UNC" (on macOS the write/read errors with an OS message, not our guard; the `.contains("UNC")` assertion fails).
+
+- [ ] **Step 4: Add the guard and call it**
+
+In `src-tauri/src/commands.rs`, add the helper and call it at the top of each command:
+
+```rust
+/// Reject UNC and DOS device paths (Windows SSRF / NTLM-credential-theft vector).
+/// Backslash-prefixed paths are never legitimate on unix, so they are rejected on
+/// all platforms; forward-slash UNC and verbatim device prefixes matter on Windows.
+fn reject_unsafe_path(path: &str) -> Result<(), String> {
+    if path.starts_with(r"\\") {
+        return Err("Refusing UNC path".into());
+    }
+    #[cfg(windows)]
+    if path.starts_with("//") || path.starts_with(r"\\?\") || path.starts_with(r"\\.\") {
+        return Err("Refusing UNC or device path".into());
+    }
+    Ok(())
+}
+```
+
+Then add `reject_unsafe_path(&path)?;` as the first line of both `read_file` and `write_file` (before the `fs::` call).
+
+- [ ] **Step 5: Run to verify they pass**
+
+Run: `cd src-tauri && cargo test`
+Expected: PASS — all prior tests plus the two UNC-rejection tests. Output pristine.
+
+- [ ] **Step 6: Verify the app still compiles with the CSP**
+
+Run: `cd /Users/nicu/Projects/markdon && bunx tauri build --no-bundle`
+Expected: Vite build + Rust compile succeed. (Interactive note: on `bun run tauri dev`, confirm the Crepe editor still renders and styles apply — Milkdown's inline styles are permitted by `style-src 'unsafe-inline'`. If Vite dev HMR is blocked by the CSP, add dev-only allowances; production `'self'` is the security-relevant config.)
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src-tauri
+git commit -m "feat: harden file commands with strict CSP and UNC path rejection"
+```
+
+---
+
 ## Self-Review
 
 **Spec coverage:**
+- Security hardening (strict CSP, UNC/device path rejection, sanitization check) → Task 8 (+ Task 5 note). ✓
 - WYSIWYG inline editing (Milkdown Crepe) → Task 5, Task 6. ✓
 - Single-file open/save/save-as via native dialogs → Task 4 (orchestration), Task 2 (I/O). ✓
 - Native menu with accelerators (⌘N/⌘O/⌘S/⌘⇧S) → Task 6. ✓
