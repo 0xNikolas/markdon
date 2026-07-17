@@ -3,6 +3,7 @@
   import { Crepe } from '@milkdown/crepe'
   import '@milkdown/crepe/theme/common/style.css'
   import '@milkdown/crepe/theme/frame.css'
+  import './editor-theme.css' // must come after the Crepe theme to override its fonts
 
   interface Props {
     initialContent: string
