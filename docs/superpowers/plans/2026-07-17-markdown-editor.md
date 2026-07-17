@@ -18,6 +18,7 @@
 - **Vite dev server:** port `1420`, `strictPort: true`, to match `tauri.conf.json`.
 - **Rust command signatures are the contract** — frontend `invoke` argument keys must match Rust parameter names exactly (`path`, `contents`).
 - **Commit messages:** conventional-commit style, **no `Co-Authored-By` trailer of any kind**.
+- **Package manager & runner: bun** (not npm/npx). Use `bun install`, `bun add`, `bun add -d`, `bun run <script>`, `bunx <bin>`. Commit `bun.lockb`. The `node_modules` dir is still used and stays git-ignored. Vitest remains the test framework (its `vi.mock` / `describe`/`it`/`expect` APIs are used) — run it via `bun run test` (the npm-script `vitest run`), **never** `bun test` (that invokes Bun's own incompatible runner).
 - Target platform: macOS (Darwin). Menu includes a macOS app submenu + native Edit submenu so system shortcuts (⌘C/⌘V/⌘Z) work.
 
 ---
@@ -31,6 +32,7 @@ Foundation task: produces a running (empty-window) Tauri app plus a working Vite
 - Create: `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, `src-tauri/build.rs`, `src-tauri/src/main.rs`, `src-tauri/src/lib.rs`, `src-tauri/capabilities/default.json`
 - Create: `vitest.config.ts`
 - Modify: `.gitignore` (add `node_modules`, `dist`, `src-tauri/target`)
+- Note: current create-vite emits `tsconfig.json` + `tsconfig.app.json` + `tsconfig.node.json` — copy all `tsconfig*.json`.
 
 **Interfaces:**
 - Produces: a `src-tauri/src/lib.rs` exposing `pub fn run()` called by `main.rs`; a `run()` builder that later tasks extend with `.plugin(...)`, `.invoke_handler(...)`, `.setup(...)`.
@@ -42,10 +44,12 @@ Run (adjust the scratchpad path if different):
 ```bash
 TMP="/private/tmp/claude-501/scaffold-markdon"
 rm -rf "$TMP" && mkdir -p "$TMP"
-cd "$TMP" && npm create vite@latest app -- --template svelte-ts
-# Copy everything except node_modules into the project root, preserving .git/README/docs
+# bun create scaffolds a Vite Svelte-TS project (non-interactive)
+cd "$TMP" && bun create vite app --template svelte-ts
+# Copy config + source into the project root, preserving .git/README/docs.
+# Copy all tsconfig*.json (create-vite splits tsconfig.app.json / tsconfig.node.json).
 cd "$TMP/app"
-cp -R index.html package.json svelte.config.js tsconfig.json tsconfig.node.json vite.config.ts src /Users/nicu/Projects/markdon/
+cp -R index.html package.json svelte.config.js tsconfig*.json vite.config.ts src /Users/nicu/Projects/markdon/
 ```
 
 Expected: project root now has `src/`, `index.html`, `package.json`, `vite.config.ts`, etc. `.git`, `README.md`, `docs/` untouched.
@@ -71,12 +75,12 @@ Run:
 
 ```bash
 cd /Users/nicu/Projects/markdon
-npm install
-npm install @tauri-apps/api@^2 @tauri-apps/plugin-dialog@^2 @milkdown/crepe@^7
-npm install -D @tauri-apps/cli@^2 vitest@^2
+bun install
+bun add @tauri-apps/api@^2 @tauri-apps/plugin-dialog@^2 @milkdown/crepe@^7
+bun add -d @tauri-apps/cli@^2 vitest@^2
 ```
 
-Expected: installs succeed; `@tauri-apps/cli` available via `npx tauri`.
+Expected: installs succeed; `bun.lockb` is created; `@tauri-apps/cli` available via `bunx tauri`.
 
 - [ ] **Step 4: Initialize the Tauri Rust project non-interactively**
 
@@ -84,18 +88,24 @@ Run:
 
 ```bash
 cd /Users/nicu/Projects/markdon
-npx tauri init --ci \
+bunx tauri init --ci \
   --app-name markdon \
   --window-title markdon \
   --frontend-dist ../dist \
   --dev-url http://localhost:1420 \
-  --before-dev-command "npm run dev" \
-  --before-build-command "npm run build"
+  --before-dev-command "bun run dev" \
+  --before-build-command "bun run build"
 ```
 
 Expected: creates `src-tauri/` with `Cargo.toml`, `tauri.conf.json`, `src/main.rs`, `src/lib.rs`, `build.rs`, `capabilities/default.json`, and icons.
 
-- [ ] **Step 5: Add the `tauri` npm script**
+Then set a real bundle identifier (the generated placeholder `com.tauri.dev` is rejected by `tauri build`). In `src-tauri/tauri.conf.json`, set:
+
+```json
+"identifier": "com.markdon.app"
+```
+
+- [ ] **Step 5: Add the `tauri` script**
 
 Edit `package.json` `"scripts"` to include:
 
@@ -114,6 +124,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts'],
+    passWithNoTests: true, // vitest@2 exits 1 with no test files otherwise
   },
 })
 ```
@@ -130,21 +141,21 @@ dist
 src-tauri/target
 ```
 
-- [ ] **Step 8: Verify the app builds and runs**
+- [ ] **Step 8: Verify the app compiles**
 
-Run:
+Run the non-blocking build check (do **not** run `bun run tauri dev` in an automated/non-interactive session — it opens a blocking GUI window that hangs):
 
 ```bash
 cd /Users/nicu/Projects/markdon
-npm run tauri dev
+bunx tauri build --no-bundle
 ```
 
-Expected: a native window opens showing the default Vite+Svelte page. Close it (⌘Q). (In a headless CI context, substitute `npx tauri build --no-bundle` and expect a successful Rust compile.)
+Expected: Vite build + Rust release compile both succeed. (Interactively, `bun run tauri dev` opens a native window showing the default page.)
 
 - [ ] **Step 9: Verify Vitest runs**
 
-Run: `npm test`
-Expected: `No test files found` (exit 0) — the runner is wired; tests come in later tasks.
+Run: `bun run test`
+Expected: "No test files found" and exit 0 (`passWithNoTests`) — the runner is wired; tests come in later tasks.
 
 - [ ] **Step 10: Commit**
 
@@ -359,7 +370,7 @@ describe('document store', () => {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `npm test`
+Run: `bun run test`
 Expected: FAIL — cannot resolve `./document` (module not created yet).
 
 - [ ] **Step 3: Implement the store**
@@ -399,7 +410,7 @@ export function markSaved(path: string): void {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `npm test`
+Run: `bun run test`
 Expected: PASS — 4 passed.
 
 - [ ] **Step 5: Commit**
@@ -509,7 +520,7 @@ describe('saveAs', () => {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `npm test`
+Run: `bun run test`
 Expected: FAIL — cannot resolve `./files`.
 
 - [ ] **Step 3: Implement the orchestration**
@@ -552,7 +563,7 @@ export async function saveAs(): Promise<void> {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `npm test`
+Run: `bun run test`
 Expected: PASS — all `files` + `document` tests pass.
 
 - [ ] **Step 5: Register the dialog plugin (Rust + capabilities)**
@@ -677,10 +688,14 @@ Create `src/StatusBar.svelte`:
 
 - [ ] **Step 3: Verify components compile via a type/build check**
 
-Run: `cd /Users/nicu/Projects/markdon && npx vite build`
+Run: `cd /Users/nicu/Projects/markdon && bunx vite build`
 Expected: build succeeds (components are syntactically valid and imports resolve). Wiring into the app happens in Task 6; a temporary unused-component warning is acceptable.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Note the HTML-sanitization check (security)**
+
+Milkdown Crepe is built on ProseMirror + Remark, which parse markdown into a structured document model rather than injecting raw HTML — so inline `<script>`/`<img onerror=...>` in markdown is not rendered as live DOM by default. Do NOT enable any raw-HTML passthrough feature. This is verified interactively during the end-of-branch `/verify` pass: paste `<img src=x onerror="alert(1)">` and a `<script>` tag into the editor and confirm no script executes (the strict CSP from Task 8 is the second line of defense). No code change here — this step records the requirement so the reviewer and verifier check it.
+
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src/Editor.svelte src/StatusBar.svelte
@@ -818,10 +833,18 @@ html, body { margin: 0; height: 100%; }
 #app { height: 100%; }
 ```
 
-- [ ] **Step 6: Run the app and verify the full loop manually**
+- [ ] **Step 6: Verify it compiles (automated) + note the interactive checklist**
 
-Run: `npm run tauri dev`
-Expected, verify each:
+Automated check (do **not** launch `bun run tauri dev` in a non-interactive session — it blocks on a GUI window):
+
+```bash
+cd /Users/nicu/Projects/markdon
+bunx tauri build --no-bundle
+```
+
+Expected: Vite build + Rust compile succeed.
+
+Interactive verification (deferred to the end-of-branch human `/verify` pass; run `bun run tauri dev` and check each):
 - Window shows the Crepe editor + status bar reading `Untitled`.
 - Type text → renders WYSIWYG (e.g. `# ` becomes a heading); status bar shows `•` and word count climbs.
 - **File → Save** (⌘S) → native save dialog → save → `•` disappears, status bar shows filename.
@@ -982,7 +1005,7 @@ describe('error handling', () => {
 })
 ```
 
-Run: `npm test`
+Run: `bun run test`
 Expected: PASS — all prior tests plus the two new failure-path tests.
 
 - [ ] **Step 7: Add the error banner component**
@@ -1086,10 +1109,18 @@ Update `src/App.svelte`: add imports, close-request handling, and markup. Replac
 </style>
 ```
 
-- [ ] **Step 9: Manually verify the guard and error banner**
+- [ ] **Step 9: Verify it compiles (automated) + note the interactive checklist**
 
-Run: `npm run tauri dev`
-Expected, verify each:
+Automated check (do **not** launch `bun run tauri dev` in a non-interactive session — it blocks on a GUI window):
+
+```bash
+cd /Users/nicu/Projects/markdon
+bunx tauri build --no-bundle
+```
+
+Expected: Vite build + Rust compile succeed.
+
+Interactive verification (deferred to the end-of-branch human `/verify` pass; run `bun run tauri dev` and check each):
 - Edit without saving → press ⌘W / click the window close button → modal appears; **Cancel** keeps the window; re-trigger → **Discard & Close** closes it.
 - With no unsaved changes, closing the window closes immediately (no modal).
 - Trigger a save failure (e.g. Save As into a non-writable path like `/note.md`) → red banner appears with the message; document stays dirty; **×** dismisses the banner.
@@ -1103,9 +1134,97 @@ git commit -m "feat: add unsaved-changes guard and error banner"
 
 ---
 
+### Task 8: Security hardening (strict CSP + UNC/device path rejection)
+
+Added per a security review of the file-I/O commands and an explicit user decision: the app intentionally reads/writes any user-selected file (native dialog = trust boundary), so we do NOT sandbox to a base dir. Instead we close the real exploit path — script injected into the webview (XSS) silently invoking the file commands — by setting a strict CSP, and we add cheap defense-in-depth against Windows UNC/device paths. (Milkdown HTML-render sanitization is verified in Task 5.)
+
+**Files:**
+- Modify: `src-tauri/tauri.conf.json` (`app.security.csp`)
+- Modify: `src-tauri/src/commands.rs` (add `reject_unsafe_path` guard + call it in both commands; add tests)
+
+**Interfaces:**
+- Consumes: existing `read_file` / `write_file` in `commands.rs`.
+- Produces: `fn reject_unsafe_path(path: &str) -> Result<(), String>` (private helper); both commands return `Err` for UNC/device paths before touching disk. Command signatures and the `path` / `contents` parameter names are unchanged.
+
+- [ ] **Step 1: Set a strict CSP**
+
+In `src-tauri/tauri.conf.json`, replace `"csp": null` under `app.security` with (the key protection is `script-src 'self'` — no `unsafe-inline` for scripts — so injected inline `<script>`/handlers cannot run and reach the IPC commands; Milkdown needs inline **styles**, hence `style-src ... 'unsafe-inline'`):
+
+```json
+"security": {
+  "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost; font-src 'self' data:"
+}
+```
+
+- [ ] **Step 2: Write the failing path-guard tests**
+
+Add to the `tests` module in `src-tauri/src/commands.rs`:
+
+```rust
+#[test]
+fn read_file_rejects_unc_path() {
+    let res = read_file(r"\\evil-server\share\x".to_string());
+    assert!(res.is_err());
+    assert!(res.unwrap_err().contains("UNC"));
+}
+
+#[test]
+fn write_file_rejects_unc_path() {
+    let res = write_file(r"\\evil-server\share\x".to_string(), "x".into());
+    assert!(res.is_err());
+}
+```
+
+- [ ] **Step 3: Run to verify they fail**
+
+Run: `cd src-tauri && cargo test`
+Expected: FAIL — the UNC path is currently passed straight to `fs`, so it does not return an error containing "UNC" (on macOS the write/read errors with an OS message, not our guard; the `.contains("UNC")` assertion fails).
+
+- [ ] **Step 4: Add the guard and call it**
+
+In `src-tauri/src/commands.rs`, add the helper and call it at the top of each command:
+
+```rust
+/// Reject UNC and DOS device paths (Windows SSRF / NTLM-credential-theft vector).
+/// Backslash-prefixed paths are never legitimate on unix, so they are rejected on
+/// all platforms; forward-slash UNC and verbatim device prefixes matter on Windows.
+fn reject_unsafe_path(path: &str) -> Result<(), String> {
+    if path.starts_with(r"\\") {
+        return Err("Refusing UNC path".into());
+    }
+    #[cfg(windows)]
+    if path.starts_with("//") || path.starts_with(r"\\?\") || path.starts_with(r"\\.\") {
+        return Err("Refusing UNC or device path".into());
+    }
+    Ok(())
+}
+```
+
+Then add `reject_unsafe_path(&path)?;` as the first line of both `read_file` and `write_file` (before the `fs::` call).
+
+- [ ] **Step 5: Run to verify they pass**
+
+Run: `cd src-tauri && cargo test`
+Expected: PASS — all prior tests plus the two UNC-rejection tests. Output pristine.
+
+- [ ] **Step 6: Verify the app still compiles with the CSP**
+
+Run: `cd /Users/nicu/Projects/markdon && bunx tauri build --no-bundle`
+Expected: Vite build + Rust compile succeed. (Interactive note: on `bun run tauri dev`, confirm the Crepe editor still renders and styles apply — Milkdown's inline styles are permitted by `style-src 'unsafe-inline'`. If Vite dev HMR is blocked by the CSP, add dev-only allowances; production `'self'` is the security-relevant config.)
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src-tauri
+git commit -m "feat: harden file commands with strict CSP and UNC path rejection"
+```
+
+---
+
 ## Self-Review
 
 **Spec coverage:**
+- Security hardening (strict CSP, UNC/device path rejection, sanitization check) → Task 8 (+ Task 5 note). ✓
 - WYSIWYG inline editing (Milkdown Crepe) → Task 5, Task 6. ✓
 - Single-file open/save/save-as via native dialogs → Task 4 (orchestration), Task 2 (I/O). ✓
 - Native menu with accelerators (⌘N/⌘O/⌘S/⌘⇧S) → Task 6. ✓

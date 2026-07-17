@@ -1,0 +1,19 @@
+/* Typora/Obsidian-style typography for the Milkdown editor.
+   Imported after Crepe's frame theme so these override the theme defaults
+   (Crepe's frame theme uses Noto Serif headings + Noto Sans body). */
+.milkdown {
+  --crepe-font-title: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --crepe-font-default: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+}
+
+/* Comfortable centered reading column, like Obsidian/Typora. */
+.milkdown .ProseMirror {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 2.5rem 1.75rem 6rem;
+  line-height: 1.7;
+  font-size: 1.05rem;
+  color: #2e2e2e;
+}
