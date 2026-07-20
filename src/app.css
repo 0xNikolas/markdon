@@ -16,6 +16,8 @@
   --info-bg: #e8f0fe;       /* App.svelte .readonly-bar background */
   --info-fg: #1a3d7c;       /* App.svelte .readonly-bar color */
   --info-border: #c6d8f5;   /* App.svelte .readonly-bar border-bottom */
+  --find-match-bg: #ffe9a8;    /* editor-theme.css .find-match highlight */
+  --find-active-bg: #ffb84d;   /* editor-theme.css .find-match.find-active highlight */
 }
 :root[data-theme='dark'] {
   --bg: #1a1a1a;            /* = crepe dark --crepe-color-background: seamless chrome/editor seam */
@@ -28,6 +30,8 @@
   --error-bg: #3a1512;  --error-fg: #f2b8b5;
   --warn-bg:  #33290a;  --warn-fg:  #e8d48b;  --warn-border: #574c1a;
   --info-bg:  #10243f;  --info-fg:  #a8c7fa;  --info-border: #274b7a;
+  --find-match-bg: #5c4a1a;    /* dimmer than light mode so text stays readable on dark bg */
+  --find-active-bg: #a86a1f;
 }
 html, body { margin: 0; height: 100%; }
 body { background: var(--bg); color: var(--fg); }

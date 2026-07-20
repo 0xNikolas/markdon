@@ -10,6 +10,8 @@
   import Editor from './Editor.svelte'
   import StatusBar from './StatusBar.svelte'
   import Banner from './Banner.svelte'
+  import FindBar from './FindBar.svelte'
+  import { searchUi, openFind, closeFind } from './lib/searchPlugin'
 
   // Action to run if the user chooses to discard unsaved changes. When set, the
   // confirm modal is shown. Guards New, Open, and window close uniformly.
@@ -40,6 +42,7 @@
       listen('menu:open', () => guarded(() => open())),
       listen('menu:save', () => save()),
       listen('menu:save_as', () => saveAs()),
+      listen('menu:find', () => openFind()),
       listen('window:close-requested', () => guarded(() => getCurrentWindow().destroy())),
       listen('file:opened', () => drainOpenedFiles()),
     ])
@@ -50,6 +53,21 @@
       teardownSync.then((fn) => fn())
     }
   })
+
+  // Esc closes the find bar even when focus is inside the editor (FindBar's
+  // own onkeydown only sees Esc while its input is focused). Also a
+  // Cmd/Ctrl+F fallback for platforms where the native menu accelerator
+  // (src-tauri/src/menu.rs) doesn't reach the webview -- a no-op if the
+  // menu already handled it, since openFind() is idempotent while open.
+  function handleWindowKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape' && $searchUi.open && pendingAction === null) {
+      e.preventDefault()
+      closeFind()
+    } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+      e.preventDefault()
+      openFind()
+    }
+  }
 
   function discard() {
     const action = pendingAction
@@ -70,6 +88,8 @@
   }
 </script>
 
+<svelte:window onkeydown={handleWindowKeydown} />
+
 <main class="app">
   <Banner />
   {#if $doc.readonly}
@@ -86,6 +106,9 @@
         <button class="reload" onclick={() => reloadFromDisk($conflict!)}>Reload from disk</button>
       </div>
     </div>
+  {/if}
+  {#if $searchUi.open}
+    <FindBar />
   {/if}
   {#key $doc.loadId}
     <Editor initialContent={$doc.content} readonly={$doc.readonly} onChange={edit} />

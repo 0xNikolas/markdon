@@ -14,6 +14,9 @@ pub fn build(app: &App) -> tauri::Result<Menu<Wry>> {
     let save_as = MenuItemBuilder::with_id("menu:save_as", "Save As…")
         .accelerator("CmdOrCtrl+Shift+S")
         .build(app)?;
+    let find = MenuItemBuilder::with_id("menu:find", "Find…")
+        .accelerator("CmdOrCtrl+F")
+        .build(app)?;
 
     let app_menu = SubmenuBuilder::new(app, "markdon")
         .item(&PredefinedMenuItem::quit(app, None)?)
@@ -36,6 +39,8 @@ pub fn build(app: &App) -> tauri::Result<Menu<Wry>> {
         .item(&PredefinedMenuItem::copy(app, None)?)
         .item(&PredefinedMenuItem::paste(app, None)?)
         .item(&PredefinedMenuItem::select_all(app, None)?)
+        .separator()
+        .item(&find)
         .build()?;
 
     Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu])

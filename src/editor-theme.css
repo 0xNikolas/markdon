@@ -17,3 +17,14 @@
   font-size: 1.05rem;
   color: var(--fg);
 }
+
+/* In-document search highlights (search.ts / searchPlugin.ts decorations).
+   Global, not scoped -- decorations render inside Milkdown's DOM, out of
+   reach of Svelte's scoped component styles. */
+.find-match {
+  background: var(--find-match-bg);
+  border-radius: 2px;
+}
+.find-match.find-active {
+  background: var(--find-active-bg);
+}

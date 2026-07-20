@@ -18,6 +18,7 @@
   import '@milkdown/crepe/theme/common/style.css'
   import '@milkdown/crepe/theme/frame.css'
   import './editor-theme.css' // must come after the Crepe theme to override its fonts
+  import { searchPlugin } from './lib/searchPlugin'
 
   interface Props {
     initialContent: string
@@ -31,6 +32,7 @@
 
   onMount(async () => {
     crepe = new Crepe({ root: el, defaultValue: initialContent })
+    crepe.editor.use(searchPlugin) // before create(): the editor exists pre-create (CrepeBuilder ctor)
     crepe.on((listener) => {
       listener.markdownUpdated((_ctx, markdown) => onChange(markdown))
     })
