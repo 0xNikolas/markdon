@@ -19,7 +19,9 @@ pub fn watch_file(
   path: String,
   app: AppHandle,
   state: State<'_, FileWatcher>,
+  allowed: State<'_, crate::allowlist::AllowedPaths>,
 ) -> Result<(), String> {
+  allowed.ensure(&path)?;
   // Same UNC/device-path guard the read/write commands apply (defense-in-depth;
   // keeps every path entry point consistent even if callers change).
   crate::commands::reject_unsafe_path(&path)?;

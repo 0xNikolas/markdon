@@ -1,4 +1,6 @@
+mod allowlist;
 mod commands;
+mod dialogs;
 mod menu;
 mod watcher;
 
@@ -33,6 +35,11 @@ fn queue_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
   if paths.is_empty() {
     return;
   }
+  if let Some(allowed) = app.try_state::<allowlist::AllowedPaths>() {
+    for p in &paths {
+      allowed.allow(p);
+    }
+  }
   if let Some(state) = app.try_state::<OpenedFiles>() {
     state.0.lock().unwrap().extend(paths);
   }
@@ -44,6 +51,7 @@ pub fn run() {
   tauri::Builder::default()
     .manage(OpenedFiles::default())
     .manage(watcher::FileWatcher::default())
+    .manage(allowlist::AllowedPaths::default())
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
@@ -77,7 +85,9 @@ pub fn run() {
       commands::write_file,
       take_opened_files,
       watcher::watch_file,
-      watcher::unwatch
+      watcher::unwatch,
+      dialogs::open_file_dialog,
+      dialogs::save_file_dialog
     ])
     .build(tauri::generate_context!())
     .expect("error while building tauri application")

@@ -1,10 +1,12 @@
 import { invoke } from '@tauri-apps/api/core'
-import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { get } from 'svelte/store'
 import { doc, openDoc, markSaved } from './doc'
 import { reportError } from './errors'
 
-const MD_FILTER = { name: 'Markdown', extensions: ['md', 'markdown'] }
+interface OpenedFile {
+  path: string
+  content: string
+}
 
 export async function openPath(path: string): Promise<void> {
   try {
@@ -16,9 +18,14 @@ export async function openPath(path: string): Promise<void> {
 }
 
 export async function open(): Promise<void> {
-  const selected = await openDialog({ filters: [MD_FILTER], multiple: false, directory: false })
-  if (typeof selected !== 'string') return // cancelled
-  await openPath(selected)
+  try {
+    // The dialog lives in Rust so the backend can vouch for the picked path.
+    const picked = await invoke<OpenedFile | null>('open_file_dialog')
+    if (picked === null) return // cancelled
+    openDoc(picked.path, picked.content)
+  } catch (e) {
+    reportError(`Could not open file: ${String(e)}`)
+  }
 }
 
 export async function save(): Promise<void> {
@@ -34,12 +41,11 @@ export async function save(): Promise<void> {
 
 export async function saveAs(): Promise<void> {
   const state = get(doc)
-  const selected = await saveDialog({
-    filters: [MD_FILTER],
-    defaultPath: state.path ?? 'untitled.md',
-  })
-  if (selected === null) return // cancelled
   try {
+    const selected = await invoke<string | null>('save_file_dialog', {
+      defaultPath: state.path ?? 'untitled.md',
+    })
+    if (selected === null) return // cancelled
     await invoke('write_file', { path: selected, contents: state.content })
     markSaved(selected, state.content)
   } catch (e) {

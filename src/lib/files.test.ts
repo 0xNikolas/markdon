@@ -2,14 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { get } from 'svelte/store'
 
 const invoke = vi.fn()
-const openDialog = vi.fn()
-const saveDialog = vi.fn()
-
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
-vi.mock('@tauri-apps/plugin-dialog', () => ({
-  open: (...a: unknown[]) => openDialog(...a),
-  save: (...a: unknown[]) => saveDialog(...a),
-}))
 
 import { doc, newDoc, edit, isDirty } from './doc'
 import { open, save, saveAs, openPath } from './files'
@@ -17,8 +10,6 @@ import { errorMessage } from './errors'
 
 beforeEach(() => {
   invoke.mockReset()
-  openDialog.mockReset()
-  saveDialog.mockReset()
   newDoc()
 })
 
@@ -26,7 +17,6 @@ describe('openPath', () => {
   it('loads the given path into the store without a dialog', async () => {
     invoke.mockResolvedValue('# From association')
     await openPath('/tmp/assoc.md')
-    expect(openDialog).not.toHaveBeenCalled()
     expect(invoke).toHaveBeenCalledWith('read_file', { path: '/tmp/assoc.md' })
     const s = get(doc)
     expect(s.path).toBe('/tmp/assoc.md')
@@ -43,11 +33,12 @@ describe('openPath', () => {
 })
 
 describe('open', () => {
-  it('loads the picked file into the store', async () => {
-    openDialog.mockResolvedValue('/tmp/a.md')
-    invoke.mockResolvedValue('# Loaded')
+  it('loads the file picked via the Rust dialog into the store', async () => {
+    invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === 'open_file_dialog' ? { path: '/tmp/a.md', content: '# Loaded' } : undefined,
+    )
     await open()
-    expect(invoke).toHaveBeenCalledWith('read_file', { path: '/tmp/a.md' })
+    expect(invoke).toHaveBeenCalledWith('open_file_dialog')
     const s = get(doc)
     expect(s.path).toBe('/tmp/a.md')
     expect(s.content).toBe('# Loaded')
@@ -55,9 +46,9 @@ describe('open', () => {
   })
 
   it('does nothing when the dialog is cancelled', async () => {
-    openDialog.mockResolvedValue(null)
+    invoke.mockResolvedValue(null)
     await open()
-    expect(invoke).not.toHaveBeenCalled()
+    expect(get(doc).path).toBeNull()
   })
 })
 
@@ -74,9 +65,11 @@ describe('save', () => {
   it('falls back to Save As when there is no path', async () => {
     newDoc()
     edit('draft')
-    saveDialog.mockResolvedValue('/tmp/new.md')
-    invoke.mockResolvedValue(undefined)
+    invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === 'save_file_dialog' ? '/tmp/new.md' : undefined,
+    )
     await save()
+    expect(invoke).toHaveBeenCalledWith('save_file_dialog', { defaultPath: 'untitled.md' })
     expect(invoke).toHaveBeenCalledWith('write_file', { path: '/tmp/new.md', contents: 'draft' })
     expect(get(doc).path).toBe('/tmp/new.md')
     expect(isDirty(get(doc))).toBe(false)
@@ -99,19 +92,27 @@ describe('saveAs', () => {
   it('does nothing when the save dialog is cancelled', async () => {
     newDoc()
     edit('draft')
-    saveDialog.mockResolvedValue(null)
+    invoke.mockResolvedValue(null)
     await saveAs()
-    expect(invoke).not.toHaveBeenCalled()
+    expect(invoke).toHaveBeenCalledTimes(1) // only the dialog, no write_file
     expect(isDirty(get(doc))).toBe(true)
+  })
+
+  it('reports an error when the dialog itself fails', async () => {
+    errorMessage.set(null)
+    newDoc()
+    edit('draft')
+    invoke.mockRejectedValue('no display server')
+    await saveAs()
+    expect(get(errorMessage)).toContain('Could not save file')
   })
 })
 
 describe('error handling', () => {
   it('reports an error when read_file rejects', async () => {
     errorMessage.set(null)
-    openDialog.mockResolvedValue('/tmp/a.md')
     invoke.mockRejectedValue('boom')
-    await open()
+    await openPath('/tmp/a.md')
     expect(get(errorMessage)).toContain('Could not open file')
   })
 
