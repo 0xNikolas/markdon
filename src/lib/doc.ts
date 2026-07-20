@@ -32,7 +32,11 @@ export function edit(content: string): void {
   doc.update((s) => (s.readonly ? s : { ...s, content }))
 }
 
-/** Record a completed write: `savedContent` is what the write actually contained. */
+/**
+ * Record a completed write: `savedContent` is what the write actually contained.
+ * A completed write proves edit intent, so it also lifts readonly (no-op on the
+ * ordinary save path, where readonly is already false).
+ */
 export function markSaved(path: string, savedContent: string): void {
   doc.update((s) => ({ ...s, path, savedContent, readonly: false }))
 }
