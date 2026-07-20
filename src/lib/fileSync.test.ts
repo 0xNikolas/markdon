@@ -1,31 +1,71 @@
-import { describe, it, expect } from 'vitest'
-import { classifyExternalChange } from './fileSync'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { get } from 'svelte/store'
+
+const invoke = vi.fn()
+vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
+vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}) }))
+
+import { classifyExternalChange, initFileSync } from './fileSync'
+import { openDoc, newDoc } from './doc'
+import { errorMessage } from './errors'
 
 describe('classifyExternalChange', () => {
-  it('ignores when disk matches the buffer (our own save / no-op)', () => {
-    expect(classifyExternalChange({ content: 'x', dirty: false }, 'x', null)).toBe('ignore')
-    expect(classifyExternalChange({ content: 'x', dirty: true }, 'x', null)).toBe('ignore')
+  it('ignores when disk matches the buffer (no real change)', () => {
+    expect(
+      classifyExternalChange({ content: 'x', savedContent: 'x' }, 'x', null),
+    ).toBe('ignore')
+    expect(
+      classifyExternalChange({ content: 'x', savedContent: 'old' }, 'x', null),
+    ).toBe('ignore')
+  })
+
+  it('ignores our own save landing while the user kept typing', () => {
+    // We wrote 'v1'; user has since typed 'v2'. The watcher fires for our own
+    // write — disk equals savedContent, so nothing external happened.
+    expect(
+      classifyExternalChange({ content: 'v2', savedContent: 'v1' }, 'v1', null),
+    ).toBe('ignore')
   })
 
   it('reloads a clean buffer when disk differs', () => {
-    expect(classifyExternalChange({ content: 'old', dirty: false }, 'new', null)).toBe('reload')
+    expect(
+      classifyExternalChange({ content: 'old', savedContent: 'old' }, 'new', null),
+    ).toBe('reload')
   })
 
   it('flags a conflict when a dirty buffer differs from disk', () => {
-    expect(classifyExternalChange({ content: 'mine', dirty: true }, 'theirs', null)).toBe(
-      'conflict',
-    )
+    expect(
+      classifyExternalChange({ content: 'mine', savedContent: 'base' }, 'theirs', null),
+    ).toBe('conflict')
   })
 
   it('ignores a dirty conflict the user already declined for this exact disk version', () => {
-    expect(classifyExternalChange({ content: 'mine', dirty: true }, 'theirs', 'theirs')).toBe(
-      'ignore',
-    )
+    expect(
+      classifyExternalChange({ content: 'mine', savedContent: 'base' }, 'theirs', 'theirs'),
+    ).toBe('ignore')
   })
 
   it('re-prompts when a new on-disk version arrives after a prior decline', () => {
-    expect(classifyExternalChange({ content: 'mine', dirty: true }, 'newer', 'theirs')).toBe(
-      'conflict',
-    )
+    expect(
+      classifyExternalChange({ content: 'mine', savedContent: 'base' }, 'newer', 'theirs'),
+    ).toBe('conflict')
+  })
+})
+
+describe('initFileSync', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    errorMessage.set(null)
+    newDoc()
+  })
+
+  it('reports an error when watching the file fails', async () => {
+    invoke.mockRejectedValue('fsevents unavailable')
+    const teardown = await initFileSync()
+    openDoc('/tmp/a.md', '# A')
+    await vi.waitFor(() => {
+      expect(get(errorMessage)).toContain('Could not watch')
+    })
+    teardown()
   })
 })

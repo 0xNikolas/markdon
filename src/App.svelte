@@ -4,7 +4,7 @@
   import { invoke } from '@tauri-apps/api/core'
   import { getCurrentWindow } from '@tauri-apps/api/window'
   import { get } from 'svelte/store'
-  import { document, edit, newDoc } from './lib/document'
+  import { doc, edit, newDoc, isDirty } from './lib/doc'
   import { open, save, saveAs, openPath } from './lib/files'
   import { conflict, reloadFromDisk, dismissConflict, initFileSync } from './lib/fileSync'
   import Editor from './Editor.svelte'
@@ -15,10 +15,14 @@
   // confirm modal is shown. Guards New, Open, and window close uniformly.
   let pendingAction = $state<(() => void) | null>(null)
 
+  // True while `save()` is in flight (native dialogs aren't window-parented,
+  // so the modal stays clickable underneath them without this guard).
+  let saving = $state(false)
+
   // Run `action` immediately if the document is clean; otherwise defer it behind
   // the discard-confirm modal so unsaved edits are never silently lost.
   function guarded(action: () => void) {
-    if (get(document).dirty) pendingAction = action
+    if (isDirty(get(doc))) pendingAction = action
     else action()
   }
 
@@ -53,6 +57,17 @@
     action?.()
   }
   function cancel() { pendingAction = null }
+  async function saveAndContinue() {
+    saving = true
+    try {
+      await save()
+      // If the save failed or Save As was cancelled the doc is still dirty:
+      // keep the modal open so no edits are silently lost.
+      if (!isDirty(get(doc))) discard()
+    } finally {
+      saving = false
+    }
+  }
 </script>
 
 <main class="app">
@@ -66,19 +81,20 @@
       </div>
     </div>
   {/if}
-  {#key $document.loadId}
-    <Editor initialContent={$document.content} onChange={edit} />
+  {#key $doc.loadId}
+    <Editor initialContent={$doc.content} onChange={edit} />
   {/key}
-  <StatusBar path={$document.path} dirty={$document.dirty} content={$document.content} />
+  <StatusBar path={$doc.path} dirty={isDirty($doc)} content={$doc.content} />
 </main>
 
 {#if pendingAction}
   <div class="modal-backdrop">
     <div class="modal" role="dialog" aria-modal="true">
-      <p>You have unsaved changes. Discard them and continue?</p>
+      <p>You have unsaved changes. Save them before continuing?</p>
       <div class="actions">
-        <button onclick={cancel}>Cancel</button>
-        <button class="danger" onclick={discard}>Discard &amp; Continue</button>
+        <button class="danger" disabled={saving} onclick={discard}>Don't Save</button>
+        <button disabled={saving} onclick={cancel}>Cancel</button>
+        <button class="primary" disabled={saving} onclick={saveAndContinue}>Save</button>
       </div>
     </div>
   </div>
@@ -96,6 +112,7 @@
   }
   .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
   .danger { color: #b3261e; }
+  .primary { font-weight: 600; }
 
   .reload-bar {
     display: flex;
