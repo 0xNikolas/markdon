@@ -8,6 +8,7 @@
   import { open, save, saveAs, openPath } from './lib/files'
   import { conflict, reloadFromDisk, dismissConflict, initFileSync } from './lib/fileSync'
   import Editor from './Editor.svelte'
+  import Header from './Header.svelte'
   import StatusBar from './StatusBar.svelte'
   import Banner from './Banner.svelte'
   import FindBar from './FindBar.svelte'
@@ -91,6 +92,8 @@
 <svelte:window onkeydown={handleWindowKeydown} />
 
 <main class="app">
+  <!-- Header hosts the native traffic-light overlay: nothing may render above it. -->
+  <Header path={$doc.path} dirty={isDirty($doc)} />
   <Banner />
   {#if $doc.readonly}
     <div class="readonly-bar" role="status">
@@ -113,7 +116,7 @@
   {#key $doc.loadId}
     <Editor initialContent={$doc.content} readonly={$doc.readonly} onChange={edit} />
   {/key}
-  <StatusBar path={$doc.path} dirty={isDirty($doc)} content={$doc.content} />
+  <StatusBar content={$doc.content} />
 </main>
 
 {#if pendingAction}
@@ -137,7 +140,8 @@
   }
   .modal {
     background: var(--modal-bg); color: var(--fg); padding: 20px; border-radius: 8px;
-    font: 14px system-ui, sans-serif; max-width: 320px;
+    border: 1px solid var(--border);
+    font: 14px var(--font-ui); max-width: 320px;
   }
   .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
   .danger { color: var(--danger); }
@@ -151,7 +155,7 @@
     padding: 6px 12px;
     background: var(--warn-bg);
     color: var(--warn-fg);
-    font: 13px system-ui, sans-serif;
+    font: 13px var(--font-ui);
     border-bottom: 1px solid var(--warn-border);
   }
   .reload-actions { display: flex; gap: 8px; flex-shrink: 0; }
@@ -166,7 +170,7 @@
     padding: 6px 12px;
     background: var(--info-bg);
     color: var(--info-fg);
-    font: 13px system-ui, sans-serif;
+    font: 13px var(--font-ui);
     border-bottom: 1px solid var(--info-border);
   }
   .readonly-bar button { font: inherit; cursor: pointer; }

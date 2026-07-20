@@ -51,9 +51,9 @@
     align-items: center;
     gap: 8px;
     padding: 6px 12px;
-    background: var(--surface);
+    background: var(--bg);
     color: var(--fg);
-    font: 13px system-ui, sans-serif;
+    font: 13px var(--font-ui);
     border-bottom: 1px solid var(--border);
   }
   input {
@@ -62,15 +62,15 @@
     max-width: 260px;
     font: inherit;
     color: inherit;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 3px 6px;
+    background: var(--surface);
+    border: 1px solid var(--surface-border);
+    border-radius: 6px;
+    padding: 3px 8px;
   }
   .count {
     flex-shrink: 0;
     min-width: 5.5em;
-    color: inherit;
+    color: var(--fg-muted);
   }
   button {
     font: 15px inherit;

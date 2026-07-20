@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event'
 import { get, writable, type Writable } from 'svelte/store'
 import { doc, openDoc } from './doc'
 import { reportError } from './errors'
+import { watchStatus } from './ui'
 
 /**
  * When set, the open file changed on disk while the buffer had unsaved edits.
@@ -64,11 +65,21 @@ export async function initFileSync(): Promise<() => void> {
     // Switching files invalidates any pending conflict / decline for the old file.
     conflict.set(null)
     dismissedDisk = null
-    if (s.path)
-      invoke('watch_file', { path: s.path }).catch((e) =>
-        reportError(`Could not watch file for external changes: ${String(e)}`),
+    watchStatus.set('idle')
+    if (s.path) {
+      const path = s.path
+      invoke('watch_file', { path }).then(
+        () => {
+          // Guard: a path switch while the invoke was in flight means this
+          // resolution is for a file we no longer watch — don't go green.
+          if (watchedPath === path) watchStatus.set('watching')
+        },
+        (e) => {
+          if (watchedPath === path) watchStatus.set('idle')
+          reportError(`Could not watch file for external changes: ${String(e)}`)
+        },
       )
-    else invoke('unwatch').catch(() => {})
+    } else invoke('unwatch').catch(() => {})
   })
 
   const unlisten = await listen('file:external-change', async () => {
@@ -100,6 +111,7 @@ export async function initFileSync(): Promise<() => void> {
   return () => {
     unsubDoc()
     unlisten()
+    watchStatus.set('idle')
     invoke('unwatch').catch(() => {})
   }
 }

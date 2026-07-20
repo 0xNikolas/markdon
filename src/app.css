@@ -1,37 +1,69 @@
-:root {
-  font-family: system-ui, sans-serif;
+@font-face {
+  font-family: 'Geist';
+  src: url('./assets/fonts/Geist-Variable.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('./assets/fonts/GeistMono-Variable.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-display: swap;
+}
 
-  --bg: #ffffff;            /* body/app background (matches crepe frame bg) */
-  --fg: #2e2e2e;             /* editor-theme.css .ProseMirror color */
-  --surface: #f7f7f7;       /* StatusBar background */
-  --border: #dddddd;        /* StatusBar border-top */
-  --danger: #b3261e;        /* App.svelte .danger button */
-  --modal-bg: #ffffff;      /* App.svelte .modal background (#fff) */
-  --backdrop: rgba(0, 0, 0, 0.4);  /* App.svelte .modal-backdrop */
-  --error-bg: #fdecea;      /* Banner.svelte .banner background */
-  --error-fg: #611a15;      /* Banner.svelte .banner color */
-  --warn-bg: #fff8e1;       /* App.svelte .reload-bar background */
-  --warn-fg: #5f4b00;       /* App.svelte .reload-bar color */
-  --warn-border: #f0e0a0;   /* App.svelte .reload-bar border-bottom */
-  --info-bg: #e8f0fe;       /* App.svelte .readonly-bar background */
-  --info-fg: #1a3d7c;       /* App.svelte .readonly-bar color */
-  --info-border: #c6d8f5;   /* App.svelte .readonly-bar border-bottom */
-  --find-match-bg: #ffe9a8;    /* editor-theme.css .find-match highlight */
-  --find-active-bg: #ffb84d;   /* editor-theme.css .find-match.find-active highlight */
+:root {
+  font-family: var(--font-ui);
+
+  --font-ui: 'Geist', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, monospace;
+
+  --bg: #f8fafc;             /* app + editor canvas background */
+  --border: #e2e8f0;         /* hairline dividers (header/status bars) */
+  --surface: #e2e8f0;        /* buttons / badges / code surfaces */
+  --surface-border: transparent; /* dark-only border on primary buttons */
+  --fg-strong: #0f1729;      /* headings, wordmark, filename */
+  --fg: #1e293b;             /* body text (kept from dark-mode seam) */
+  --fg-secondary: #334155;   /* secondary labels (status text, buttons) */
+  --fg-muted: #64748b;       /* metadata, breadcrumb, mono clusters */
+  --accent: #e5682b;         /* ember accent */
+  --accent-tint: rgba(229, 104, 43, 0.08);
+  --status-live: #22c55e;    /* watch dot (decision: design dot has no fill) */
+
+  --danger: #b3261e;         /* App.svelte .danger button */
+  --modal-bg: #ffffff;       /* App.svelte .modal background */
+  --backdrop: rgba(15, 23, 41, 0.45); /* App.svelte .modal-backdrop */
+  --error-bg: #fef2f2;       /* Banner.svelte .banner background */
+  --error-fg: #991b1b;       /* Banner.svelte .banner color */
+  --warn-bg: #fef9c3;        /* App.svelte .reload-bar background */
+  --warn-fg: #854d0e;        /* App.svelte .reload-bar color */
+  --warn-border: #fde68a;    /* App.svelte .reload-bar border-bottom */
+  --info-bg: #eff6ff;        /* App.svelte .readonly-bar background */
+  --info-fg: #1e40af;        /* App.svelte .readonly-bar color */
+  --info-border: #bfdbfe;    /* App.svelte .readonly-bar border-bottom */
+  --find-match-bg: rgba(229, 104, 43, 0.2);  /* editor-theme.css .find-match */
+  --find-active-bg: rgba(229, 104, 43, 0.45); /* editor-theme.css .find-active */
 }
 :root[data-theme='dark'] {
-  --bg: #1a1a1a;            /* = crepe dark --crepe-color-background: seamless chrome/editor seam */
-  --fg: #d1d1d1;            /* = crepe dark on-surface */
-  --surface: #121212;       /* = crepe dark surface */
-  --border: #333333;
-  --danger: #ff6666;        /* = crepe dark error */
-  --modal-bg: #262626;
+  --bg: #0b0f19;
+  --border: #1e293b;
+  --surface: #1e293b;
+  --surface-border: #334155;
+  --fg-strong: #f8fafc;
+  --fg: #cbd5e1;
+  --fg-secondary: #94a3b8;
+  --fg-muted: #94a3b8;
+  --accent: #e5682b;
+  --accent-tint: rgba(229, 104, 43, 0.15);
+  --status-live: #22c55e;
+
+  --danger: #ff6666;
+  --modal-bg: #1e293b;
   --backdrop: rgba(0, 0, 0, 0.6);
-  --error-bg: #3a1512;  --error-fg: #f2b8b5;
-  --warn-bg:  #33290a;  --warn-fg:  #e8d48b;  --warn-border: #574c1a;
-  --info-bg:  #10243f;  --info-fg:  #a8c7fa;  --info-border: #274b7a;
-  --find-match-bg: #5c4a1a;    /* dimmer than light mode so text stays readable on dark bg */
-  --find-active-bg: #a86a1f;
+  --error-bg: #2d1414;  --error-fg: #fca5a5;
+  --warn-bg:  #2a2205;  --warn-fg:  #fde68a;  --warn-border: #453a0a;
+  --info-bg:  #0f1e35;  --info-fg:  #93c5fd;  --info-border: #1e3a5f;
+  --find-match-bg: rgba(229, 104, 43, 0.3);
+  --find-active-bg: rgba(229, 104, 43, 0.55);
 }
 html, body { margin: 0; height: 100%; }
 body { background: var(--bg); color: var(--fg); }

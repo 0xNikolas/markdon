@@ -17,7 +17,7 @@
     padding: 6px 12px;
     background: var(--error-bg);
     color: var(--error-fg);
-    font: 13px system-ui, sans-serif;
+    font: 13px var(--font-ui);
   }
   button { border: none; background: none; font-size: 16px; cursor: pointer; }
 </style>
