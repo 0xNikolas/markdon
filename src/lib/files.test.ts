@@ -11,7 +11,7 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
   save: (...a: unknown[]) => saveDialog(...a),
 }))
 
-import { doc, newDoc, edit } from './doc'
+import { doc, newDoc, edit, isDirty } from './doc'
 import { open, save, saveAs, openPath } from './files'
 import { errorMessage } from './errors'
 
@@ -31,7 +31,7 @@ describe('openPath', () => {
     const s = get(doc)
     expect(s.path).toBe('/tmp/assoc.md')
     expect(s.content).toBe('# From association')
-    expect(s.dirty).toBe(false)
+    expect(isDirty(s)).toBe(false)
   })
 
   it('reports an error when the read fails', async () => {
@@ -51,7 +51,7 @@ describe('open', () => {
     const s = get(doc)
     expect(s.path).toBe('/tmp/a.md')
     expect(s.content).toBe('# Loaded')
-    expect(s.dirty).toBe(false)
+    expect(isDirty(s)).toBe(false)
   })
 
   it('does nothing when the dialog is cancelled', async () => {
@@ -62,13 +62,13 @@ describe('open', () => {
 })
 
 describe('save', () => {
-  it('writes to the existing path and clears dirty', async () => {
-    // arrange a document already backed by a path
-    doc.set({ path: '/tmp/a.md', content: 'body', dirty: true, loadId: 1 })
+  it('writes to the existing path and records the saved content', async () => {
+    // arrange a document already backed by a path, with unsaved edits
+    doc.set({ path: '/tmp/a.md', content: 'body', savedContent: 'old', loadId: 1 })
     invoke.mockResolvedValue(undefined)
     await save()
     expect(invoke).toHaveBeenCalledWith('write_file', { path: '/tmp/a.md', contents: 'body' })
-    expect(get(doc).dirty).toBe(false)
+    expect(isDirty(get(doc))).toBe(false)
   })
 
   it('falls back to Save As when there is no path', async () => {
@@ -79,7 +79,19 @@ describe('save', () => {
     await save()
     expect(invoke).toHaveBeenCalledWith('write_file', { path: '/tmp/new.md', contents: 'draft' })
     expect(get(doc).path).toBe('/tmp/new.md')
-    expect(get(doc).dirty).toBe(false)
+    expect(isDirty(get(doc))).toBe(false)
+  })
+
+  it('keeps edits typed during an in-flight save dirty', async () => {
+    doc.set({ path: '/tmp/a.md', content: 'v1', savedContent: 'v0', loadId: 1 })
+    invoke.mockImplementation(async () => {
+      edit('v2') // the user types while write_file is in flight
+    })
+    await save()
+    const s = get(doc)
+    expect(s.content).toBe('v2')
+    expect(s.savedContent).toBe('v1') // what actually hit disk
+    expect(isDirty(s)).toBe(true)
   })
 })
 
@@ -90,7 +102,7 @@ describe('saveAs', () => {
     saveDialog.mockResolvedValue(null)
     await saveAs()
     expect(invoke).not.toHaveBeenCalled()
-    expect(get(doc).dirty).toBe(true)
+    expect(isDirty(get(doc))).toBe(true)
   })
 })
 
@@ -105,10 +117,10 @@ describe('error handling', () => {
 
   it('reports an error when write_file rejects and keeps dirty', async () => {
     errorMessage.set(null)
-    doc.set({ path: '/tmp/a.md', content: 'body', dirty: true, loadId: 1 })
+    doc.set({ path: '/tmp/a.md', content: 'body', savedContent: 'old', loadId: 1 })
     invoke.mockRejectedValue('disk full')
     await save()
     expect(get(errorMessage)).toContain('Could not save file')
-    expect(get(doc).dirty).toBe(true)
+    expect(isDirty(get(doc))).toBe(true)
   })
 })

@@ -4,7 +4,7 @@
   import { invoke } from '@tauri-apps/api/core'
   import { getCurrentWindow } from '@tauri-apps/api/window'
   import { get } from 'svelte/store'
-  import { doc, edit, newDoc } from './lib/doc'
+  import { doc, edit, newDoc, isDirty } from './lib/doc'
   import { open, save, saveAs, openPath } from './lib/files'
   import { conflict, reloadFromDisk, dismissConflict, initFileSync } from './lib/fileSync'
   import Editor from './Editor.svelte'
@@ -18,7 +18,7 @@
   // Run `action` immediately if the document is clean; otherwise defer it behind
   // the discard-confirm modal so unsaved edits are never silently lost.
   function guarded(action: () => void) {
-    if (get(doc).dirty) pendingAction = action
+    if (isDirty(get(doc))) pendingAction = action
     else action()
   }
 
@@ -69,7 +69,7 @@
   {#key $doc.loadId}
     <Editor initialContent={$doc.content} onChange={edit} />
   {/key}
-  <StatusBar path={$doc.path} dirty={$doc.dirty} content={$doc.content} />
+  <StatusBar path={$doc.path} dirty={isDirty($doc)} content={$doc.content} />
 </main>
 
 {#if pendingAction}

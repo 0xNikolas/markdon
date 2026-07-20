@@ -17,18 +17,20 @@ export type ExternalChange = 'ignore' | 'reload' | 'conflict'
 /**
  * Decide what to do when the open file changed on disk. Pure so it can be tested
  * without the Tauri runtime.
- * - `ignore`  — disk matches the buffer (our own save / no real change), or the
- *               user already declined this exact on-disk version.
+ * - `ignore`  — disk matches the buffer (no real change), or disk matches what we
+ *               last saved (our own write landing), or the user already declined
+ *               this exact on-disk version.
  * - `reload`  — buffer is clean: silently adopt the on-disk content.
  * - `conflict`— buffer has unsaved edits that differ from disk: ask the user.
  */
 export function classifyExternalChange(
-  current: { content: string; dirty: boolean },
+  current: { content: string; savedContent: string },
   disk: string,
   declined: string | null,
 ): ExternalChange {
   if (disk === current.content) return 'ignore'
-  if (!current.dirty) return 'reload'
+  if (disk === current.savedContent) return 'ignore' // our own save; buffer just has newer edits
+  if (current.content === current.savedContent) return 'reload'
   if (disk === declined) return 'ignore'
   return 'conflict'
 }

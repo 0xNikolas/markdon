@@ -26,7 +26,7 @@ export async function save(): Promise<void> {
   if (state.path === null) return saveAs()
   try {
     await invoke('write_file', { path: state.path, contents: state.content })
-    markSaved(state.path)
+    markSaved(state.path, state.content)
   } catch (e) {
     reportError(`Could not save file: ${String(e)}`)
   }
@@ -41,7 +41,7 @@ export async function saveAs(): Promise<void> {
   if (selected === null) return // cancelled
   try {
     await invoke('write_file', { path: selected, contents: state.content })
-    markSaved(selected)
+    markSaved(selected, state.content)
   } catch (e) {
     reportError(`Could not save file: ${String(e)}`)
   }
