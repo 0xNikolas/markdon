@@ -5,8 +5,8 @@ const invoke = vi.fn()
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}) }))
 
-import { classifyExternalChange, initFileSync } from './fileSync'
-import { openDoc, newDoc } from './doc'
+import { classifyExternalChange, initFileSync, reloadFromDisk } from './fileSync'
+import { doc, openDoc, newDoc } from './doc'
 import { errorMessage } from './errors'
 
 describe('classifyExternalChange', () => {
@@ -67,5 +67,16 @@ describe('initFileSync', () => {
       expect(get(errorMessage)).toContain('Could not watch')
     })
     teardown()
+  })
+})
+
+describe('reloadFromDisk', () => {
+  it('preserves the readonly flag and adopts disk content as clean', () => {
+    openDoc('/tmp/a.md', 'old', true)
+    reloadFromDisk('new')
+    const s = get(doc)
+    expect(s.readonly).toBe(true)
+    expect(s.content).toBe('new')
+    expect(s.savedContent).toBe('new')
   })
 })

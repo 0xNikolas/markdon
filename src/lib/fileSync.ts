@@ -38,9 +38,9 @@ export function classifyExternalChange(
 
 /** Adopt the given on-disk content into the buffer (silent, marks clean). */
 export function reloadFromDisk(content: string): void {
-  const path = get(doc).path
-  if (path === null) return
-  openDoc(path, content)
+  const current = get(doc)
+  if (current.path === null) return
+  openDoc(current.path, content, current.readonly)
   conflict.set(null)
   dismissedDisk = null
 }
