@@ -27,4 +27,7 @@ tauri-plugin-dialog = "2"
 notify = "6"
 tempfile = "3"
 
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-window-state = "2"
+
 [dev-dependencies]

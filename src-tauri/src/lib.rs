@@ -8,6 +8,8 @@ use std::sync::Mutex;
 
 use tauri::Emitter;
 use tauri::Manager;
+#[cfg(desktop)]
+use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 /// Buffer of file paths macOS asked us to open (via Finder double-click / `open`).
 /// Needed because on a cold launch the OS delivers the file before the webview's
@@ -48,10 +50,18 @@ fn queue_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .manage(OpenedFiles::default())
         .manage(watcher::FileWatcher::default())
-        .manage(allowlist::AllowedPaths::default())
+        .manage(allowlist::AllowedPaths::default());
+
+    // Must be registered on the builder (before config windows are created):
+    // the plugin restores state only in its window-created hook, and "main"
+    // already exists by the time `setup` runs in this app.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_window_state::Builder::default().build());
+
+    builder
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -73,6 +83,11 @@ pub fn run() {
             window.on_window_event(move |event| {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
+                    // Belt-and-braces: the plugin normally persists on RunEvent::Exit,
+                    // which still fires after the frontend calls window.destroy(),
+                    // but saving here makes persistence independent of exit handling.
+                    #[cfg(desktop)]
+                    let _ = handle.save_window_state(StateFlags::all());
                     let _ = handle.emit("window:close-requested", ());
                 }
             });
