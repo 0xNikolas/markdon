@@ -144,4 +144,16 @@ describe('readonly', () => {
     await save()
     expect(invoke).not.toHaveBeenCalledWith('write_file', expect.anything())
   })
+
+  it('saveAs from a readonly doc retargets to the copy and enables editing', async () => {
+    openDoc('/tmp/ro.md', 'body', true)
+    invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === 'save_file_dialog' ? '/tmp/copy.md' : undefined,
+    )
+    await saveAs()
+    const s = get(doc)
+    expect(s.path).toBe('/tmp/copy.md')
+    expect(s.readonly).toBe(false)
+    expect(isDirty(s)).toBe(false)
+  })
 })

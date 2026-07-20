@@ -34,7 +34,7 @@ export function edit(content: string): void {
 
 /** Record a completed write: `savedContent` is what the write actually contained. */
 export function markSaved(path: string, savedContent: string): void {
-  doc.update((s) => ({ ...s, path, savedContent }))
+  doc.update((s) => ({ ...s, path, savedContent, readonly: false }))
 }
 
 export function enableEditing(): void {
