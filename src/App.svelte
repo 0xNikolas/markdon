@@ -15,6 +15,10 @@
   // confirm modal is shown. Guards New, Open, and window close uniformly.
   let pendingAction = $state<(() => void) | null>(null)
 
+  // True while `save()` is in flight (native dialogs aren't window-parented,
+  // so the modal stays clickable underneath them without this guard).
+  let saving = $state(false)
+
   // Run `action` immediately if the document is clean; otherwise defer it behind
   // the discard-confirm modal so unsaved edits are never silently lost.
   function guarded(action: () => void) {
@@ -54,10 +58,15 @@
   }
   function cancel() { pendingAction = null }
   async function saveAndContinue() {
-    await save()
-    // If the save failed or Save As was cancelled the doc is still dirty:
-    // keep the modal open so no edits are silently lost.
-    if (!isDirty(get(doc))) discard()
+    saving = true
+    try {
+      await save()
+      // If the save failed or Save As was cancelled the doc is still dirty:
+      // keep the modal open so no edits are silently lost.
+      if (!isDirty(get(doc))) discard()
+    } finally {
+      saving = false
+    }
   }
 </script>
 
@@ -83,9 +92,9 @@
     <div class="modal" role="dialog" aria-modal="true">
       <p>You have unsaved changes. Save them before continuing?</p>
       <div class="actions">
-        <button class="danger" onclick={discard}>Don't Save</button>
-        <button onclick={cancel}>Cancel</button>
-        <button class="primary" onclick={saveAndContinue}>Save</button>
+        <button class="danger" disabled={saving} onclick={discard}>Don't Save</button>
+        <button disabled={saving} onclick={cancel}>Cancel</button>
+        <button class="primary" disabled={saving} onclick={saveAndContinue}>Save</button>
       </div>
     </div>
   </div>
