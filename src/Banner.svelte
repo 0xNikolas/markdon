@@ -15,8 +15,8 @@
     justify-content: space-between;
     align-items: center;
     padding: 6px 12px;
-    background: #fdecea;
-    color: #611a15;
+    background: var(--error-bg);
+    color: var(--error-fg);
     font: 13px system-ui, sans-serif;
   }
   button { border: none; background: none; font-size: 16px; cursor: pointer; }

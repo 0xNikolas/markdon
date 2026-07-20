@@ -5,5 +5,6 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.test.ts'],
     passWithNoTests: true, // vitest@2 exits 1 with no test files otherwise
+    css: true, // needed to resolve `?inline` CSS imports (theme.test.ts) under environment: 'node'
   },
 })

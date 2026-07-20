@@ -1,3 +1,17 @@
+<script module lang="ts">
+  import frameDark from '@milkdown/crepe/theme/frame-dark.css?inline'
+  import { scopeDarkCss } from './lib/theme'
+
+  // Runs once (module scope), before any instance mounts. Guarded against
+  // double-append on HMR.
+  if (!document.head.querySelector('style[data-crepe-dark]')) {
+    const el = document.createElement('style')
+    el.setAttribute('data-crepe-dark', '')
+    el.textContent = scopeDarkCss(frameDark)
+    document.head.append(el)
+  }
+</script>
+
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
   import { Crepe } from '@milkdown/crepe'

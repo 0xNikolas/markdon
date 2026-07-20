@@ -1,3 +1,34 @@
-:root { font-family: system-ui, sans-serif; }
+:root {
+  font-family: system-ui, sans-serif;
+
+  --bg: #ffffff;            /* body/app background (matches crepe frame bg) */
+  --fg: #2e2e2e;             /* editor-theme.css .ProseMirror color */
+  --surface: #f7f7f7;       /* StatusBar background */
+  --border: #dddddd;        /* StatusBar border-top */
+  --danger: #b3261e;        /* App.svelte .danger button */
+  --modal-bg: #ffffff;      /* App.svelte .modal background (#fff) */
+  --backdrop: rgba(0, 0, 0, 0.4);  /* App.svelte .modal-backdrop */
+  --error-bg: #fdecea;      /* Banner.svelte .banner background */
+  --error-fg: #611a15;      /* Banner.svelte .banner color */
+  --warn-bg: #fff8e1;       /* App.svelte .reload-bar background */
+  --warn-fg: #5f4b00;       /* App.svelte .reload-bar color */
+  --warn-border: #f0e0a0;   /* App.svelte .reload-bar border-bottom */
+  --info-bg: #e8f0fe;       /* App.svelte .readonly-bar background */
+  --info-fg: #1a3d7c;       /* App.svelte .readonly-bar color */
+  --info-border: #c6d8f5;   /* App.svelte .readonly-bar border-bottom */
+}
+:root[data-theme='dark'] {
+  --bg: #1a1a1a;            /* = crepe dark --crepe-color-background: seamless chrome/editor seam */
+  --fg: #d1d1d1;            /* = crepe dark on-surface */
+  --surface: #121212;       /* = crepe dark surface */
+  --border: #333333;
+  --danger: #ff6666;        /* = crepe dark error */
+  --modal-bg: #262626;
+  --backdrop: rgba(0, 0, 0, 0.6);
+  --error-bg: #3a1512;  --error-fg: #f2b8b5;
+  --warn-bg:  #33290a;  --warn-fg:  #e8d48b;  --warn-border: #574c1a;
+  --info-bg:  #10243f;  --info-fg:  #a8c7fa;  --info-border: #274b7a;
+}
 html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--fg); }
 #app { height: 100%; }

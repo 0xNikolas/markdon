@@ -15,5 +15,5 @@
   padding: 2.5rem 1.75rem 6rem;
   line-height: 1.7;
   font-size: 1.05rem;
-  color: #2e2e2e;
+  color: var(--fg);
 }

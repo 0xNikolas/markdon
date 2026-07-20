@@ -109,15 +109,15 @@
 <style>
   .app { display: flex; flex-direction: column; height: 100vh; }
   .modal-backdrop {
-    position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+    position: fixed; inset: 0; background: var(--backdrop);
     display: flex; align-items: center; justify-content: center;
   }
   .modal {
-    background: #fff; padding: 20px; border-radius: 8px;
+    background: var(--modal-bg); color: var(--fg); padding: 20px; border-radius: 8px;
     font: 14px system-ui, sans-serif; max-width: 320px;
   }
   .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
-  .danger { color: #b3261e; }
+  .danger { color: var(--danger); }
   .primary { font-weight: 600; }
 
   .reload-bar {
@@ -126,10 +126,10 @@
     align-items: center;
     gap: 12px;
     padding: 6px 12px;
-    background: #fff8e1;
-    color: #5f4b00;
+    background: var(--warn-bg);
+    color: var(--warn-fg);
     font: 13px system-ui, sans-serif;
-    border-bottom: 1px solid #f0e0a0;
+    border-bottom: 1px solid var(--warn-border);
   }
   .reload-actions { display: flex; gap: 8px; flex-shrink: 0; }
   .reload-bar button { font: inherit; cursor: pointer; }
@@ -141,10 +141,10 @@
     align-items: center;
     gap: 12px;
     padding: 6px 12px;
-    background: #e8f0fe;
-    color: #1a3d7c;
+    background: var(--info-bg);
+    color: var(--info-fg);
     font: 13px system-ui, sans-serif;
-    border-bottom: 1px solid #c6d8f5;
+    border-bottom: 1px solid var(--info-border);
   }
   .readonly-bar button { font: inherit; cursor: pointer; }
 </style>
