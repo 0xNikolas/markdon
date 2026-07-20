@@ -1,4 +1,6 @@
 use std::fs;
+use std::io::Write;
+use std::path::Path;
 
 /// Reject UNC and DOS device paths (Windows SSRF / NTLM-credential-theft vector).
 /// Backslash-prefixed paths are never legitimate on unix, so they are rejected on
@@ -16,6 +18,24 @@ pub(crate) fn reject_unsafe_path(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Write via a temp file in the same directory + rename, so a crash or full disk
+/// mid-write can never leave `path` truncated or half-written. Preserves the
+/// existing file's permissions (a fresh temp file would otherwise be 0600).
+fn atomic_write(path: &Path, contents: &str) -> std::io::Result<()> {
+    let dir = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(contents.as_bytes())?;
+    if let Ok(meta) = fs::metadata(path) {
+        fs::set_permissions(tmp.path(), meta.permissions())?;
+    }
+    tmp.as_file().sync_all()?;
+    tmp.persist(path).map_err(|e| e.error)?;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn read_file(path: String) -> Result<String, String> {
     reject_unsafe_path(&path)?;
@@ -25,7 +45,7 @@ pub fn read_file(path: String) -> Result<String, String> {
 #[tauri::command]
 pub fn write_file(path: String, contents: String) -> Result<(), String> {
     reject_unsafe_path(&path)?;
-    fs::write(&path, contents).map_err(|e| e.to_string())
+    atomic_write(Path::new(&path), &contents).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -74,5 +94,22 @@ mod tests {
     fn write_file_rejects_unc_path() {
         let res = write_file(r"\\evil-server\share\x".to_string(), "x".into());
         assert!(res.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_preserves_existing_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("note.md");
+        let p = path.to_str().unwrap().to_string();
+
+        write_file(p.clone(), "first".into()).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        write_file(p.clone(), "second".into()).unwrap();
+
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o644, "atomic replace must keep the target's permissions");
+        assert_eq!(read_file(p).unwrap(), "second");
     }
 }
