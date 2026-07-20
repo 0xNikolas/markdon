@@ -53,6 +53,12 @@
     action?.()
   }
   function cancel() { pendingAction = null }
+  async function saveAndContinue() {
+    await save()
+    // If the save failed or Save As was cancelled the doc is still dirty:
+    // keep the modal open so no edits are silently lost.
+    if (!isDirty(get(doc))) discard()
+  }
 </script>
 
 <main class="app">
@@ -75,10 +81,11 @@
 {#if pendingAction}
   <div class="modal-backdrop">
     <div class="modal" role="dialog" aria-modal="true">
-      <p>You have unsaved changes. Discard them and continue?</p>
+      <p>You have unsaved changes. Save them before continuing?</p>
       <div class="actions">
+        <button class="danger" onclick={discard}>Don't Save</button>
         <button onclick={cancel}>Cancel</button>
-        <button class="danger" onclick={discard}>Discard &amp; Continue</button>
+        <button class="primary" onclick={saveAndContinue}>Save</button>
       </div>
     </div>
   </div>
@@ -96,6 +103,7 @@
   }
   .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
   .danger { color: #b3261e; }
+  .primary { font-weight: 600; }
 
   .reload-bar {
     display: flex;
