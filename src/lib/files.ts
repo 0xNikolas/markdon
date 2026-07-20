@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { get } from 'svelte/store'
-import { document, openDoc, markSaved } from './document'
+import { doc, openDoc, markSaved } from './doc'
 import { reportError } from './errors'
 
 const MD_FILTER = { name: 'Markdown', extensions: ['md', 'markdown'] }
@@ -22,7 +22,7 @@ export async function open(): Promise<void> {
 }
 
 export async function save(): Promise<void> {
-  const state = get(document)
+  const state = get(doc)
   if (state.path === null) return saveAs()
   try {
     await invoke('write_file', { path: state.path, contents: state.content })
@@ -33,7 +33,7 @@ export async function save(): Promise<void> {
 }
 
 export async function saveAs(): Promise<void> {
-  const state = get(document)
+  const state = get(doc)
   const selected = await saveDialog({
     filters: [MD_FILTER],
     defaultPath: state.path ?? 'untitled.md',

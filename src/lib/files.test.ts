@@ -11,7 +11,7 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
   save: (...a: unknown[]) => saveDialog(...a),
 }))
 
-import { document, newDoc, edit } from './document'
+import { doc, newDoc, edit } from './doc'
 import { open, save, saveAs, openPath } from './files'
 import { errorMessage } from './errors'
 
@@ -28,7 +28,7 @@ describe('openPath', () => {
     await openPath('/tmp/assoc.md')
     expect(openDialog).not.toHaveBeenCalled()
     expect(invoke).toHaveBeenCalledWith('read_file', { path: '/tmp/assoc.md' })
-    const s = get(document)
+    const s = get(doc)
     expect(s.path).toBe('/tmp/assoc.md')
     expect(s.content).toBe('# From association')
     expect(s.dirty).toBe(false)
@@ -48,7 +48,7 @@ describe('open', () => {
     invoke.mockResolvedValue('# Loaded')
     await open()
     expect(invoke).toHaveBeenCalledWith('read_file', { path: '/tmp/a.md' })
-    const s = get(document)
+    const s = get(doc)
     expect(s.path).toBe('/tmp/a.md')
     expect(s.content).toBe('# Loaded')
     expect(s.dirty).toBe(false)
@@ -64,11 +64,11 @@ describe('open', () => {
 describe('save', () => {
   it('writes to the existing path and clears dirty', async () => {
     // arrange a document already backed by a path
-    document.set({ path: '/tmp/a.md', content: 'body', dirty: true, loadId: 1 })
+    doc.set({ path: '/tmp/a.md', content: 'body', dirty: true, loadId: 1 })
     invoke.mockResolvedValue(undefined)
     await save()
     expect(invoke).toHaveBeenCalledWith('write_file', { path: '/tmp/a.md', contents: 'body' })
-    expect(get(document).dirty).toBe(false)
+    expect(get(doc).dirty).toBe(false)
   })
 
   it('falls back to Save As when there is no path', async () => {
@@ -78,8 +78,8 @@ describe('save', () => {
     invoke.mockResolvedValue(undefined)
     await save()
     expect(invoke).toHaveBeenCalledWith('write_file', { path: '/tmp/new.md', contents: 'draft' })
-    expect(get(document).path).toBe('/tmp/new.md')
-    expect(get(document).dirty).toBe(false)
+    expect(get(doc).path).toBe('/tmp/new.md')
+    expect(get(doc).dirty).toBe(false)
   })
 })
 
@@ -90,7 +90,7 @@ describe('saveAs', () => {
     saveDialog.mockResolvedValue(null)
     await saveAs()
     expect(invoke).not.toHaveBeenCalled()
-    expect(get(document).dirty).toBe(true)
+    expect(get(doc).dirty).toBe(true)
   })
 })
 
@@ -105,10 +105,10 @@ describe('error handling', () => {
 
   it('reports an error when write_file rejects and keeps dirty', async () => {
     errorMessage.set(null)
-    document.set({ path: '/tmp/a.md', content: 'body', dirty: true, loadId: 1 })
+    doc.set({ path: '/tmp/a.md', content: 'body', dirty: true, loadId: 1 })
     invoke.mockRejectedValue('disk full')
     await save()
     expect(get(errorMessage)).toContain('Could not save file')
-    expect(get(document).dirty).toBe(true)
+    expect(get(doc).dirty).toBe(true)
   })
 })
