@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { get } from 'svelte/store'
 
 import {
@@ -116,9 +116,16 @@ beforeEach(() => {
 })
 
 describe('initSettings', () => {
+  let teardown: (() => void) | null = null
+
+  afterEach(() => {
+    teardown?.()
+    teardown = null
+  })
+
   it('seeds defaults and stamps all three --editor-* vars on init', () => {
     const env = fakeEnv()
-    initSettings(env)
+    teardown = initSettings(env)
     expect(get(settings)).toEqual(DEFAULTS)
     expect(env.setVar).toHaveBeenCalledWith('--editor-font-family', 'var(--font-ui)')
     expect(env.setVar).toHaveBeenCalledWith('--editor-font-size', '14px')
@@ -128,7 +135,7 @@ describe('initSettings', () => {
 
   it('re-stamps vars and calls setTheme on updateSetting', () => {
     const env = fakeEnv()
-    initSettings(env)
+    teardown = initSettings(env)
     env.setVar.mockClear()
     env.setTheme.mockClear()
     updateSetting('fontSize', 18)
@@ -139,7 +146,7 @@ describe('initSettings', () => {
 
   it('persists settings JSON under SETTINGS_KEY on updateSetting', () => {
     const env = fakeEnv()
-    initSettings(env)
+    teardown = initSettings(env)
     updateSetting('tabWidth', 4)
     const persisted = JSON.parse(env.store.get(SETTINGS_KEY)!)
     expect(persisted.tabWidth).toBe(4)
@@ -147,14 +154,14 @@ describe('initSettings', () => {
 
   it('loads an existing settings.v1 value from storage', () => {
     const env = fakeEnv({ [SETTINGS_KEY]: JSON.stringify({ ...DEFAULTS, fontSize: 18 }) })
-    initSettings(env)
+    teardown = initSettings(env)
     expect(get(settings).fontSize).toBe(18)
     expect(env.setVar).toHaveBeenCalledWith('--editor-font-size', '18px')
   })
 
   it('seeds theme from legacy markdon.themePref when settings key is absent', () => {
     const env = fakeEnv({ 'markdon.themePref': 'dark' })
-    initSettings(env)
+    teardown = initSettings(env)
     expect(get(settings).theme).toBe('dark')
     const persisted = JSON.parse(env.store.get(SETTINGS_KEY)!)
     expect(persisted.theme).toBe('dark')
@@ -166,13 +173,13 @@ describe('initSettings', () => {
       [SETTINGS_KEY]: JSON.stringify(DEFAULTS),
       'markdon.themePref': 'dark',
     })
-    initSettings(env)
+    teardown = initSettings(env)
     expect(get(settings).theme).toBe('system')
   })
 
   it('ignores a garbage legacy markdon.themePref value', () => {
     const env = fakeEnv({ 'markdon.themePref': 'nonsense' })
-    initSettings(env)
+    teardown = initSettings(env)
     expect(get(settings).theme).toBe('system')
   })
 
@@ -181,7 +188,33 @@ describe('initSettings', () => {
     env.storage.setItem = () => {
       throw new Error('quota exceeded')
     }
-    expect(() => initSettings(env)).not.toThrow()
+    expect(() => (teardown = initSettings(env))).not.toThrow()
     expect(() => updateSetting('fontSize', 16)).not.toThrow()
+  })
+
+  it('is re-entry-safe: a second initSettings call unsubscribes the first (no stacked subscriber)', () => {
+    const env1 = fakeEnv()
+    teardown = initSettings(env1)
+    const env2 = fakeEnv()
+    teardown = initSettings(env2)
+
+    env1.setVar.mockClear()
+    env1.setTheme.mockClear()
+    updateSetting('fontSize', 17)
+
+    expect(env1.setVar).not.toHaveBeenCalled()
+    expect(env1.setTheme).not.toHaveBeenCalled()
+    expect(env2.setVar).toHaveBeenCalledWith('--editor-font-size', '17px')
+  })
+
+  it('the returned teardown unsubscribes so later updates do not touch env', () => {
+    const env = fakeEnv()
+    const stop = initSettings(env)
+    stop()
+    env.setVar.mockClear()
+    env.setTheme.mockClear()
+    updateSetting('fontSize', 13)
+    expect(env.setVar).not.toHaveBeenCalled()
+    expect(env.setTheme).not.toHaveBeenCalled()
   })
 })

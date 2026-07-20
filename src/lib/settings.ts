@@ -117,15 +117,25 @@ function realEnv(): SettingsEnv {
  * pre-settings status-bar choice with zero flash), then subscribe: every
  * change persists to storage, stamps the three `--editor-*` vars, and
  * pushes theme one-way into theme.ts's `themePref`.
+ *
+ * Re-entry-safe: calling this again unsubscribes the previous call's
+ * listener before installing a new one, so the shared module-level
+ * `settings` store never accumulates stacked subscribers (mirrors
+ * theme.ts's initTheme). Returns a teardown function (unused in
+ * production, used by tests to avoid cross-test leakage).
  */
-export function initSettings(env: SettingsEnv = realEnv()): void {
+let activeUnsubscribe: (() => void) | null = null
+
+export function initSettings(env: SettingsEnv = realEnv()): () => void {
+  activeUnsubscribe?.()
+
   let raw = env.storage.getItem(SETTINGS_KEY)
   if (raw === null) {
     const legacy = env.storage.getItem(LEGACY_THEME_KEY)
     if (legacy === 'light' || legacy === 'dark') raw = JSON.stringify({ ...DEFAULTS, theme: legacy })
   }
   settings.set(parseSettings(raw))
-  settings.subscribe((s) => {
+  const unsubscribe = settings.subscribe((s) => {
     try {
       env.storage.setItem(SETTINGS_KEY, JSON.stringify(s))
     } catch {
@@ -136,6 +146,12 @@ export function initSettings(env: SettingsEnv = realEnv()): void {
     env.setVar('--editor-line-height', String(s.lineHeight))
     env.setTheme(s.theme) // themePref.set — theme.ts stamps data-theme + native titlebar
   })
+
+  activeUnsubscribe = unsubscribe
+  return () => {
+    unsubscribe()
+    if (activeUnsubscribe === unsubscribe) activeUnsubscribe = null
+  }
 }
 
 export function updateSetting<K extends SettingKey>(key: K, value: Settings[K]): void {
