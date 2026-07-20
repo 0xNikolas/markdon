@@ -3,7 +3,7 @@
    (Crepe's frame theme uses Noto Serif headings + Noto Sans body). */
 .milkdown {
   --crepe-font-title: var(--font-ui);
-  --crepe-font-default: var(--font-ui);
+  --crepe-font-default: var(--editor-font-family);
   --crepe-font-code: var(--font-mono);
   --crepe-color-background: var(--bg);
 }
@@ -24,8 +24,8 @@
   max-width: 44rem;
   margin: 0 auto;
   padding: 2.5rem 1.75rem 6rem;
-  line-height: 1.7;
-  font-size: 1.05rem;
+  line-height: var(--editor-line-height);
+  font-size: var(--editor-font-size);
   color: var(--fg);
 }
 

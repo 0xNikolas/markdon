@@ -12,7 +12,9 @@
   import StatusBar from './StatusBar.svelte'
   import Banner from './Banner.svelte'
   import FindBar from './FindBar.svelte'
+  import SettingsModal from './SettingsModal.svelte'
   import { searchUi, openFind, closeFind } from './lib/searchPlugin'
+  import { settingsOpen, openSettings } from './lib/ui'
 
   // Action to run if the user chooses to discard unsaved changes. When set, the
   // confirm modal is shown. Guards New, Open, and window close uniformly.
@@ -44,6 +46,7 @@
       listen('menu:save', () => save()),
       listen('menu:save_as', () => saveAs()),
       listen('menu:find', () => openFind()),
+      listen('menu:settings', () => openSettings()),
       listen('window:close-requested', () => guarded(() => getCurrentWindow().destroy())),
       listen('file:opened', () => drainOpenedFiles()),
     ])
@@ -130,6 +133,10 @@
       </div>
     </div>
   </div>
+{/if}
+
+{#if $settingsOpen}
+  <SettingsModal />
 {/if}
 
 <style>

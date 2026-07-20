@@ -17,8 +17,13 @@ pub fn build(app: &App) -> tauri::Result<Menu<Wry>> {
     let find = MenuItemBuilder::with_id("menu:find", "Find…")
         .accelerator("CmdOrCtrl+F")
         .build(app)?;
+    let settings = MenuItemBuilder::with_id("menu:settings", "Settings…")
+        .accelerator("CmdOrCtrl+,")
+        .build(app)?;
 
     let app_menu = SubmenuBuilder::new(app, "markdon")
+        .item(&settings)
+        .separator()
         .item(&PredefinedMenuItem::quit(app, None)?)
         .build()?;
 
@@ -44,4 +49,36 @@ pub fn build(app: &App) -> tauri::Result<Menu<Wry>> {
         .build()?;
 
     Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu])
+}
+
+#[cfg(test)]
+mod tests {
+    // tauri's MenuItemBuilder::accelerator stores the raw string and parses
+    // it lazily with `.and_then(|s| s.parse().ok())` -- a bad string is
+    // swallowed silently (no accelerator, no error), so `cargo build`/`cargo
+    // test` alone wouldn't catch a typo'd accelerator. Parse the exact
+    // strings used above directly against muda to verify the amendment's
+    // "cargo build/test check" duty for CmdOrCtrl+,.
+    use std::str::FromStr;
+
+    #[test]
+    fn settings_accelerator_parses() {
+        let accel = muda::accelerator::Accelerator::from_str("CmdOrCtrl+,");
+        assert!(accel.is_ok(), "CmdOrCtrl+, failed to parse: {accel:?}");
+    }
+
+    #[test]
+    fn all_menu_accelerators_parse() {
+        for s in [
+            "CmdOrCtrl+N",
+            "CmdOrCtrl+O",
+            "CmdOrCtrl+S",
+            "CmdOrCtrl+Shift+S",
+            "CmdOrCtrl+F",
+            "CmdOrCtrl+,",
+        ] {
+            let accel = muda::accelerator::Accelerator::from_str(s);
+            assert!(accel.is_ok(), "{s} failed to parse: {accel:?}");
+        }
+    }
 }

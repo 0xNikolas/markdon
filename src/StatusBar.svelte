@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { themePref, toggleTheme } from './lib/theme'
   import { watchStatus, cursor, formatInt, lnColText, watchLabel } from './lib/ui'
 
   interface Props {
@@ -11,12 +10,6 @@
   // markdown syntax tokens like `#`, `*`, `>` aren't counted as words.
   const words = $derived(
     (content.match(/[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*/gu) ?? []).length,
-  )
-
-  // NOTE: a later settings feature moves this control into a settings modal;
-  // kept small and self-contained here so it's easy to relocate.
-  const themeLabel = $derived(
-    $themePref === 'system' ? 'Auto' : $themePref === 'light' ? 'Light' : 'Dark',
   )
 </script>
 
@@ -34,9 +27,6 @@
     {/if}
     <span class="meta">{formatInt(words)} words</span>
     <span class="meta">{formatInt(content.length)} chars</span>
-    <button class="theme-toggle" onclick={toggleTheme} aria-label="Switch theme">
-      {themeLabel}
-    </button>
   </div>
 </footer>
 
@@ -80,13 +70,5 @@
     display: flex;
     align-items: center;
     gap: 16px;
-  }
-  .theme-toggle {
-    font: 400 12px var(--font-mono);
-    color: var(--fg-muted);
-    background: transparent;
-    border: none;
-    padding: 0;
-    cursor: pointer;
   }
 </style>

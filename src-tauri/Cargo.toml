@@ -31,3 +31,8 @@ tempfile = "3"
 tauri-plugin-window-state = "2"
 
 [dev-dependencies]
+# Only to unit-test that the "CmdOrCtrl+," settings accelerator parses (see
+# menu.rs tests) — tauri's MenuItemBuilder swallows parse failures silently
+# (`.and_then(|s| s.parse().ok())`), so this is the one way to actually
+# verify the string muda receives is valid without launching the GUI.
+muda = "0.19"
