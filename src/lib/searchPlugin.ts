@@ -72,44 +72,55 @@ function scrollActiveIntoView(): void {
   activeView?.dom.querySelector('.find-active')?.scrollIntoView({ block: 'center' })
 }
 
-export const searchPlugin = $prose(
-  () =>
-    new Plugin<SearchState>({
-      key,
-      state: {
-        // Re-seeds from the last-known query so an open search survives an
-        // editor remount (e.g. {#key loadId} on New/Open).
-        init: (_, editorState) => compute(editorState.doc, get(searchUi).query, 0),
-        apply(tr, value, _oldState, newState) {
-          const meta = tr.getMeta(key) as SearchMeta | undefined
-          if (!meta) {
-            if (!tr.docChanged) return value
-            // Doc changed without a search meta: recompute against the same
-            // query, keeping the active index steady where possible.
-            return compute(newState.doc, value.query, value.activeIndex)
-          }
-          if (meta.type === 'clear') return compute(newState.doc, '', 0)
-          if (meta.type === 'set') return compute(newState.doc, meta.query, 0)
-          // 'step'
-          const next = stepIndex(value.matches.length, value.activeIndex, meta.delta)
-          return compute(newState.doc, value.query, next)
-        },
-      },
-      props: {
-        decorations: (editorState) => key.getState(editorState)?.decorations ?? DecorationSet.empty,
-      },
-      view: (v) => {
-        activeView = v
-        const state = key.getState(v.state)
-        if (state) syncUi(state)
-        return {
-          destroy: () => {
-            if (activeView === v) activeView = null
-          },
+/** Builds the raw ProseMirror plugin. Exported (in addition to being wrapped
+ * by $prose below) so tests can construct it directly against a plain
+ * EditorState, without needing to boot a full Milkdown/Crepe editor -- the
+ * $prose wrapper only exposes its `.plugin()` after Milkdown's ctx machinery
+ * has run the factory, which never happens outside a real editor instance. */
+export function buildSearchPlugin(): Plugin<SearchState> {
+  return new Plugin<SearchState>({
+    key,
+    state: {
+      // Re-seeds from the last-known query so an open search survives an
+      // editor remount (e.g. {#key loadId} on New/Open).
+      init: (_, editorState) => compute(editorState.doc, get(searchUi).query, 0),
+      apply(tr, value, _oldState, newState) {
+        const meta = tr.getMeta(key) as SearchMeta | undefined
+        if (!meta) {
+          if (!tr.docChanged) return value
+          // No active search (find bar closed/empty): matches are already
+          // empty and stay empty regardless of doc edits, so skip the
+          // O(doc-size) collectSegments/findMatches walk entirely. This
+          // keeps ordinary typing with search closed at zero extra cost.
+          if (value.query === '') return value
+          // Doc changed without a search meta: recompute against the same
+          // query, keeping the active index steady where possible.
+          return compute(newState.doc, value.query, value.activeIndex)
         }
+        if (meta.type === 'clear') return compute(newState.doc, '', 0)
+        if (meta.type === 'set') return compute(newState.doc, meta.query, 0)
+        // 'step'
+        const next = stepIndex(value.matches.length, value.activeIndex, meta.delta)
+        return compute(newState.doc, value.query, next)
       },
-    }),
-)
+    },
+    props: {
+      decorations: (editorState) => key.getState(editorState)?.decorations ?? DecorationSet.empty,
+    },
+    view: (v) => {
+      activeView = v
+      const state = key.getState(v.state)
+      if (state) syncUi(state)
+      return {
+        destroy: () => {
+          if (activeView === v) activeView = null
+        },
+      }
+    },
+  })
+}
+
+export const searchPlugin = $prose(buildSearchPlugin)
 
 function dispatch(meta: SearchMeta): void {
   if (!activeView) return
