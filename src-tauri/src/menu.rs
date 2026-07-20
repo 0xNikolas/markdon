@@ -3,13 +3,17 @@ use tauri::{App, Wry};
 
 pub fn build(app: &App) -> tauri::Result<Menu<Wry>> {
     let new = MenuItemBuilder::with_id("menu:new", "New")
-        .accelerator("CmdOrCtrl+N").build(app)?;
+        .accelerator("CmdOrCtrl+N")
+        .build(app)?;
     let open = MenuItemBuilder::with_id("menu:open", "Open…")
-        .accelerator("CmdOrCtrl+O").build(app)?;
+        .accelerator("CmdOrCtrl+O")
+        .build(app)?;
     let save = MenuItemBuilder::with_id("menu:save", "Save")
-        .accelerator("CmdOrCtrl+S").build(app)?;
+        .accelerator("CmdOrCtrl+S")
+        .build(app)?;
     let save_as = MenuItemBuilder::with_id("menu:save_as", "Save As…")
-        .accelerator("CmdOrCtrl+Shift+S").build(app)?;
+        .accelerator("CmdOrCtrl+Shift+S")
+        .build(app)?;
 
     let app_menu = SubmenuBuilder::new(app, "markdon")
         .item(&PredefinedMenuItem::quit(app, None)?)

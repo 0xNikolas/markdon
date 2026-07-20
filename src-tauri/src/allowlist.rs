@@ -38,6 +38,9 @@ mod tests {
         let a = AllowedPaths::default();
         a.allow("/tmp/x.md");
         assert!(a.ensure("/tmp/x.md").is_ok());
-        assert!(a.ensure("/tmp/x.md/../y.md").is_err(), "no path algebra: exact strings only");
+        assert!(
+            a.ensure("/tmp/x.md/../y.md").is_err(),
+            "no path algebra: exact strings only"
+        );
     }
 }

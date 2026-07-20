@@ -127,7 +127,10 @@ mod tests {
         write_file_impl(p, "second").unwrap();
 
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o644, "atomic replace must keep the target's permissions");
+        assert_eq!(
+            mode, 0o644,
+            "atomic replace must keep the target's permissions"
+        );
         assert_eq!(read_file_impl(p).unwrap(), "second");
     }
 }
