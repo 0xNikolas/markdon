@@ -4,7 +4,7 @@ import { get } from 'svelte/store'
 const invoke = vi.fn()
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
 
-import { doc, newDoc, edit, isDirty } from './doc'
+import { doc, newDoc, edit, isDirty, openDoc } from './doc'
 import { open, save, saveAs, openPath } from './files'
 import { errorMessage } from './errors'
 
@@ -55,7 +55,7 @@ describe('open', () => {
 describe('save', () => {
   it('writes to the existing path and records the saved content', async () => {
     // arrange a document already backed by a path, with unsaved edits
-    doc.set({ path: '/tmp/a.md', content: 'body', savedContent: 'old', loadId: 1 })
+    doc.set({ path: '/tmp/a.md', content: 'body', savedContent: 'old', readonly: false, loadId: 1 })
     invoke.mockResolvedValue(undefined)
     await save()
     expect(invoke).toHaveBeenCalledWith('write_file', { path: '/tmp/a.md', contents: 'body' })
@@ -76,7 +76,7 @@ describe('save', () => {
   })
 
   it('keeps edits typed during an in-flight save dirty', async () => {
-    doc.set({ path: '/tmp/a.md', content: 'v1', savedContent: 'v0', loadId: 1 })
+    doc.set({ path: '/tmp/a.md', content: 'v1', savedContent: 'v0', readonly: false, loadId: 1 })
     invoke.mockImplementation(async () => {
       edit('v2') // the user types while write_file is in flight
     })
@@ -118,10 +118,42 @@ describe('error handling', () => {
 
   it('reports an error when write_file rejects and keeps dirty', async () => {
     errorMessage.set(null)
-    doc.set({ path: '/tmp/a.md', content: 'body', savedContent: 'old', loadId: 1 })
+    doc.set({ path: '/tmp/a.md', content: 'body', savedContent: 'old', readonly: false, loadId: 1 })
     invoke.mockRejectedValue('disk full')
     await save()
     expect(get(errorMessage)).toContain('Could not save file')
     expect(isDirty(get(doc))).toBe(true)
+  })
+})
+
+describe('readonly', () => {
+  it('openPath threads the readonly flag into the store', async () => {
+    invoke.mockResolvedValue('# RO')
+    await openPath('/tmp/ro.md', true)
+    expect(get(doc).readonly).toBe(true)
+  })
+
+  it('openPath defaults to editable', async () => {
+    invoke.mockResolvedValue('# RW')
+    await openPath('/tmp/rw.md')
+    expect(get(doc).readonly).toBe(false)
+  })
+
+  it('save is a no-op while readonly', async () => {
+    openDoc('/tmp/ro.md', 'body', true)
+    await save()
+    expect(invoke).not.toHaveBeenCalledWith('write_file', expect.anything())
+  })
+
+  it('saveAs from a readonly doc retargets to the copy and enables editing', async () => {
+    openDoc('/tmp/ro.md', 'body', true)
+    invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === 'save_file_dialog' ? '/tmp/copy.md' : undefined,
+    )
+    await saveAs()
+    const s = get(doc)
+    expect(s.path).toBe('/tmp/copy.md')
+    expect(s.readonly).toBe(false)
+    expect(isDirty(s)).toBe(false)
   })
 })

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { get } from 'svelte/store'
-import { doc, openDoc, newDoc, edit, markSaved, isDirty } from './doc'
+import { doc, openDoc, newDoc, edit, markSaved, isDirty, enableEditing } from './doc'
 
 describe('doc store', () => {
   beforeEach(() => newDoc()) // reset (also bumps loadId, fine for isolation)
@@ -59,5 +59,35 @@ describe('doc store', () => {
     expect(s.content).toBe('')
     expect(isDirty(s)).toBe(false)
     expect(s.loadId).toBe(before + 1)
+  })
+
+  it('openDoc defaults to editable and accepts a readonly flag', () => {
+    openDoc('/tmp/a.md', '# A')
+    expect(get(doc).readonly).toBe(false)
+    openDoc('/tmp/b.md', '# B', true)
+    expect(get(doc).readonly).toBe(true)
+  })
+
+  it('edit is ignored while readonly, so the buffer stays clean', () => {
+    openDoc('/tmp/a.md', '# A', true)
+    edit('# A edited')
+    const s = get(doc)
+    expect(s.content).toBe('# A')
+    expect(isDirty(s)).toBe(false)
+  })
+
+  it('enableEditing lifts readonly and edit works afterwards', () => {
+    openDoc('/tmp/a.md', '# A', true)
+    enableEditing()
+    expect(get(doc).readonly).toBe(false)
+    edit('# A edited')
+    expect(get(doc).content).toBe('# A edited')
+    expect(isDirty(get(doc))).toBe(true)
+  })
+
+  it('newDoc resets readonly', () => {
+    openDoc('/tmp/a.md', '# A', true)
+    newDoc()
+    expect(get(doc).readonly).toBe(false)
   })
 })

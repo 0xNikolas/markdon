@@ -8,10 +8,10 @@ interface OpenedFile {
   content: string
 }
 
-export async function openPath(path: string): Promise<void> {
+export async function openPath(path: string, readonly = false): Promise<void> {
   try {
     const content = await invoke<string>('read_file', { path })
-    openDoc(path, content)
+    openDoc(path, content, readonly)
   } catch (e) {
     reportError(`Could not open file: ${String(e)}`)
   }
@@ -30,6 +30,7 @@ export async function open(): Promise<void> {
 
 export async function save(): Promise<void> {
   const state = get(doc)
+  if (state.readonly) return // read-only docs are always clean; nothing to save
   if (state.path === null) return saveAs()
   try {
     await invoke('write_file', { path: state.path, contents: state.content })

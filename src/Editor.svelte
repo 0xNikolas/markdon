@@ -7,9 +7,10 @@
 
   interface Props {
     initialContent: string
+    readonly?: boolean
     onChange: (markdown: string) => void
   }
-  let { initialContent, onChange }: Props = $props()
+  let { initialContent, readonly = false, onChange }: Props = $props()
 
   let el: HTMLDivElement
   let crepe: Crepe | undefined
@@ -19,7 +20,13 @@
     crepe.on((listener) => {
       listener.markdownUpdated((_ctx, markdown) => onChange(markdown))
     })
+    crepe.setReadonly(readonly)
     await crepe.create()
+  })
+
+  // Toggle in place (no remount) when Enable editing lifts the flag.
+  $effect(() => {
+    crepe?.setReadonly(readonly)
   })
 
   onDestroy(() => crepe?.destroy())
