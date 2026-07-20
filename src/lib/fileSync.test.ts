@@ -1,5 +1,13 @@
-import { describe, it, expect } from 'vitest'
-import { classifyExternalChange } from './fileSync'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { get } from 'svelte/store'
+
+const invoke = vi.fn()
+vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
+vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}) }))
+
+import { classifyExternalChange, initFileSync } from './fileSync'
+import { openDoc, newDoc } from './doc'
+import { errorMessage } from './errors'
 
 describe('classifyExternalChange', () => {
   it('ignores when disk matches the buffer (no real change)', () => {
@@ -41,5 +49,23 @@ describe('classifyExternalChange', () => {
     expect(
       classifyExternalChange({ content: 'mine', savedContent: 'base' }, 'newer', 'theirs'),
     ).toBe('conflict')
+  })
+})
+
+describe('initFileSync', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    errorMessage.set(null)
+    newDoc()
+  })
+
+  it('reports an error when watching the file fails', async () => {
+    invoke.mockRejectedValue('fsevents unavailable')
+    const teardown = await initFileSync()
+    openDoc('/tmp/a.md', '# A')
+    await vi.waitFor(() => {
+      expect(get(errorMessage)).toContain('Could not watch')
+    })
+    teardown()
   })
 })

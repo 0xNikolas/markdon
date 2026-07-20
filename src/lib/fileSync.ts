@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { get, writable, type Writable } from 'svelte/store'
 import { doc, openDoc } from './doc'
+import { reportError } from './errors'
 
 /**
  * When set, the open file changed on disk while the buffer had unsaved edits.
@@ -63,7 +64,10 @@ export async function initFileSync(): Promise<() => void> {
     // Switching files invalidates any pending conflict / decline for the old file.
     conflict.set(null)
     dismissedDisk = null
-    if (s.path) invoke('watch_file', { path: s.path }).catch(() => {})
+    if (s.path)
+      invoke('watch_file', { path: s.path }).catch((e) =>
+        reportError(`Could not watch file for external changes: ${String(e)}`),
+      )
     else invoke('unwatch').catch(() => {})
   })
 
