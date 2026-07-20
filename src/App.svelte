@@ -4,7 +4,7 @@
   import { invoke } from '@tauri-apps/api/core'
   import { getCurrentWindow } from '@tauri-apps/api/window'
   import { get } from 'svelte/store'
-  import { doc, edit, newDoc, isDirty } from './lib/doc'
+  import { doc, edit, newDoc, isDirty, enableEditing } from './lib/doc'
   import { open, save, saveAs, openPath } from './lib/files'
   import { conflict, reloadFromDisk, dismissConflict, initFileSync } from './lib/fileSync'
   import Editor from './Editor.svelte'
@@ -31,7 +31,7 @@
   // File → Open. Called on mount (cold launch) and on each `file:opened` ping.
   async function drainOpenedFiles() {
     const paths = await invoke<string[]>('take_opened_files')
-    if (paths.length > 0) guarded(() => openPath(paths[0]))
+    if (paths.length > 0) guarded(() => openPath(paths[0], true))
   }
 
   onMount(() => {
@@ -72,6 +72,12 @@
 
 <main class="app">
   <Banner />
+  {#if $doc.readonly}
+    <div class="readonly-bar" role="status">
+      <span>🔒 Opened read-only</span>
+      <button class="primary" onclick={enableEditing}>Enable editing</button>
+    </div>
+  {/if}
   {#if $conflict !== null}
     <div class="reload-bar" role="alert">
       <span>This file changed on disk. You have unsaved changes.</span>
@@ -82,7 +88,7 @@
     </div>
   {/if}
   {#key $doc.loadId}
-    <Editor initialContent={$doc.content} onChange={edit} />
+    <Editor initialContent={$doc.content} readonly={$doc.readonly} onChange={edit} />
   {/key}
   <StatusBar path={$doc.path} dirty={isDirty($doc)} content={$doc.content} />
 </main>
@@ -128,4 +134,17 @@
   .reload-actions { display: flex; gap: 8px; flex-shrink: 0; }
   .reload-bar button { font: inherit; cursor: pointer; }
   .reload-bar .reload { font-weight: 600; }
+
+  .readonly-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 12px;
+    background: #e8f0fe;
+    color: #1a3d7c;
+    font: 13px system-ui, sans-serif;
+    border-bottom: 1px solid #c6d8f5;
+  }
+  .readonly-bar button { font: inherit; cursor: pointer; }
 </style>
