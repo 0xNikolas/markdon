@@ -52,6 +52,10 @@
   --danger: #b3261e;         /* App.svelte .danger button */
   --danger-tint: rgba(179, 38, 30, 0.08);        /* danger button hover */
   --danger-tint-strong: rgba(179, 38, 30, 0.14); /* danger button active */
+  --traffic-close: #ff5f57;        /* SettingsModal traffic-light close dot (macOS red, same both themes) */
+  --traffic-close-hover: #ff443a;
+  --traffic-close-active: #e0362d;
+  --traffic-close-glyph: #4d0000;  /* × glyph shown on hover, macOS-style dark maroon on the red dot */
   --modal-bg: #ffffff;       /* App.svelte .modal background */
   --backdrop: rgba(15, 23, 41, 0.45); /* App.svelte .modal-backdrop */
   --error-bg: #fef2f2;       /* Banner.svelte .banner background */

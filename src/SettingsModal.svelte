@@ -84,6 +84,12 @@
   >
     <aside class="sidebar">
       <div class="badge-row">
+        <!-- macOS-style close control (window traffic-light convention): red
+             dot, glyph revealed on hover/focus. Replaces the old top-right
+             x-circle button per the prefs-close redesign. -->
+        <button class="traffic-close" aria-label="Close settings" onclick={closeSettings}>
+          <span class="glyph" aria-hidden="true"></span>
+        </button>
         <span class="chip">m&gt;<span class="caret"></span></span>
         <div class="badge-text">
           <span class="pref-label">Preferences</span>
@@ -119,9 +125,6 @@
     <div class="content">
       <div class="content-header">
         <h2 id="settings-title">Preferences</h2>
-        <button class="close" aria-label="Close settings" onclick={closeSettings}>
-          <Icon name="x-circle" size={12} />
-        </button>
       </div>
 
       {#if activeTab === 'editor'}
@@ -402,26 +405,56 @@
     font: 700 23px var(--font-ui);
     color: var(--fg-strong);
   }
-  .close {
-    width: 28px;
-    height: 28px;
-    padding: 8px;
-    border-radius: 9999px;
-    background: var(--surface);
+
+  /* Traffic-light close control: 12px red dot, × glyph revealed on
+     hover/focus (mirrors macOS window chrome; keyboard focus gets the
+     shared token-based focus-visible ring from app.css). */
+  .traffic-close {
+    width: 12px;
+    height: 12px;
+    padding: 0;
+    flex-shrink: 0;
     border: none;
-    color: var(--fg-secondary);
+    border-radius: 50%;
+    background: var(--traffic-close);
     display: inline-flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    transition: background-color 0.1s ease, color 0.1s ease;
+    transition: background-color 0.1s ease;
   }
-  .close:hover {
-    background: var(--surface-hover);
-    color: var(--fg-strong);
+  .traffic-close:hover {
+    background: var(--traffic-close-hover);
   }
-  .close:active {
-    background: var(--surface-active);
+  .traffic-close:active {
+    background: var(--traffic-close-active);
+  }
+  .traffic-close .glyph {
+    position: relative;
+    width: 6px;
+    height: 6px;
+    opacity: 0;
+    transition: opacity 0.1s ease;
+  }
+  .traffic-close:hover .glyph,
+  .traffic-close:focus-visible .glyph {
+    opacity: 1;
+  }
+  .traffic-close .glyph::before,
+  .traffic-close .glyph::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 7px;
+    height: 1px;
+    background: var(--traffic-close-glyph);
+  }
+  .traffic-close .glyph::before {
+    transform: translate(-50%, -50%) rotate(45deg);
+  }
+  .traffic-close .glyph::after {
+    transform: translate(-50%, -50%) rotate(-45deg);
   }
 
   .panel {
