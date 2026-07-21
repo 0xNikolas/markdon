@@ -45,10 +45,19 @@ export async function open(): Promise<void> {
  * window's own doc untouched. If spawning fails (e.g. the command is somehow
  * unavailable) it degrades gracefully to opening in place, so the preference is
  * never a dead end.
+ *
+ * `readonly` rides the hand-off so a Finder/OS-association open keeps its
+ * read-only safety net (banner + "Enable editing") in the spawned window, the
+ * same as MODE A's in-place `openPath(p, true)`. The in-place fallback is the
+ * caller's closure, which already encodes its own readonly choice.
  */
-export function openInPreferredTarget(path: string, openInPlace: (path: string) => void): void {
+export function openInPreferredTarget(
+  path: string,
+  openInPlace: (path: string) => void,
+  readonly = false,
+): void {
   if (get(settings).openMode === 'window') {
-    invoke('open_document_window', { path }).catch((e) => {
+    invoke('open_document_window', { path, readonly }).catch((e) => {
       reportError(`Could not open a new window: ${String(e)}`)
       openInPlace(path)
     })

@@ -20,6 +20,16 @@ interface Routed {
 }
 
 /**
+ * The pure filter behind `listenScoped`: deliver when the payload is untargeted
+ * (no `target` — e.g. a broadcast, or an event predating MODE B) or when it
+ * names this window's own label. Exported for unit tests — this predicate IS
+ * the amendment-#8 defensive insurance, so it gets pinned by windowing.test.ts.
+ */
+export function isForWindow(target: string | null | undefined, label: string): boolean {
+  return target == null || target === label
+}
+
+/**
  * `listen()` that additionally drops any delivery whose payload names a
  * different window's label. MODE B routes menu / close / opened / external-
  * change events via `emit_to(label)`, which SHOULD already scope delivery per-
@@ -31,8 +41,7 @@ interface Routed {
 export function listenScoped(event: string, handler: () => void): Promise<UnlistenFn> {
   const label = currentLabel()
   return listen<Routed | null>(event, (e) => {
-    const target = e.payload?.target
-    if (target != null && target !== label) return
+    if (!isForWindow(e.payload?.target, label)) return
     handler()
   })
 }

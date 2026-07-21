@@ -2,13 +2,14 @@
   import { onMount } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { getCurrentWindow } from '@tauri-apps/api/window'
-  import { listenScoped, currentLabel } from './lib/windowing'
+  import { listenScoped } from './lib/windowing'
   import { get } from 'svelte/store'
   import { doc, edit, newDoc, isDirty, enableEditing, enterReadonly, revertBuffer } from './lib/doc'
   import { recordRevert } from './lib/history'
   import { open, save, saveAs, openPath, openInPreferredTarget } from './lib/files'
   import { openList, removeOpen, neighbourAfterClose } from './lib/openList'
   import { conflict, reloadFromDisk, dismissConflict, initFileSync } from './lib/fileSync'
+  import { reportError } from './lib/errors'
   import Editor from './Editor.svelte'
   import SplitView from './SplitView.svelte'
   import Header from './Header.svelte'
@@ -129,15 +130,35 @@
   // Called on mount (cold launch) and on each `file:opened` ping.
   async function drainOpenedFiles() {
     const paths = await invoke<string[]>('take_opened_files')
-    if (paths.length > 0) openInPreferredTarget(paths[0], (p) => guarded(() => openPath(p, true)))
+    // readonly=true in BOTH modes: in-place opens pass it to openPath directly,
+    // and MODE B carries it through the window hand-off (AssignedFile.readonly)
+    // so the spawned window keeps the same Finder-open safety net.
+    if (paths.length > 0)
+      openInPreferredTarget(paths[0], (p) => guarded(() => openPath(p, true)), true)
   }
 
   // A spawned document window (doc-N) drains the file it was created to host
   // (set by open_document_window). Drains exactly once — a re-mount gets None.
-  // The focused/main window's own take is a harmless no-op (nothing pending).
-  async function takeAssignedFile() {
-    const assigned = await invoke<string | null>('take_window_file', { label: currentLabel() })
-    if (assigned) openPath(assigned)
+  // The label is derived Rust-side from the Tauri-injected WebviewWindow (not
+  // passed by the caller), so a window can only ever drain its OWN hand-off --
+  // see take_window_file in lib.rs. Returns whether a file was actually
+  // assigned, so onMount can decide whether this window also needs to drain
+  // the unrelated, process-global OpenedFiles queue (it must not, see below).
+  // A drain failure is surfaced via the error banner (reportError convention)
+  // and treated as "no assignment" so the window still falls back to the
+  // global queue rather than silently sitting on a blank untitled doc.
+  async function takeAssignedFile(): Promise<boolean> {
+    try {
+      const assigned = await invoke<{ path: string; readonly: boolean } | null>('take_window_file')
+      if (assigned) {
+        openPath(assigned.path, assigned.readonly)
+        return true
+      }
+      return false
+    } catch (e) {
+      reportError(`Could not open the file assigned to this window: ${String(e)}`)
+      return false
+    }
   }
 
   onMount(() => {
@@ -188,8 +209,20 @@
       listenScoped('window:close-requested', () => guarded(() => getCurrentWindow().destroy())),
       listenScoped('file:opened', () => drainOpenedFiles()),
     ])
-    drainOpenedFiles() // cold launch: pick up the file the app was opened with
-    takeAssignedFile() // spawned window: open the file it was created to host
+    // A spawned doc-N window (MODE B) is created to host exactly one file,
+    // handed off via PendingWindowFile; it must never ALSO race to drain the
+    // unrelated, process-global OpenedFiles queue (that queue belongs to
+    // whichever window is focused at Finder-open time). Running both calls
+    // unawaited let a freshly-spawned window steal a Finder-open meant for a
+    // different window, or let the two hand-offs clobber each other with no
+    // error surfaced (wave6 risk register item 5). Awaiting the per-window
+    // hand-off FIRST, and only falling back to the global drain when this
+    // window has no assignment of its own, makes the two mutually exclusive
+    // instead of concurrent.
+    void (async () => {
+      const hadAssignedFile = await takeAssignedFile()
+      if (!hadAssignedFile) await drainOpenedFiles() // cold launch / main window: pick up the file the app was opened with
+    })()
     const teardownSync = initFileSync() // watch the open file for external changes
     const teardownWorkspace = initWorkspace() // restore + refresh the workspace tree
     // Header's Export button increments exportTick rather than calling

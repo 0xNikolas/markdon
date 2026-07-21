@@ -30,11 +30,21 @@ pub struct OpenedFiles(pub Mutex<Vec<String>>);
 #[derive(Default)]
 pub struct FocusedWindow(pub Mutex<Option<String>>);
 
+/// A file assigned to a spawned document window, including whether it must open
+/// read-only. Carrying the flag through the hand-off preserves the Finder-open
+/// safety net in MODE B: an OS-association open is read-only (banner + "Enable
+/// editing") regardless of which window ends up hosting it.
+#[derive(Clone, serde::Serialize)]
+pub struct AssignedFile {
+    pub path: String,
+    pub readonly: bool,
+}
+
 /// Files assigned to a spawned document window but not yet consumed by it. The
-/// spawner stashes `label -> path` here; the new window's frontend drains its own
-/// entry on mount via `take_window_file`.
+/// spawner stashes `label -> assignment` here; the new window's frontend drains
+/// its own entry on mount via `take_window_file`.
 #[derive(Default)]
-pub struct PendingWindowFile(pub Mutex<HashMap<String, String>>);
+pub struct PendingWindowFile(pub Mutex<HashMap<String, AssignedFile>>);
 
 /// Handle to the File-menu "Read Only" CheckMenuItem (task 25). The app menu is
 /// app-global (one menu bar for all windows), and `Menu::get` doesn't reach
@@ -57,6 +67,22 @@ static NEXT_WIN: AtomicU64 = AtomicU64::new(1);
 /// without a GUI.
 fn menu_target(focused: &Option<String>) -> String {
     focused.clone().unwrap_or_else(|| "main".into())
+}
+
+/// Release a closing window's per-label bookkeeping outside of `FileWatcher`
+/// (handled inline in `wire_window`, since it needs the notify-backed state
+/// object): drops any still-pending file hand-off for `label`, and clears
+/// `FocusedWindow` if -- and only if -- it currently names this same window,
+/// so a closed doc-N window never leaves menu routing pointed at a label that
+/// no longer exists (it would otherwise silently no-op via `emit_to` until
+/// some other window is refocused). Pure aside from the two mutex locks, so
+/// it is unit-testable without a live window.
+fn release_window_state(label: &str, pending: &PendingWindowFile, focused: &FocusedWindow) {
+    pending.0.lock().unwrap().remove(label);
+    let mut f = focused.0.lock().unwrap();
+    if f.as_deref() == Some(label) {
+        *f = None;
+    }
 }
 
 /// Per-window setup applied to BOTH the config `main` window and every spawned
@@ -95,6 +121,25 @@ fn wire_window(window: &WebviewWindow, app: &AppHandle) {
                 serde_json::json!({ "target": lbl_close }),
             );
         }
+        tauri::WindowEvent::Destroyed => {
+            // A destroyed window can never receive events again. Drop its
+            // watcher entry here (the frontend's own unwatch never runs — the
+            // close path tears the webview down via window.destroy(), killing
+            // the JS realm abruptly), which stops the notify thread; then clear
+            // the remaining per-label bookkeeping. Without this, every open-
+            // then-close of a doc-N window leaks a live FS-watcher thread.
+            app_close
+                .state::<watcher::FileWatcher>()
+                .0
+                .lock()
+                .unwrap()
+                .remove(&lbl_close);
+            release_window_state(
+                &lbl_close,
+                app_close.state::<PendingWindowFile>().inner(),
+                app_close.state::<FocusedWindow>().inner(),
+            );
+        }
         _ => {}
     });
 }
@@ -110,9 +155,18 @@ fn take_opened_files(state: State<'_, OpenedFiles>) -> Vec<String> {
 
 /// Drain the file assigned to a spawned window (set by `open_document_window`).
 /// Returns `None` once consumed, so a re-mount can't re-open a stale path.
+///
+/// `window` is injected by Tauri from the calling webview (like
+/// `watch_file`/`unwatch` in watcher.rs) rather than taken as a caller-supplied
+/// string. `doc-*` labels are a predictable sequential counter, so accepting a
+/// caller-supplied label would let any window's frontend drain (steal) the
+/// file hand-off intended for a different, possibly not-yet-mounted window.
 #[tauri::command]
-fn take_window_file(label: String, pending: State<'_, PendingWindowFile>) -> Option<String> {
-    pending.0.lock().unwrap().remove(&label)
+fn take_window_file(
+    window: WebviewWindow,
+    pending: State<'_, PendingWindowFile>,
+) -> Option<AssignedFile> {
+    pending.0.lock().unwrap().remove(window.label())
 }
 
 /// Sync the File-menu "Read Only" check mark to the doc store (task 25). The
@@ -135,27 +189,45 @@ fn set_readonly_menu_state(checked: bool, item: State<'_, ReadonlyMenuItem>) -> 
 #[tauri::command]
 fn open_document_window(
     path: String,
+    readonly: bool,
     app: AppHandle,
     allowed: State<'_, allowlist::AllowedPaths>,
     pending: State<'_, PendingWindowFile>,
 ) -> Result<(), String> {
     allowed.ensure(&path)?;
     let label = format!("doc-{}", NEXT_WIN.fetch_add(1, Ordering::Relaxed));
-    pending.0.lock().unwrap().insert(label.clone(), path);
-    let mut cfg = app
-        .config()
-        .app
-        .windows
-        .first()
-        .cloned()
-        .ok_or_else(|| "no window config to clone".to_string())?;
-    cfg.label = label.clone();
-    let window = tauri::WebviewWindowBuilder::from_config(&app, &cfg)
-        .map_err(|e| e.to_string())?
-        .build()
-        .map_err(|e| e.to_string())?;
-    wire_window(&window, &app);
-    Ok(())
+    // The entry must exist BEFORE the window is built (its frontend may mount
+    // and drain immediately), so failure below has to roll it back — otherwise
+    // a failed spawn leaks an entry no window will ever drain.
+    pending
+        .0
+        .lock()
+        .unwrap()
+        .insert(label.clone(), AssignedFile { path, readonly });
+    let built = (|| {
+        let mut cfg = app
+            .config()
+            .app
+            .windows
+            .first()
+            .cloned()
+            .ok_or_else(|| "no window config to clone".to_string())?;
+        cfg.label = label.clone();
+        tauri::WebviewWindowBuilder::from_config(&app, &cfg)
+            .map_err(|e| e.to_string())?
+            .build()
+            .map_err(|e| e.to_string())
+    })();
+    match built {
+        Ok(window) => {
+            wire_window(&window, &app);
+            Ok(())
+        }
+        Err(e) => {
+            pending.0.lock().unwrap().remove(&label);
+            Err(e)
+        }
+    }
 }
 
 /// Queue the given file URLs and ping the focused window to drain them.
@@ -312,6 +384,13 @@ mod tests {
         assert_eq!(menu_target(&None), "main");
     }
 
+    fn assigned(path: &str, readonly: bool) -> AssignedFile {
+        AssignedFile {
+            path: path.into(),
+            readonly,
+        }
+    }
+
     #[test]
     fn pending_window_file_drains_exactly_once() {
         // take_window_file's body is `pending.0.lock().remove(&label)`; assert
@@ -321,12 +400,54 @@ mod tests {
             .0
             .lock()
             .unwrap()
-            .insert("doc-1".into(), "/docs/a.md".into());
-        assert_eq!(
-            pending.0.lock().unwrap().remove("doc-1"),
-            Some("/docs/a.md".to_string())
-        );
-        assert_eq!(pending.0.lock().unwrap().remove("doc-1"), None);
+            .insert("doc-1".into(), assigned("/docs/a.md", false));
+        let taken = pending.0.lock().unwrap().remove("doc-1");
+        assert_eq!(taken.map(|a| a.path), Some("/docs/a.md".to_string()));
+        assert!(pending.0.lock().unwrap().remove("doc-1").is_none());
+    }
+
+    #[test]
+    fn pending_window_file_carries_the_readonly_flag() {
+        // MODE B Finder opens must stay read-only in the spawned window; the
+        // flag rides the hand-off so the drain can pass it to openPath.
+        let pending = PendingWindowFile::default();
+        pending
+            .0
+            .lock()
+            .unwrap()
+            .insert("doc-1".into(), assigned("/docs/a.md", true));
+        let taken = pending.0.lock().unwrap().remove("doc-1").unwrap();
+        assert!(taken.readonly);
+    }
+
+    #[test]
+    fn release_window_state_drops_pending_and_matching_focus() {
+        let pending = PendingWindowFile::default();
+        let focused = FocusedWindow::default();
+        pending
+            .0
+            .lock()
+            .unwrap()
+            .insert("doc-2".into(), assigned("/docs/b.md", false));
+        *focused.0.lock().unwrap() = Some("doc-2".into());
+
+        release_window_state("doc-2", &pending, &focused);
+
+        assert!(pending.0.lock().unwrap().is_empty());
+        assert_eq!(*focused.0.lock().unwrap(), None);
+    }
+
+    #[test]
+    fn release_window_state_leaves_other_windows_focus_alone() {
+        // Closing doc-2 while doc-1 is focused must not clear doc-1's focus —
+        // menu routing would silently fall back to `main` otherwise.
+        let pending = PendingWindowFile::default();
+        let focused = FocusedWindow::default();
+        *focused.0.lock().unwrap() = Some("doc-1".into());
+
+        release_window_state("doc-2", &pending, &focused);
+
+        assert_eq!(*focused.0.lock().unwrap(), Some("doc-1".to_string()));
     }
 
     #[test]

@@ -168,8 +168,24 @@ describe('openInPreferredTarget', () => {
     invoke.mockResolvedValue(undefined)
     const opened: string[] = []
     openInPreferredTarget('/tmp/a.md', (p) => opened.push(p))
-    expect(invoke).toHaveBeenCalledWith('open_document_window', { path: '/tmp/a.md' })
+    expect(invoke).toHaveBeenCalledWith('open_document_window', {
+      path: '/tmp/a.md',
+      readonly: false,
+    })
     expect(opened).toEqual([]) // focused window keeps its own doc
+  })
+
+  it('MODE B: a readonly open (Finder association) carries the flag into the hand-off', () => {
+    // The Finder-open safety net must survive the window hand-off: the spawned
+    // window opens the file read-only (banner + Enable editing), exactly like
+    // MODE A's in-place openPath(p, true).
+    settings.set({ ...DEFAULTS, openMode: 'window' })
+    invoke.mockResolvedValue(undefined)
+    openInPreferredTarget('/tmp/a.md', () => {}, true)
+    expect(invoke).toHaveBeenCalledWith('open_document_window', {
+      path: '/tmp/a.md',
+      readonly: true,
+    })
   })
 
   it("MODE B: falls back to opening in place if spawning the window fails", async () => {
@@ -188,7 +204,10 @@ describe('openInPreferredTarget', () => {
       cmd === 'open_file_dialog' ? { path: '/tmp/a.md', content: '# Loaded' } : undefined,
     )
     await open()
-    expect(invoke).toHaveBeenCalledWith('open_document_window', { path: '/tmp/a.md' })
+    expect(invoke).toHaveBeenCalledWith('open_document_window', {
+      path: '/tmp/a.md',
+      readonly: false,
+    })
     // The focused window's own doc is untouched (the new window loads it).
     expect(get(doc).path).toBeNull()
     expect(get(openList)).toEqual([])
