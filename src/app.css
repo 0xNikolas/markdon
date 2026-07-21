@@ -25,6 +25,7 @@
   --fg: #1e293b;             /* body text (kept from dark-mode seam) */
   --fg-secondary: #334155;   /* secondary labels (status text, buttons) */
   --fg-muted: #64748b;       /* metadata, breadcrumb, mono clusters */
+  --fg-faint: #64748b;       /* sidebar section label (same in both themes) */
   --accent: #e5682b;         /* ember accent */
   --accent-tint: rgba(229, 104, 43, 0.08);
   --status-live: #22c55e;    /* watch dot (decision: design dot has no fill) */
@@ -59,6 +60,7 @@
   --fg: #cbd5e1;
   --fg-secondary: #94a3b8;
   --fg-muted: #94a3b8;
+  --fg-faint: #64748b;
   --accent: #e5682b;
   --accent-tint: rgba(229, 104, 43, 0.15);
   --status-live: #22c55e;

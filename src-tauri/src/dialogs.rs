@@ -3,6 +3,7 @@ use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::allowlist::AllowedPaths;
+use crate::workspace::Workspace;
 
 #[derive(Serialize)]
 pub struct OpenedFile {
@@ -71,4 +72,27 @@ pub async fn save_file_dialog(
     let path = to_path_string(file)?;
     allowed.allow(&path);
     Ok(Some(path))
+}
+
+/// Show the folder picker and grant the webview a DIRECTORY-scoped allowlist
+/// root for the chosen folder. Returns `None` if the user cancelled. Every file
+/// strictly inside the granted root then passes `ensure`; the root itself does
+/// not. Persists the pick so it can be restored next launch.
+#[tauri::command]
+pub async fn open_workspace_dialog(
+    app: AppHandle,
+    allowed: State<'_, AllowedPaths>,
+) -> Result<Option<Workspace>, String> {
+    let dialog_app = app.clone();
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        dialog_app.dialog().file().blocking_pick_folder()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let Some(folder) = picked else {
+        return Ok(None);
+    };
+    let path = to_path_string(folder)?;
+    let canon = allowed.allow_root(std::path::Path::new(&path))?;
+    Ok(Some(crate::workspace::open_result(&app, &canon)?))
 }

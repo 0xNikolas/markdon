@@ -3,6 +3,7 @@ mod commands;
 mod dialogs;
 mod menu;
 mod watcher;
+mod workspace;
 
 use std::sync::Mutex;
 
@@ -102,7 +103,10 @@ pub fn run() {
             watcher::watch_file,
             watcher::unwatch,
             dialogs::open_file_dialog,
-            dialogs::save_file_dialog
+            dialogs::save_file_dialog,
+            dialogs::open_workspace_dialog,
+            workspace::list_workspace,
+            workspace::restore_workspace
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

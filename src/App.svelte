@@ -13,8 +13,10 @@
   import Banner from './Banner.svelte'
   import FindBar from './FindBar.svelte'
   import SettingsModal from './SettingsModal.svelte'
+  import Sidebar from './Sidebar.svelte'
   import { searchUi, openFind, closeFind } from './lib/searchPlugin'
   import { settingsOpen, openSettings } from './lib/ui'
+  import { workspace, openWorkspace, initWorkspace } from './lib/workspace'
 
   // Action to run if the user chooses to discard unsaved changes. When set, the
   // confirm modal is shown. Guards New, Open, and window close uniformly.
@@ -47,14 +49,17 @@
       listen('menu:save_as', () => saveAs()),
       listen('menu:find', () => openFind()),
       listen('menu:settings', () => openSettings()),
+      listen('menu:open_folder', () => openWorkspace()),
       listen('window:close-requested', () => guarded(() => getCurrentWindow().destroy())),
       listen('file:opened', () => drainOpenedFiles()),
     ])
     drainOpenedFiles() // cold launch: pick up the file the app was opened with
     const teardownSync = initFileSync() // watch the open file for external changes
+    const teardownWorkspace = initWorkspace() // restore + refresh the workspace tree
     return () => {
       unsub.then((fns) => fns.forEach((f) => f()))
       teardownSync.then((fn) => fn())
+      teardownWorkspace.then((fn) => fn())
     }
   })
 
@@ -98,27 +103,38 @@
   <!-- Header hosts the native traffic-light overlay: nothing may render above it. -->
   <Header path={$doc.path} dirty={isDirty($doc)} />
   <Banner />
-  {#if $doc.readonly}
-    <div class="readonly-bar" role="status">
-      <span>🔒 Opened read-only</span>
-      <button class="primary" onclick={enableEditing}>Enable editing</button>
+  <div class="body">
+    {#if $workspace.root !== null}
+      <Sidebar
+        activePath={$doc.path}
+        onOpenFile={(p) => { if (p !== $doc.path) guarded(() => openPath(p)) }}
+        onNewFile={() => guarded(() => newDoc())}
+      />
+    {/if}
+    <div class="content">
+      {#if $doc.readonly}
+        <div class="readonly-bar" role="status">
+          <span>🔒 Opened read-only</span>
+          <button class="primary" onclick={enableEditing}>Enable editing</button>
+        </div>
+      {/if}
+      {#if $conflict !== null}
+        <div class="reload-bar" role="alert">
+          <span>This file changed on disk. You have unsaved changes.</span>
+          <div class="reload-actions">
+            <button onclick={dismissConflict}>Keep mine</button>
+            <button class="reload" onclick={() => reloadFromDisk($conflict!)}>Reload from disk</button>
+          </div>
+        </div>
+      {/if}
+      {#if $searchUi.open}
+        <FindBar />
+      {/if}
+      {#key $doc.loadId}
+        <Editor initialContent={$doc.content} readonly={$doc.readonly} onChange={edit} />
+      {/key}
     </div>
-  {/if}
-  {#if $conflict !== null}
-    <div class="reload-bar" role="alert">
-      <span>This file changed on disk. You have unsaved changes.</span>
-      <div class="reload-actions">
-        <button onclick={dismissConflict}>Keep mine</button>
-        <button class="reload" onclick={() => reloadFromDisk($conflict!)}>Reload from disk</button>
-      </div>
-    </div>
-  {/if}
-  {#if $searchUi.open}
-    <FindBar />
-  {/if}
-  {#key $doc.loadId}
-    <Editor initialContent={$doc.content} readonly={$doc.readonly} onChange={edit} />
-  {/key}
+  </div>
   <StatusBar content={$doc.content} />
 </main>
 
@@ -141,6 +157,10 @@
 
 <style>
   .app { display: flex; flex-direction: column; height: 100vh; }
+  /* Sidebar + editor column sit between the header and the full-width status
+     bar. min-height/width:0 lets the editor scroll instead of pushing layout. */
+  .body { display: flex; flex: 1; min-height: 0; }
+  .content { display: flex; flex-direction: column; flex: 1; min-width: 0; }
   .modal-backdrop {
     position: fixed; inset: 0; background: var(--backdrop);
     display: flex; align-items: center; justify-content: center;

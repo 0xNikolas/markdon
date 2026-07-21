@@ -8,6 +8,9 @@ pub fn build(app: &App) -> tauri::Result<Menu<Wry>> {
     let open = MenuItemBuilder::with_id("menu:open", "Open…")
         .accelerator("CmdOrCtrl+O")
         .build(app)?;
+    let open_folder = MenuItemBuilder::with_id("menu:open_folder", "Open Folder…")
+        .accelerator("CmdOrCtrl+Shift+O")
+        .build(app)?;
     let save = MenuItemBuilder::with_id("menu:save", "Save")
         .accelerator("CmdOrCtrl+S")
         .build(app)?;
@@ -30,6 +33,7 @@ pub fn build(app: &App) -> tauri::Result<Menu<Wry>> {
     let file_menu = SubmenuBuilder::new(app, "File")
         .item(&new)
         .item(&open)
+        .item(&open_folder)
         .separator()
         .item(&save)
         .item(&save_as)
@@ -72,6 +76,7 @@ mod tests {
         for s in [
             "CmdOrCtrl+N",
             "CmdOrCtrl+O",
+            "CmdOrCtrl+Shift+O",
             "CmdOrCtrl+S",
             "CmdOrCtrl+Shift+S",
             "CmdOrCtrl+F",
