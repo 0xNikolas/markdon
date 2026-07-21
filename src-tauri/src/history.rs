@@ -15,15 +15,43 @@
 //! ids supplied by the webview are validated (`valid_id`) AND membership-checked
 //! against the index before any file is read.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, State};
 
 use crate::allowlist::AllowedPaths;
+
+/// Per-canonical-path lock guarding `record_snapshot`'s read-modify-write of a
+/// bucket's `index.json` (load_index -> mutate -> write_index). Without this,
+/// two `record_history` invocations racing for the SAME file (a fast double
+/// save, or a save overlapping a recordExternal/recordRevert call) can each
+/// load the same stale index and append independently; the later
+/// `write_index` overwrites the earlier one, silently dropping that entry
+/// from the index while its `<ts>.md` content file is orphaned on disk.
+/// Tauri commands run on a blocking thread pool, so this is a real race, not
+/// a hypothetical one. Keyed by canonical path rather than bucket hash so a
+/// lock-map inspection stays legible; the outer map's own mutex is only ever
+/// held for the felt-instant get-or-insert, never across an index read/write.
+#[derive(Default)]
+pub struct HistoryLocks(Mutex<HashMap<String, Arc<Mutex<()>>>>);
+
+impl HistoryLocks {
+    /// Returns the (possibly newly created) lock for `canonical`. Callers must
+    /// hold the returned lock for the full duration of their read-modify-write
+    /// of that path's bucket.
+    fn lock_for(&self, canonical: &str) -> Arc<Mutex<()>> {
+        let mut map = self.0.lock().unwrap();
+        map.entry(canonical.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+}
 
 /// Keep at most this many newest versions per file.
 const MAX_VERSIONS: usize = 50;
@@ -296,8 +324,14 @@ pub fn record_history(
     trigger: String,
     app: AppHandle,
     allowed: State<'_, AllowedPaths>,
+    locks: State<'_, HistoryLocks>,
 ) -> Result<(), String> {
     let canonical = ensured_canonical(&path, &allowed)?;
+    // Held for the entire read-modify-write below so a concurrent
+    // record_history for the same file can't interleave and lose an entry
+    // (see HistoryLocks's doc comment).
+    let lock = locks.lock_for(&canonical);
+    let _held = lock.lock().unwrap();
     let content = fs::read_to_string(&canonical).map_err(|e| e.to_string())?;
     let base = history_base(&app)?;
     record_snapshot(&base, &canonical, &content, &trigger, now_ms())?;
@@ -584,6 +618,73 @@ mod tests {
         record_snapshot(base.path(), canonical, "x", "save", 1000).unwrap();
         // Well-formed but not in the index.
         assert!(read_snapshot(base.path(), canonical, "9999.md").is_err());
+    }
+
+    // -- HistoryLocks ---------------------------------------------------------
+
+    #[test]
+    fn lock_for_returns_same_lock_for_same_path_distinct_for_others() {
+        let locks = HistoryLocks::default();
+        let a1 = locks.lock_for("/docs/a.md");
+        let a2 = locks.lock_for("/docs/a.md");
+        assert!(
+            Arc::ptr_eq(&a1, &a2),
+            "same canonical path must share one lock"
+        );
+        let b = locks.lock_for("/docs/b.md");
+        assert!(
+            !Arc::ptr_eq(&a1, &b),
+            "different canonical paths must get distinct locks"
+        );
+    }
+
+    #[test]
+    fn concurrent_records_for_same_file_under_the_lock_lose_no_entries() {
+        // Regression for the lost-update race: record_snapshot's
+        // load_index -> mutate -> write_index is NOT internally synchronized
+        // (by design -- it's a pure, testable function), so callers racing
+        // for the SAME bucket must serialize around it themselves. This
+        // spawns many threads that each hold `HistoryLocks::lock_for` (what
+        // the record_history command now does) across their own
+        // record_snapshot call, and asserts every one of their distinct-
+        // content saves survives in the index -- none silently overwritten
+        // by a sibling's stale read-modify-write.
+        let base = tempdir().unwrap();
+        let base_path = base.path().to_path_buf();
+        let canonical = "/docs/race.md";
+        let locks = Arc::new(HistoryLocks::default());
+
+        let handles: Vec<_> = (0..16)
+            .map(|i| {
+                let base_path = base_path.clone();
+                let locks = Arc::clone(&locks);
+                std::thread::spawn(move || {
+                    let lock = locks.lock_for(canonical);
+                    let _held = lock.lock().unwrap();
+                    record_snapshot(
+                        &base_path,
+                        canonical,
+                        &format!("content {i}"),
+                        "save",
+                        1000 + i as u64,
+                    )
+                    .unwrap()
+                    .expect("distinct content must always snapshot")
+                })
+            })
+            .collect();
+
+        let mut ids: Vec<String> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), 16, "every concurrent save must get a unique id");
+
+        let list = list_snapshots(&base_path, canonical);
+        assert_eq!(
+            list.len(),
+            16,
+            "no entry may be lost to a racing read-modify-write"
+        );
     }
 
     #[test]

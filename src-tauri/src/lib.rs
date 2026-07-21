@@ -59,6 +59,7 @@ pub fn run() {
         .manage(watcher::FileWatcher::default())
         .manage(allowlist::AllowedPaths::default())
         .manage(pdf::PendingPrintHtml::default())
+        .manage(history::HistoryLocks::default())
         // Serves the pending PDF-export HTML to the ephemeral print window.
         // WebviewUrl has no raw-HTML variant and wry rejects data: URLs for
         // navigation, so the export HTML is delivered through this scheme.

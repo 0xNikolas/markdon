@@ -34,7 +34,7 @@ export const APP_SHORTCUTS: Shortcut[] = [
   },
   {
     label: 'File History…',
-    keys: ['Cmd', 'Y'],
+    keys: ['Cmd', 'Shift', 'H'],
     note: 'View and revert to previous saved versions; revert loads as unsaved changes.',
   },
   { label: 'Settings', keys: ['Cmd', ','] },

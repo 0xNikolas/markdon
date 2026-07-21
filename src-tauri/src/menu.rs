@@ -17,8 +17,14 @@ pub fn build(app: &App) -> tauri::Result<Menu<Wry>> {
     let save_as = MenuItemBuilder::with_id("menu:save_as", "Save As…")
         .accelerator("CmdOrCtrl+Shift+S")
         .build(app)?;
+    // NOT CmdOrCtrl+Y: muda's PredefinedMenuItem::redo (below) defaults to
+    // CmdOrCtrl+Y on every platform except macOS (macOS gets Cmd+Shift+Z), so
+    // Ctrl+Y would collide with Edit > Redo on Windows/Linux and make one of
+    // the two keyboard-unreachable. Cmd/Ctrl+Shift+H doesn't collide with any
+    // PredefinedMenuItem default (undo/redo/cut/copy/paste/select_all/quit)
+    // or any other accelerator in this file.
     let history = MenuItemBuilder::with_id("menu:history", "File History…")
-        .accelerator("CmdOrCtrl+Y")
+        .accelerator("CmdOrCtrl+Shift+H")
         .build(app)?;
     let export = MenuItemBuilder::with_id("menu:export", "Export…")
         .accelerator("CmdOrCtrl+Shift+E")
@@ -99,7 +105,7 @@ mod tests {
             "CmdOrCtrl+S",
             "CmdOrCtrl+Shift+S",
             "CmdOrCtrl+Shift+E",
-            "CmdOrCtrl+Y",
+            "CmdOrCtrl+Shift+H",
             "CmdOrCtrl+F",
             "CmdOrCtrl+Alt+F",
             "CmdOrCtrl+L",
@@ -107,6 +113,88 @@ mod tests {
         ] {
             let accel = muda::accelerator::Accelerator::from_str(s);
             assert!(accel.is_ok(), "{s} failed to parse: {accel:?}");
+        }
+    }
+
+    // `all_menu_accelerators_parse` only checks each string parses in
+    // isolation -- it can't catch two items claiming the same accelerator, or
+    // a custom item colliding with a PredefinedMenuItem's OS-default
+    // accelerator (which muda assigns internally and never appears as a
+    // string literal in this file). That's exactly how the File History item
+    // shipped colliding with Edit > Redo on Windows/Linux: muda 0.19.3's
+    // PredefinedMenuItem::redo defaults to CmdOrCtrl+Y everywhere except
+    // macOS (items/predefined.rs), while macOS gets Cmd+Shift+Z. Guard both
+    // failure modes explicitly, normalized case-insensitively since muda's
+    // parser (and Accelerator's Display/Eq) treats e.g. "cmdorctrl" and
+    // "CmdOrCtrl" as equivalent.
+    #[test]
+    fn custom_accelerators_have_no_internal_duplicates() {
+        let custom = [
+            "CmdOrCtrl+N",
+            "CmdOrCtrl+O",
+            "CmdOrCtrl+Shift+O",
+            "CmdOrCtrl+S",
+            "CmdOrCtrl+Shift+S",
+            "CmdOrCtrl+Shift+E",
+            "CmdOrCtrl+Shift+H",
+            "CmdOrCtrl+F",
+            "CmdOrCtrl+Alt+F",
+            "CmdOrCtrl+L",
+            "CmdOrCtrl+,",
+        ];
+        for (i, a) in custom.iter().enumerate() {
+            for (j, b) in custom.iter().enumerate() {
+                if i != j {
+                    assert_ne!(
+                        a.to_lowercase(),
+                        b.to_lowercase(),
+                        "duplicate accelerator: {a} (items {i} and {j})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn custom_accelerators_do_not_collide_with_non_macos_predefined_defaults() {
+        // muda 0.19.3 items/predefined.rs, #[cfg(not(target_os = "macos"))]
+        // defaults for the PredefinedMenuItem variants this app's Edit/App
+        // menus actually build (undo/redo/cut/copy/paste/select_all/quit).
+        // macOS's own defaults (e.g. redo's Cmd+Shift+Z) never collide with
+        // any accelerator string used below, so only the non-mac set needs
+        // checking here.
+        let predefined_non_macos = [
+            "CmdOrCtrl+Z", // undo
+            "CmdOrCtrl+Y", // redo -- the one this app's History item hit
+            "CmdOrCtrl+X", // cut
+            "CmdOrCtrl+C", // copy
+            "CmdOrCtrl+V", // paste
+            "CmdOrCtrl+A", // select_all
+            "CmdOrCtrl+Q", // quit
+        ];
+        let custom = [
+            ("menu:new", "CmdOrCtrl+N"),
+            ("menu:open", "CmdOrCtrl+O"),
+            ("menu:open_folder", "CmdOrCtrl+Shift+O"),
+            ("menu:save", "CmdOrCtrl+S"),
+            ("menu:save_as", "CmdOrCtrl+Shift+S"),
+            ("menu:history", "CmdOrCtrl+Shift+H"),
+            ("menu:export", "CmdOrCtrl+Shift+E"),
+            ("menu:find", "CmdOrCtrl+F"),
+            ("menu:goto_line", "CmdOrCtrl+L"),
+            ("menu:find_replace", "CmdOrCtrl+Alt+F"),
+            ("menu:settings", "CmdOrCtrl+,"),
+        ];
+        for (id, accel) in custom {
+            for predefined in predefined_non_macos {
+                assert_ne!(
+                    accel.to_lowercase(),
+                    predefined.to_lowercase(),
+                    "{id}'s accelerator {accel} collides with a PredefinedMenuItem's \
+                     non-macOS default ({predefined}) -- unreachable via keyboard on \
+                     Windows/Linux since tauri.conf.json bundles for all targets"
+                );
+            }
         }
     }
 }

@@ -229,12 +229,23 @@
   // existing discard guard so any current unsaved edits aren't silently lost, and
   // a best-effort pre-revert snapshot captures the current on-disk state first so
   // the revert is itself reversible.
+  //
+  // closeHistory() runs BEFORE guarded(), unconditionally -- not after, and not
+  // only on the immediate-run path. HistoryModal's backdrop sets z-index:100 and
+  // position:fixed always creates a stacking context, so if the buffer already
+  // has unsaved edits, guarded() would defer into pendingAction and the discard
+  // modal (position:fixed, no z-index) would paint UNDER the still-open History
+  // modal -- visible to nobody, but still focus-trapped and clickable-by-nobody.
+  // Closing History first guarantees the discard modal (if guarded() opens one)
+  // is the only overlay left, same as every other guarded() call site (New/Open/
+  // window-close), all of which are triggered from non-modal surfaces to begin
+  // with.
   function applyRevert(content: string) {
+    closeHistory()
     guarded(() => {
       const p = get(doc).path
       if (p) void recordRevert(p)
       revertBuffer(content)
-      closeHistory()
     })
   }
 
