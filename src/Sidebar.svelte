@@ -29,9 +29,12 @@
     performDelete,
     pasteTargetDir,
     folderPaths,
+    clearSelection,
   } from './lib/fileops'
   import { focusTrap } from './lib/focusTrap'
   import { portal } from './lib/portal'
+  import { get } from 'svelte/store'
+  import { selectionForContextMenu, isSelectionClearingTarget } from './lib/sidebarMenu'
 
   interface Props {
     activePath: string | null
@@ -48,6 +51,9 @@
 
   // File-operations menu + modal state (local to the sidebar chrome).
   let menuOpen = $state(false)
+  // Cursor-anchored File Operations menu (row right-click). Mutually exclusive
+  // with the header "…" dropdown: opening one closes the other.
+  let ctxMenu = $state<{ x: number; y: number } | null>(null)
   let nameModal = $state<{
     title: string
     initial: string
@@ -179,6 +185,32 @@
     collapsed[d.path] = !collapsed[d.path]
   }
 
+  // Right-click on a tree row: Finder semantics — keep the selection if the
+  // target is in it (act on the multi-selection), otherwise select just the
+  // target. `focused` always moves to the target (paste/new anchor). Then the
+  // same FileOpsMenu opens at the cursor. stopPropagation keeps the panel-
+  // level clearing handler from undoing the selection we just set.
+  function onRowContextMenu(e: MouseEvent, path: string) {
+    e.preventDefault()
+    e.stopPropagation()
+    selection.set(selectionForContextMenu(get(selection), path))
+    focused.set(path)
+    menuOpen = false
+    ctxMenu = { x: e.clientX, y: e.clientY }
+  }
+
+  // Press on bare panel space (no button ancestor): deselect everything.
+  // Covers both mouse buttons; the row/menu/header buttons never match.
+  function onPanelPointerDown(e: PointerEvent) {
+    if (isSelectionClearingTarget(e.target as HTMLElement)) clearSelection()
+  }
+
+  // Right-click on bare panel space: deselect, no menu (spec: menu on rows only).
+  function onPanelContextMenu(e: MouseEvent) {
+    e.preventDefault()
+    if (isSelectionClearingTarget(e.target as HTMLElement)) clearSelection()
+  }
+
   // Whether any document is open at all -- used below to choose between the
   // quiet "Open Folder" row (a doc is open, no workspace tree) and the full
   // empty-state panel (nothing open anywhere).
@@ -197,6 +229,7 @@
     class:cut={cutSet.has(f.path)}
     aria-current={f.path === activePath ? 'true' : undefined}
     onclick={() => onFileClick(f)}
+    oncontextmenu={(e) => onRowContextMenu(e, f.path)}
   >
     <span class="active-bar"></span>
     <Icon name={fileIcon(f.name)} size={16} />
@@ -211,6 +244,7 @@
     class:cut={cutSet.has(d.path)}
     aria-expanded={!collapsed[d.path]}
     onclick={() => onFolderClick(d)}
+    oncontextmenu={(e) => onRowContextMenu(e, d.path)}
   >
     <span class="chevron" class:open={!collapsed[d.path]}>
       <Icon name="chevron-right" size={12} />
@@ -226,7 +260,12 @@
   {/if}
 {/snippet}
 
-<nav class="sidebar" aria-label="Workspace">
+<nav
+  class="sidebar"
+  aria-label="Workspace"
+  onpointerdown={onPanelPointerDown}
+  oncontextmenu={onPanelContextMenu}
+>
   {#if openFiles.length > 0}
     <!-- VS Code "Open Editors"-style strip: every opened document, in- or
          out-of-workspace, so there's one consistent surface for "what's on
@@ -273,7 +312,7 @@
           aria-label="File operations"
           aria-haspopup="menu"
           aria-expanded={menuOpen}
-          onclick={() => (menuOpen = !menuOpen)}
+          onclick={() => { ctxMenu = null; menuOpen = !menuOpen }}
         >
           <Icon name="ellipsis" size={14} />
         </button>
@@ -287,6 +326,14 @@
       </div>
     </div>
   </div>
+  {#if ctxMenu}
+    <FileOpsMenu
+      hasRows={($workspace.tree?.dirs.length ?? 0) + ($workspace.tree?.files.length ?? 0) > 0}
+      at={ctxMenu}
+      onAction={handleAction}
+      onClose={() => (ctxMenu = null)}
+    />
+  {/if}
   {#if $workspace.tree}
     <div class="tree">
       {#each $workspace.tree.dirs as d (d.path)}{@render dirRows(d)}{/each}
