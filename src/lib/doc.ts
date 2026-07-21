@@ -44,3 +44,36 @@ export function markSaved(path: string, savedContent: string): void {
 export function enableEditing(): void {
   doc.update((s) => ({ ...s, readonly: false }))
 }
+
+/**
+ * Follow a rename/move of the open file — or of an ancestor folder of it — by
+ * rewriting `path` in place. `oldPrefix`/`newPrefix` are the source and
+ * destination paths of the moved entry (a file, or a folder whose subtree
+ * contains the open doc). The buffer, dirty state, readonly flag and `loadId`
+ * are all preserved, so editing continues seamlessly and the editor never
+ * remounts; the path change alone re-points the file watcher (fileSync +
+ * workspace both react to it). A no-op when the open doc isn't affected.
+ */
+export function retargetPath(oldPrefix: string, newPrefix: string): void {
+  doc.update((s) => {
+    if (s.path === null) return s
+    if (s.path === oldPrefix) return { ...s, path: newPrefix }
+    // Ancestor-folder move: rewrite the matching path prefix. The trailing
+    // slash makes this segment-safe, so `/ws/proj` never matches `/ws/proj2`.
+    if (s.path.startsWith(oldPrefix + '/')) {
+      return { ...s, path: newPrefix + s.path.slice(oldPrefix.length) }
+    }
+    return s
+  })
+}
+
+/**
+ * Detach the open document from disk after its file (or an ancestor folder) was
+ * moved to the Trash: keep the buffer on screen but drop `path` so it becomes an
+ * unsaved Untitled document (content preserved, nothing lost). `savedContent` is
+ * cleared so any non-empty buffer reads as dirty; `loadId` is untouched so the
+ * editor keeps the live buffer rather than remounting empty.
+ */
+export function detachToUntitled(): void {
+  doc.update((s) => ({ ...s, path: null, savedContent: '' }))
+}

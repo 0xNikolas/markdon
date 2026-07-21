@@ -13,6 +13,7 @@ const EXPECTED = [
   'bold.svg',
   'chevron-down.svg',
   'chevron-right.svg',
+  'ellipsis.svg',
   'file-code.svg',
   'file-pen.svg',
   'file-plus.svg',

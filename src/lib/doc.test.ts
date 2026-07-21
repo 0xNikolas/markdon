@@ -1,6 +1,16 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { get } from 'svelte/store'
-import { doc, openDoc, newDoc, edit, markSaved, isDirty, enableEditing } from './doc'
+import {
+  doc,
+  openDoc,
+  newDoc,
+  edit,
+  markSaved,
+  isDirty,
+  enableEditing,
+  retargetPath,
+  detachToUntitled,
+} from './doc'
 
 describe('doc store', () => {
   beforeEach(() => newDoc()) // reset (also bumps loadId, fine for isolation)
@@ -89,5 +99,61 @@ describe('doc store', () => {
     openDoc('/tmp/a.md', '# A', true)
     newDoc()
     expect(get(doc).readonly).toBe(false)
+  })
+})
+
+describe('retargetPath', () => {
+  beforeEach(() => newDoc())
+
+  it('rewrites the path when the open file itself is renamed, keeping dirty state', () => {
+    openDoc('/ws/old.md', '# A')
+    edit('# A edited') // dirty
+    const loadId = get(doc).loadId
+    retargetPath('/ws/old.md', '/ws/new.md')
+    const s = get(doc)
+    expect(s.path).toBe('/ws/new.md')
+    expect(s.content).toBe('# A edited')
+    expect(isDirty(s)).toBe(true)
+    expect(s.loadId).toBe(loadId) // no remount
+  })
+
+  it('rewrites the path when an ancestor folder is moved', () => {
+    openDoc('/ws/docs/note.md', '# A')
+    retargetPath('/ws/docs', '/ws/archive/docs')
+    expect(get(doc).path).toBe('/ws/archive/docs/note.md')
+  })
+
+  it('is segment-safe: a sibling folder with a shared string prefix is untouched', () => {
+    openDoc('/ws/proj2/note.md', '# A')
+    retargetPath('/ws/proj', '/ws/renamed')
+    expect(get(doc).path).toBe('/ws/proj2/note.md')
+  })
+
+  it('leaves an unrelated open doc untouched', () => {
+    openDoc('/ws/other.md', '# A')
+    retargetPath('/ws/old.md', '/ws/new.md')
+    expect(get(doc).path).toBe('/ws/other.md')
+  })
+
+  it('is a no-op when nothing is open', () => {
+    newDoc()
+    retargetPath('/ws/old.md', '/ws/new.md')
+    expect(get(doc).path).toBeNull()
+  })
+})
+
+describe('detachToUntitled', () => {
+  beforeEach(() => newDoc())
+
+  it('keeps the buffer, drops the path, and marks the doc dirty', () => {
+    openDoc('/ws/gone.md', '# content')
+    const loadId = get(doc).loadId
+    detachToUntitled()
+    const s = get(doc)
+    expect(s.path).toBeNull()
+    expect(s.content).toBe('# content') // nothing lost
+    expect(s.savedContent).toBe('')
+    expect(isDirty(s)).toBe(true)
+    expect(s.loadId).toBe(loadId) // buffer preserved, no remount
   })
 })

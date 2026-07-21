@@ -25,9 +25,12 @@ heavy). `src/lib/icons.test.ts` is the regression gate for this contract.
 
 ## Currently vendored (consumed by the UI)
 
-`bold`, `chevron-down`, `chevron-right`, `file-code`, `file-pen`, `file-plus`,
-`file-text`, `file-up`, `folder`, `folder-open`, `italic`, `keyboard`,
-`layout-grid`, `link-2`, `settings`, `split-square-vertical`.
+`bold`, `chevron-down`, `chevron-right`, `ellipsis`, `file-code`, `file-pen`,
+`file-plus`, `file-text`, `file-up`, `folder`, `folder-open`, `italic`,
+`keyboard`, `layout-grid`, `link-2`, `settings`, `split-square-vertical`.
+
+`ellipsis` is the sidebar "File operations" more-actions button (opens
+`FileOpsMenu.svelte`).
 
 Sidebar file-type mapping (`src/lib/workspace.ts`'s `fileIcon`): markdown
 files get `file-code` (matches the design's Icon Set); every other file

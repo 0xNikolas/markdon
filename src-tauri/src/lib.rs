@@ -1,6 +1,7 @@
 mod allowlist;
 mod commands;
 mod dialogs;
+mod fileops;
 mod menu;
 mod pdf;
 mod watcher;
@@ -120,6 +121,13 @@ pub fn run() {
             dialogs::open_workspace_dialog,
             workspace::list_workspace,
             workspace::restore_workspace,
+            fileops::create_file,
+            fileops::create_folder,
+            fileops::rename_entry,
+            fileops::move_entry,
+            fileops::copy_entry,
+            fileops::duplicate_entry,
+            fileops::delete_entries,
             pdf::export_pdf
         ])
         .build(tauri::generate_context!())

@@ -6,7 +6,9 @@ authors = ["you"]
 license = ""
 repository = ""
 edition = "2021"
-rust-version = "1.77.2"
+# Bumped from 1.77.2 for the `trash` crate (5.x MSRV 1.85.0), used by the file-
+# operations Delete command to move entries to the OS Trash instead of unlinking.
+rust-version = "1.85.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -26,6 +28,10 @@ tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
 notify = "6"
 tempfile = "3"
+# Move-to-Trash for the sidebar Delete op. On macOS this wraps
+# NSFileManager.trashItem via the objc2 0.6 / objc2-foundation 0.3 stack already
+# vendored below for pdf.rs, so no new native-dependency family is introduced.
+trash = "5"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-window-state = "2"

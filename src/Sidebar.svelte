@@ -1,5 +1,8 @@
 <script lang="ts">
   import Icon from './Icon.svelte'
+  import FileOpsMenu, { type FileOpAction } from './FileOpsMenu.svelte'
+  import NameModal from './NameModal.svelte'
+  import MoveToModal from './MoveToModal.svelte'
   import {
     workspace,
     isMarkdownFile,
@@ -9,7 +12,27 @@
     type WorkspaceDir,
     type WorkspaceFile,
   } from './lib/workspace'
+  import {
+    selection,
+    focused,
+    clipboard,
+    focusRow,
+    cutSelection,
+    copySelection,
+    selectVisible,
+    paste,
+    performCreateFile,
+    performCreateFolder,
+    performRename,
+    performDuplicate,
+    performMove,
+    performDelete,
+    pasteTargetDir,
+    folderPaths,
+  } from './lib/fileops'
   import { isInsideRoot } from './lib/ui'
+  import { focusTrap } from './lib/focusTrap'
+  import { portal } from './lib/portal'
 
   interface Props {
     activePath: string | null
@@ -21,6 +44,136 @@
   // Collapse state keyed by dir path. Absent/false = expanded (matches the
   // design's open folders); toggled per folder, local to this component.
   let collapsed = $state<Record<string, boolean>>({})
+
+  // File-operations menu + modal state (local to the sidebar chrome).
+  let menuOpen = $state(false)
+  let nameModal = $state<{
+    title: string
+    initial: string
+    confirmLabel: string
+    selectTo: number | null
+    onConfirm: (value: string) => void
+  } | null>(null)
+  let moveSources = $state<string[] | null>(null)
+  let deleteConfirm = $state<{ paths: string[]; label: string } | null>(null)
+
+  // Cut items dim until pasted or the clipboard is cleared.
+  let cutSet = $derived(
+    $clipboard?.mode === 'cut' ? new Set($clipboard.paths) : new Set<string>(),
+  )
+
+  // Directory a New/Paste lands in: focused folder, focused file's parent, else root.
+  function targetDir(): string | null {
+    return pasteTargetDir($focused, folderPaths($workspace.tree), $workspace.root)
+  }
+
+  function isFolder(path: string): boolean {
+    return folderPaths($workspace.tree).has(path)
+  }
+
+  // The offset of the extension dot, so a rename preselects just the stem.
+  function stemLength(name: string): number {
+    const dot = name.lastIndexOf('.')
+    return dot > 0 ? dot : name.length
+  }
+
+  function promptNew(kind: 'file' | 'folder') {
+    const dir = targetDir()
+    if (dir === null) return
+    nameModal = {
+      title: kind === 'file' ? 'New File' : 'New Folder',
+      initial: kind === 'file' ? 'untitled.md' : '',
+      confirmLabel: 'Create',
+      selectTo: kind === 'file' ? stemLength('untitled.md') : null,
+      onConfirm: (value) => {
+        nameModal = null
+        if (kind === 'file') performCreateFile(dir, value)
+        else performCreateFolder(dir, value)
+      },
+    }
+  }
+
+  function promptRename(path: string) {
+    const name = path.split('/').filter(Boolean).pop() ?? ''
+    nameModal = {
+      title: 'Rename',
+      initial: name,
+      confirmLabel: 'Rename',
+      selectTo: isFolder(path) ? null : stemLength(name),
+      onConfirm: (value) => {
+        nameModal = null
+        performRename(path, value)
+      },
+    }
+  }
+
+  function requestDelete(paths: string[]) {
+    if (paths.length === 0) return
+    // Confirm before deleting a folder or a multi-item batch; a single file goes
+    // straight to Trash (recoverable, matching Finder).
+    const needsConfirm = paths.length > 1 || paths.some(isFolder)
+    if (!needsConfirm) {
+      performDelete(paths)
+      return
+    }
+    const label =
+      paths.length > 1
+        ? `${paths.length} items`
+        : (paths[0].split('/').filter(Boolean).pop() ?? paths[0])
+    deleteConfirm = { paths, label }
+  }
+
+  function confirmDelete() {
+    if (deleteConfirm) performDelete(deleteConfirm.paths)
+    deleteConfirm = null
+  }
+
+  function handleAction(action: FileOpAction) {
+    const sel = [...$selection]
+    switch (action) {
+      case 'new-file':
+        promptNew('file')
+        break
+      case 'new-folder':
+        promptNew('folder')
+        break
+      case 'rename':
+        if (sel.length === 1) promptRename(sel[0])
+        break
+      case 'duplicate':
+        for (const p of sel) performDuplicate(p)
+        break
+      case 'move':
+        if (sel.length >= 1) moveSources = sel
+        break
+      case 'cut':
+        cutSelection()
+        break
+      case 'copy':
+        copySelection()
+        break
+      case 'paste':
+        paste()
+        break
+      case 'delete':
+        requestDelete(sel)
+        break
+      case 'select-all':
+        selectVisible($workspace.tree, collapsed)
+        break
+    }
+  }
+
+  // Row click: single-select + focus (the paste/new anchor). Markdown files
+  // additionally open through the guarded path in App; folders also toggle.
+  function onFileClick(f: WorkspaceFile) {
+    focusRow(f.path)
+    if (isMarkdownFile(f.name)) onOpenFile(f.path)
+  }
+  function onFolderClick(d: WorkspaceDir) {
+    focusRow(d.path)
+    collapsed[d.path] = !collapsed[d.path]
+  }
 
   // A file opened without (or outside) a workspace grant still has an open
   // doc but no tree row to show it in -- surface it as its own "Open File"
@@ -34,31 +187,27 @@
 </script>
 
 {#snippet fileRow(f: WorkspaceFile)}
-  {#if isMarkdownFile(f.name)}
-    <button
-      class="file-row"
-      class:active={f.path === activePath}
-      onclick={() => onOpenFile(f.path)}
-    >
-      <span class="active-bar"></span>
-      <Icon name={fileIcon(f.name)} size={16} />
-      <span class="name">{f.name}</span>
-    </button>
-  {:else}
-    <!-- Non-markdown files are shown for context but can't be opened here. -->
-    <div class="file-row disabled" aria-disabled="true">
-      <span class="active-bar"></span>
-      <Icon name={fileIcon(f.name)} size={16} />
-      <span class="name">{f.name}</span>
-    </div>
-  {/if}
+  <button
+    class="file-row"
+    class:active={f.path === activePath}
+    class:selected={$selection.has(f.path) && f.path !== activePath}
+    class:cut={cutSet.has(f.path)}
+    aria-current={f.path === activePath ? 'true' : undefined}
+    onclick={() => onFileClick(f)}
+  >
+    <span class="active-bar"></span>
+    <Icon name={fileIcon(f.name)} size={16} />
+    <span class="name">{f.name}</span>
+  </button>
 {/snippet}
 
 {#snippet dirRows(d: WorkspaceDir)}
   <button
     class="folder-row"
+    class:selected={$selection.has(d.path)}
+    class:cut={cutSet.has(d.path)}
     aria-expanded={!collapsed[d.path]}
-    onclick={() => (collapsed[d.path] = !collapsed[d.path])}
+    onclick={() => onFolderClick(d)}
   >
     <span class="chevron" class:open={!collapsed[d.path]}>
       <Icon name="chevron-right" size={12} />
@@ -89,9 +238,29 @@
   {/if}
   <div class="header">
     <span class="label">Workspace</span>
-    <button class="new-file" aria-label="New file" onclick={onNewFile}>
-      <Icon name="file-plus" size={14} />
-    </button>
+    <div class="header-actions">
+      <button class="new-file" aria-label="New file" onclick={onNewFile}>
+        <Icon name="file-plus" size={14} />
+      </button>
+      <div class="fileops-anchor">
+        <button
+          class="new-file"
+          aria-label="File operations"
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          onclick={() => (menuOpen = !menuOpen)}
+        >
+          <Icon name="ellipsis" size={14} />
+        </button>
+        {#if menuOpen}
+          <FileOpsMenu
+            hasRows={($workspace.tree?.dirs.length ?? 0) + ($workspace.tree?.files.length ?? 0) > 0}
+            onAction={handleAction}
+            onClose={() => (menuOpen = false)}
+          />
+        {/if}
+      </div>
+    </div>
   </div>
   {#if $workspace.tree}
     <div class="tree">
@@ -121,6 +290,53 @@
     </div>
   {/if}
 </nav>
+
+{#if nameModal}
+  <NameModal
+    title={nameModal.title}
+    initial={nameModal.initial}
+    confirmLabel={nameModal.confirmLabel}
+    selectTo={nameModal.selectTo}
+    onConfirm={nameModal.onConfirm}
+    onCancel={() => (nameModal = null)}
+  />
+{/if}
+
+{#if moveSources}
+  <MoveToModal
+    sources={moveSources}
+    onConfirm={(destDir) => {
+      const s = moveSources
+      moveSources = null
+      if (s) performMove(s, destDir)
+    }}
+    onCancel={() => (moveSources = null)}
+  />
+{/if}
+
+{#if deleteConfirm}
+  <div class="modal-backdrop" use:portal>
+    <div
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      tabindex="-1"
+      use:focusTrap
+      onkeydown={(e) => {
+        if (e.key === 'Escape') {
+          e.stopPropagation()
+          deleteConfirm = null
+        }
+      }}
+    >
+      <p>Move <strong>{deleteConfirm.label}</strong> to the Trash?</p>
+      <div class="actions">
+        <button data-autofocus onclick={() => (deleteConfirm = null)}>Cancel</button>
+        <button class="danger" onclick={confirmDelete}>Move to Trash</button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
   .sidebar {
@@ -164,6 +380,16 @@
   }
   .new-file:active {
     background: var(--surface-active);
+  }
+  .header-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+  }
+  /* Positioning context for the FileOpsMenu dropdown anchored under the button. */
+  .fileops-anchor {
+    position: relative;
+    display: inline-flex;
   }
 
   .tree {
@@ -223,13 +449,14 @@
     text-align: left;
     transition: background-color 0.1s ease, color 0.1s ease;
   }
-  /* .disabled rows are a plain <div> (non-markdown files, not openable here) --
-     excluded from hover/active so they never look interactive. */
-  .file-row:not(.active):not(.disabled):hover {
+  /* Non-markdown rows (.nonmd) are now selectable buttons (focus/cut/copy/
+     move/delete) but never open a document; they read as slightly muted via
+     their file-text icon. Hover/active applies to every non-open row. */
+  .file-row:not(.active):not(.static):hover {
     background: var(--surface-hover);
     color: var(--fg-secondary);
   }
-  .file-row:not(.active):not(.disabled):active {
+  .file-row:not(.active):not(.static):active {
     background: var(--surface-active);
   }
   .file-row.active {
@@ -241,13 +468,23 @@
   .file-row.active:active {
     background: var(--accent-tint-strong);
   }
-  .file-row.disabled {
-    cursor: default;
-  }
   /* The "Open File" row is not a button -- it's already the open doc, so
      clicking it is a no-op. Same active styling, but no pointer affordance. */
   .file-row.static {
     cursor: default;
+  }
+  /* Selected-but-not-open rows (multi-select via Select All, or a focused
+     folder/non-md file): a quiet surface fill distinct from the accent-tinted
+     open row. */
+  .file-row.selected:not(.active),
+  .folder-row.selected {
+    background: var(--surface-hover);
+    color: var(--fg-strong);
+  }
+  /* Cut items dim until pasted or the clipboard is cleared. */
+  .file-row.cut,
+  .folder-row.cut {
+    opacity: 0.5;
   }
   .active-bar {
     width: 3px;
@@ -334,5 +571,56 @@
   .open-folder-row:hover {
     background: var(--surface);
     color: var(--fg-secondary);
+  }
+
+  /* Delete confirmation modal (folder or multi-item deletes). Mirrors the
+     App.svelte unsaved-changes modal so the two read as one system. */
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: var(--backdrop);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 40;
+  }
+  .modal {
+    background: var(--modal-bg);
+    color: var(--fg);
+    padding: 20px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    font: 14px var(--font-ui);
+    max-width: 320px;
+  }
+  .modal p {
+    margin: 0;
+  }
+  .actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 16px;
+  }
+  .actions button {
+    padding: 6px 14px;
+    border-radius: 6px;
+    background: var(--surface);
+    border: 1px solid transparent;
+    color: var(--fg-secondary);
+    font: inherit;
+    cursor: pointer;
+    transition: background-color 0.1s ease, border-color 0.1s ease, color 0.1s ease;
+  }
+  .actions button:hover {
+    background: var(--surface-hover);
+  }
+  .actions .danger {
+    background: transparent;
+    border-color: var(--danger);
+    color: var(--danger);
+  }
+  .actions .danger:hover {
+    background: var(--danger-tint);
   }
 </style>

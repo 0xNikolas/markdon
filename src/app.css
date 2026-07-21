@@ -58,6 +58,7 @@
   --traffic-close-glyph: #4d0000;  /* × glyph shown on hover, macOS-style dark maroon on the red dot */
   --modal-bg: #ffffff;       /* App.svelte .modal background */
   --backdrop: rgba(15, 23, 41, 0.45); /* App.svelte .modal-backdrop */
+  --shadow-popover: 0 4px 12px rgba(15, 23, 41, 0.12); /* FileOpsMenu dropdown surface */
   --error-bg: #fef2f2;       /* Banner.svelte .banner background */
   --error-fg: #991b1b;       /* Banner.svelte .banner color */
   --warn-bg: #fef9c3;        /* App.svelte .reload-bar background */
@@ -102,6 +103,7 @@
   --danger-tint-strong: rgba(255, 102, 102, 0.2);
   --modal-bg: #1e293b;
   --backdrop: rgba(0, 0, 0, 0.7);
+  --shadow-popover: 0 6px 20px rgba(0, 0, 0, 0.5);
   --error-bg: #2d1414;  --error-fg: #fca5a5;
   --warn-bg:  #2a2205;  --warn-fg:  #fde68a;  --warn-border: #453a0a;
   --info-bg:  #0f1e35;  --info-fg:  #93c5fd;  --info-border: #1e3a5f;

@@ -73,6 +73,29 @@ impl AllowedPaths {
             Err(GRANT_ERR.into())
         }
     }
+
+    /// Destination-side twin of [`ensure`]: verify `dir` is a directory the
+    /// webview may create entries in. Unlike `ensure`, the granted root itself
+    /// IS accepted (you can create a file at the workspace root), so this admits
+    /// `canon == root` as well as anything strictly inside a root. Returns the
+    /// canonical directory so callers build the final path as
+    /// `container.join(validated_leaf_name)` — a path that is provably in-root,
+    /// which (with a single-component leaf name) is what makes a `../escape`
+    /// destination impossible. Canonicalize resolves `..`/symlinks and fails
+    /// closed on nonexistent paths, so a `<root>/../sibling` destination
+    /// escapes and is rejected exactly as in `ensure`.
+    pub fn ensure_container(&self, dir: &str) -> Result<PathBuf, String> {
+        let canon = std::fs::canonicalize(dir).map_err(|_| GRANT_ERR.to_string())?;
+        if !canon.is_dir() {
+            return Err("destination is not a directory".into());
+        }
+        let roots = self.roots.lock().unwrap();
+        if roots.iter().any(|r| canon == *r || canon.starts_with(r)) {
+            Ok(canon)
+        } else {
+            Err(GRANT_ERR.into())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -225,6 +248,92 @@ mod tests {
         let dir = tempdir().unwrap();
         let a = AllowedPaths::default();
         assert!(a.allow_root(&dir.path().join("nope")).is_err());
+    }
+
+    #[test]
+    fn ensure_container_accepts_the_granted_root_itself() {
+        let dir = tempdir().unwrap();
+        let a = AllowedPaths::default();
+        let canon = a.allow_root(dir.path()).unwrap();
+        // Root IS a valid destination container (files can be created at the
+        // workspace root), unlike `ensure` which rejects the root node.
+        assert!(a.ensure_container(canon.to_str().unwrap()).is_ok());
+        assert!(a.ensure(canon.to_str().unwrap()).is_err());
+    }
+
+    #[test]
+    fn ensure_container_accepts_a_nested_dir() {
+        let dir = tempdir().unwrap();
+        let a = AllowedPaths::default();
+        a.allow_root(dir.path()).unwrap();
+        let sub = dir.path().join("a").join("b");
+        fs::create_dir_all(&sub).unwrap();
+        let got = a.ensure_container(sub.to_str().unwrap()).unwrap();
+        assert_eq!(got, fs::canonicalize(&sub).unwrap());
+    }
+
+    #[test]
+    fn ensure_container_rejects_a_sibling_dir() {
+        let parent = tempdir().unwrap();
+        let ws = parent.path().join("ws");
+        let evil = parent.path().join("ws-evil");
+        fs::create_dir_all(&ws).unwrap();
+        fs::create_dir_all(&evil).unwrap();
+        let a = AllowedPaths::default();
+        a.allow_root(&ws).unwrap();
+        // Component-wise starts_with: /…/ws-evil never counts as inside /…/ws.
+        assert!(a.ensure_container(evil.to_str().unwrap()).is_err());
+    }
+
+    #[test]
+    fn ensure_container_rejects_a_traversal_escape_destination() {
+        // The crux for move/copy: a `<root>/../outside` destination directory
+        // canonicalizes out of the root and must be rejected.
+        let parent = tempdir().unwrap();
+        let ws = parent.path().join("ws");
+        fs::create_dir_all(&ws).unwrap();
+        let outside = parent.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        let a = AllowedPaths::default();
+        a.allow_root(&ws).unwrap();
+        let escape = ws.join("..").join("outside");
+        assert!(a.ensure_container(escape.to_str().unwrap()).is_err());
+    }
+
+    #[test]
+    fn ensure_container_rejects_a_non_directory() {
+        let dir = tempdir().unwrap();
+        let a = AllowedPaths::default();
+        a.allow_root(dir.path()).unwrap();
+        let f = dir.path().join("note.md");
+        fs::write(&f, "x").unwrap();
+        // A file inside the root passes `ensure` but is not a valid container.
+        assert!(a.ensure(f.to_str().unwrap()).is_ok());
+        assert!(a.ensure_container(f.to_str().unwrap()).is_err());
+    }
+
+    #[test]
+    fn ensure_container_rejects_an_ungranted_dir() {
+        let dir = tempdir().unwrap();
+        let a = AllowedPaths::default();
+        // Nothing granted at all.
+        assert!(a.ensure_container(dir.path().to_str().unwrap()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_container_rejects_a_symlinked_dir_escaping_root() {
+        let parent = tempdir().unwrap();
+        let ws = parent.path().join("ws");
+        fs::create_dir_all(&ws).unwrap();
+        let secret = parent.path().join("secret");
+        fs::create_dir_all(&secret).unwrap();
+        let link = ws.join("link");
+        std::os::unix::fs::symlink(&secret, &link).unwrap();
+        let a = AllowedPaths::default();
+        a.allow_root(&ws).unwrap();
+        // canonicalize resolves the symlink to /…/secret, outside the root.
+        assert!(a.ensure_container(link.to_str().unwrap()).is_err());
     }
 
     #[test]

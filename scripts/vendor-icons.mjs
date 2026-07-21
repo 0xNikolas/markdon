@@ -40,6 +40,7 @@ const ICONS = [
   'bold',
   'chevron-down',
   'chevron-right',
+  'ellipsis',
   'file-code',
   'file-pen',
   'file-plus',

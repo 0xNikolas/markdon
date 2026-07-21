@@ -1,6 +1,7 @@
 <script lang="ts" module>
   import chevronDown from './assets/icons/chevron-down.svg?raw'
   import chevronRight from './assets/icons/chevron-right.svg?raw'
+  import ellipsis from './assets/icons/ellipsis.svg?raw'
   import fileCode from './assets/icons/file-code.svg?raw'
   import filePen from './assets/icons/file-pen.svg?raw'
   import filePlus from './assets/icons/file-plus.svg?raw'
@@ -16,6 +17,7 @@
   const icons = {
     'chevron-down': chevronDown,
     'chevron-right': chevronRight,
+    ellipsis,
     'file-code': fileCode,
     'file-pen': filePen,
     'file-plus': filePlus,
