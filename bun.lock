@@ -22,6 +22,7 @@
         "@tsconfig/svelte": "^5.0.8",
         "@types/node": "^24.13.2",
         "geist": "1.7.2",
+        "lucide-static": "^1.25.0",
         "svelte": "^5.56.4",
         "svelte-check": "^4.7.1",
         "typescript": "~6.0.2",
@@ -616,6 +617,8 @@
     "longest-streak": ["longest-streak@3.1.0", "", {}, "sha512-9Ri+o0JYgehTaVBBDoMqIl8GXtbWg711O3srftcHhZ0dqnETqLaoIK0x17fUw9rFSlK/0NlsKe0Ahhyl5pXE2g=="],
 
     "loupe": ["loupe@3.2.1", "", {}, "sha512-CdzqowRJCeLU72bHvWqwRBBlLcMEtIvGrlvef74kMnV2AolS9Y8xUv1I0U/MNAWMhBlKIoyuEgoJ0t/bbwHbLQ=="],
+
+    "lucide-static": ["lucide-static@1.25.0", "", {}, "sha512-uJTdyP8vxKELd+Kqk45ahUvOA1rv3Ehy6ZUP7JlBt8UJwmzHgFFts0OZNU3C6/4MDKsssgR9Jrut7GnuqGgYmg=="],
 
     "magic-string": ["magic-string@0.30.21", "", { "dependencies": { "@jridgewell/sourcemap-codec": "^1.5.5" } }, "sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ=="],
 

@@ -10,7 +10,6 @@
   import layoutGrid from './assets/icons/layout-grid.svg?raw'
   import settings from './assets/icons/settings.svg?raw'
   import splitSquareVertical from './assets/icons/split-square-vertical.svg?raw'
-  import xCircle from './assets/icons/x-circle.svg?raw'
 
   const icons = {
     'chevron-down': chevronDown,
@@ -24,15 +23,17 @@
     'layout-grid': layoutGrid,
     settings,
     'split-square-vertical': splitSquareVertical,
-    'x-circle': xCircle,
   } as const
 
   export type IconName = keyof typeof icons
 </script>
 
 <script lang="ts">
-  // Inline-SVG icon: the cleaned assets stroke with currentColor, so CSS
-  // `color` on any ancestor recolors them per theme.
+  // Inline-SVG icon: assets are vendored lucide-static glyphs (ISC — see
+  // assets/icons/README.md) that stroke with currentColor, so CSS `color` on
+  // any ancestor recolors them per theme. Each glyph has a 24x24 viewBox and no
+  // fixed width/height, so the CSS below scales it to `size` px while lucide's
+  // 2px stroke renders as the intended ~1.2-1.3px at our 14-16px sizes.
   interface Props {
     name: IconName
     size?: number
