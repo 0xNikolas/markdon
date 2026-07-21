@@ -103,6 +103,24 @@ export function isGotoLineFallbackKey(
   return mac ? e.metaKey && !e.ctrlKey : e.metaKey || e.ctrlKey
 }
 
+// -- Find and Replace keyboard fallback --------------------------------------
+
+/**
+ * True when `e` is the CmdOrCtrl+Alt+F Find and Replace keyboard fallback.
+ * Checked against `e.code` ('KeyF'), NOT `e.key` -- on macOS, Option
+ * (Alt) is a dead-key modifier for typing special characters, so
+ * Option+F's `e.key` is 'ƒ' (the florin sign), not 'f'. `e.code` reports
+ * the physical key regardless of what character the modifier combination
+ * would otherwise type, so it's the only reliable check here. No mac-only
+ * carve-out is needed (unlike Go to Line's Cmd+L): CodeMirror's default
+ * keymap has no Alt-f binding to collide with.
+ */
+export function isFindReplaceFallbackKey(
+  e: { metaKey: boolean; ctrlKey: boolean; altKey: boolean; code: string },
+): boolean {
+  return (e.metaKey || e.ctrlKey) && e.altKey && e.code === 'KeyF'
+}
+
 /** Export request counter; the export feature subscribes and acts on ticks. */
 export const exportTick: Writable<number> = writable(0)
 export function requestExport(): void {

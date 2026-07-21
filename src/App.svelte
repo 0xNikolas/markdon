@@ -17,7 +17,7 @@
   import SettingsModal from './SettingsModal.svelte'
   import GoToLineBar from './GoToLineBar.svelte'
   import Sidebar from './Sidebar.svelte'
-  import { searchUi, openFind, closeFind, shouldForceCloseFind } from './lib/searchPlugin'
+  import { searchUi, openFind, openReplace, closeFind, shouldForceCloseFind } from './lib/searchPlugin'
   import { openSourceSearch, clearPendingLine } from './lib/sourceEditor'
   import {
     settingsOpen,
@@ -29,6 +29,7 @@
     exportTick,
     isMacPlatform,
     isGotoLineFallbackKey,
+    isFindReplaceFallbackKey,
   } from './lib/ui'
   import { openWorkspace, initWorkspace } from './lib/workspace'
   import { exportDocument } from './lib/export'
@@ -91,6 +92,7 @@
       listen('menu:save', () => save()),
       listen('menu:save_as', () => saveAs()),
       listen('menu:find', () => routeFind()),
+      listen('menu:find_replace', () => routeFindReplace()),
       listen('menu:goto_line', () => {
         // Same gating as the Cmd+L keydown fallback below: the native Edit
         // menu item isn't disabled by app state (menu.rs has no such wiring),
@@ -138,6 +140,16 @@
     else openFind()
   }
 
+  // Cmd+Alt+F / the "Find and Replace…" menu item: same mode-aware routing as
+  // routeFind(), but split mode's CM native panel already renders replace
+  // (it's hidden only when readOnly, per @codemirror/search's own panel
+  // logic) so it needs no separate open call -- opening the search panel is
+  // enough. WYSIWYG opens the FindBar with the replace row pre-expanded.
+  function routeFindReplace() {
+    if (get(split)) openSourceSearch()
+    else openReplace()
+  }
+
   // The header's Split Preview button calls toggleSplit() directly --
   // it never goes through routeFind(), which only routes *new* Cmd+F
   // invocations and does nothing for a FindBar that was already open when
@@ -168,6 +180,12 @@
   // fallback above, this one explicitly skips while another modal/overlay
   // is already up (pendingAction, Settings, or the popover itself) so it
   // can't double-open or steal focus from a higher-priority surface.
+  //
+  // Find and Replace's fallback (isFindReplaceFallbackKey) is checked BEFORE
+  // the plain Cmd+F branch and gated the same way as Go to Line: it must run
+  // first because Cmd+Alt+F would otherwise also satisfy the looser Cmd+F
+  // test below on platforms where Option doesn't remap `e.key` (see
+  // isFindReplaceFallbackKey's doc comment on why it checks e.code instead).
   const macPlatform = isMacPlatform()
   function handleWindowKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape' && $searchUi.open && pendingAction === null) {
@@ -177,6 +195,10 @@
       e.preventDefault()
       clearPendingLine()
       closeGoto()
+    } else if (isFindReplaceFallbackKey(e)) {
+      if (pendingAction !== null || $settingsOpen || $gotoOpen) return
+      e.preventDefault()
+      routeFindReplace()
     } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
       e.preventDefault()
       routeFind()

@@ -23,6 +23,11 @@ export const APP_SHORTCUTS: Shortcut[] = [
   },
   { label: 'Find', keys: ['Cmd', 'F'] },
   {
+    label: 'Find and Replace…',
+    keys: ['Cmd', 'Alt', 'F'],
+    note: 'WYSIWYG opens the find bar with the replace row expanded; split mode uses the CodeMirror native panel.',
+  },
+  {
     label: 'Go to Line…',
     keys: ['Cmd', 'L'],
     note: 'Accepts a line, or line:col (col is 0-based, matching the status bar).',

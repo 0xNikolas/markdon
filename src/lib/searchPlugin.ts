@@ -8,26 +8,35 @@ import type { Node } from '@milkdown/kit/prose/model'
 import { $prose } from '@milkdown/kit/utils'
 import { get, writable } from 'svelte/store'
 
-import { findMatches, stepIndex, type Segment, type MatchRange } from './search'
+import { findMatches, stepIndex, type Segment, type MatchRange, type MatchOptions } from './search'
 
 interface SearchState {
   query: string
   matches: MatchRange[]
   activeIndex: number
   decorations: DecorationSet
+  opts: MatchOptions
 }
 
 type SearchMeta =
   | { type: 'set'; query: string }
   | { type: 'clear' }
   | { type: 'step'; delta: 1 | -1 }
+  | { type: 'setOptions'; opts: MatchOptions }
 
 /** What FindBar renders. Kept separate from the plugin's internal
  * `SearchState` (which also holds the DecorationSet) so the UI store stays
- * cheap to subscribe to and serializable. */
-export const searchUi = writable<{ open: boolean; query: string; count: number; activeIndex: number }>(
-  { open: false, query: '', count: 0, activeIndex: -1 },
-)
+ * cheap to subscribe to and serializable. `replaceOpen` is UI-only (which
+ * row is visible); it never feeds into plugin state or compute(). */
+export const searchUi = writable<{
+  open: boolean
+  query: string
+  count: number
+  activeIndex: number
+  caseSensitive: boolean
+  wholeWord: boolean
+  replaceOpen: boolean
+}>({ open: false, query: '', count: 0, activeIndex: -1, caseSensitive: false, wholeWord: false, replaceOpen: false })
 
 const key = new PluginKey<SearchState>('markdon-search')
 
@@ -50,8 +59,8 @@ export function collectSegments(doc: Node): Segment[] {
   return segments
 }
 
-function compute(doc: Node, query: string, wantIndex: number): SearchState {
-  const matches = findMatches(collectSegments(doc), query)
+function compute(doc: Node, query: string, wantIndex: number, opts: MatchOptions): SearchState {
+  const matches = findMatches(collectSegments(doc), query, opts)
   const activeIndex = matches.length === 0 ? -1 : Math.min(Math.max(wantIndex, 0), matches.length - 1)
   const decorations = DecorationSet.create(
     doc,
@@ -59,13 +68,20 @@ function compute(doc: Node, query: string, wantIndex: number): SearchState {
       Decoration.inline(m.from, m.to, { class: i === activeIndex ? 'find-match find-active' : 'find-match' }),
     ),
   )
-  return { query, matches, activeIndex, decorations }
+  return { query, matches, activeIndex, decorations, opts }
 }
 
 /** Push the plugin's computed state into the UI store, preserving `open`
- * (only openFind/closeFind change that). */
+ * and `replaceOpen` (only openFind/closeFind/openReplace touch those). */
 function syncUi(state: SearchState): void {
-  searchUi.update((ui) => ({ ...ui, query: state.query, count: state.matches.length, activeIndex: state.activeIndex }))
+  searchUi.update((ui) => ({
+    ...ui,
+    query: state.query,
+    count: state.matches.length,
+    activeIndex: state.activeIndex,
+    caseSensitive: state.opts.caseSensitive,
+    wholeWord: state.opts.wholeWord,
+  }))
 }
 
 function scrollActiveIntoView(): void {
@@ -81,9 +97,12 @@ export function buildSearchPlugin(): Plugin<SearchState> {
   return new Plugin<SearchState>({
     key,
     state: {
-      // Re-seeds from the last-known query so an open search survives an
-      // editor remount (e.g. {#key loadId} on New/Open).
-      init: (_, editorState) => compute(editorState.doc, get(searchUi).query, 0),
+      // Re-seeds from the last-known query/options so an open search
+      // survives an editor remount (e.g. {#key loadId} on New/Open).
+      init: (_, editorState) => {
+        const ui = get(searchUi)
+        return compute(editorState.doc, ui.query, 0, { caseSensitive: ui.caseSensitive, wholeWord: ui.wholeWord })
+      },
       apply(tr, value, _oldState, newState) {
         const meta = tr.getMeta(key) as SearchMeta | undefined
         if (!meta) {
@@ -94,14 +113,15 @@ export function buildSearchPlugin(): Plugin<SearchState> {
           // keeps ordinary typing with search closed at zero extra cost.
           if (value.query === '') return value
           // Doc changed without a search meta: recompute against the same
-          // query, keeping the active index steady where possible.
-          return compute(newState.doc, value.query, value.activeIndex)
+          // query/options, keeping the active index steady where possible.
+          return compute(newState.doc, value.query, value.activeIndex, value.opts)
         }
-        if (meta.type === 'clear') return compute(newState.doc, '', 0)
-        if (meta.type === 'set') return compute(newState.doc, meta.query, 0)
+        if (meta.type === 'clear') return compute(newState.doc, '', 0, value.opts)
+        if (meta.type === 'set') return compute(newState.doc, meta.query, 0, value.opts)
+        if (meta.type === 'setOptions') return compute(newState.doc, value.query, 0, meta.opts)
         // 'step'
         const next = stepIndex(value.matches.length, value.activeIndex, meta.delta)
-        return compute(newState.doc, value.query, next)
+        return compute(newState.doc, value.query, next, value.opts)
       },
     },
     props: {
@@ -131,15 +151,22 @@ function dispatch(meta: SearchMeta): void {
 
 /** Open the find bar. Does not touch the query/matches -- if a query was
  * already active (e.g. before a Cmd+F close/reopen) its highlights are still
- * live from plugin state, so reopening just reveals the bar again. */
+ * live from plugin state, so reopening just reveals the bar again. Leaves
+ * `replaceOpen` as-is (plain Cmd+F never expands the replace row). */
 export function openFind(): void {
   searchUi.update((ui) => ({ ...ui, open: true }))
 }
 
-/** Close the find bar and clear all highlights. */
+/** Open the find bar with the replace row expanded (menu:find_replace /
+ * Cmd+Alt+F). Like openFind, does not touch the query/matches. */
+export function openReplace(): void {
+  searchUi.update((ui) => ({ ...ui, open: true, replaceOpen: true }))
+}
+
+/** Close the find bar, clear all highlights, and collapse the replace row. */
 export function closeFind(): void {
   dispatch({ type: 'clear' })
-  searchUi.update((ui) => ({ ...ui, open: false, query: '', count: 0, activeIndex: -1 }))
+  searchUi.update((ui) => ({ ...ui, open: false, query: '', count: 0, activeIndex: -1, replaceOpen: false }))
 }
 
 /**
@@ -168,4 +195,58 @@ export function findNext(): void {
 export function findPrev(): void {
   dispatch({ type: 'step', delta: -1 })
   scrollActiveIntoView()
+}
+
+export function setCaseSensitive(caseSensitive: boolean): void {
+  dispatch({ type: 'setOptions', opts: { caseSensitive, wholeWord: get(searchUi).wholeWord } })
+}
+
+export function setWholeWord(wholeWord: boolean): void {
+  dispatch({ type: 'setOptions', opts: { caseSensitive: get(searchUi).caseSensitive, wholeWord } })
+}
+
+/**
+ * Replace only the active match, then advance. Builds one ordinary
+ * (addToHistory-default) transaction so @milkdown/plugin-listener's
+ * markdownUpdated fires -> onChange -> edit() -> dirty tracking, exactly
+ * like a normal edit; NEVER dispatch with addToHistory:false here (that
+ * would silently suppress markdownUpdated). tr.insertText inherits marks
+ * across the replaced range via $from.marksAcross, so replacing inside
+ * bold/italic keeps the mark. After the doc-changing dispatch, apply()'s
+ * no-meta branch recomputes matches against the same query and the SAME
+ * numeric activeIndex now names what was the next match -- i.e. replace
+ * advances for free (clamped at the end by compute()).
+ */
+export function replaceOne(replacement: string): void {
+  if (!activeView) return
+  const st = key.getState(activeView.state)
+  if (!st || st.activeIndex < 0) return
+  const m = st.matches[st.activeIndex]
+  activeView.dispatch(activeView.state.tr.insertText(replacement, m.from, m.to))
+  const next = key.getState(activeView.state)
+  if (next) syncUi(next)
+  scrollActiveIntoView()
+}
+
+/**
+ * Replace every match in a SINGLE transaction -- one dispatch, one undo
+ * step. Iterates matches BACK-TO-FRONT: each insertText only shifts
+ * positions above it, so every lower, not-yet-applied range stays valid
+ * against the growing transaction (matches from findMatches are within-run
+ * non-overlapping and document-ordered, so a plain reverse walk is safe).
+ * A front-to-back loop on one tr would invalidate every later stored
+ * position -- do not reorder this.
+ */
+export function replaceAll(replacement: string): void {
+  if (!activeView) return
+  const st = key.getState(activeView.state)
+  if (!st || st.matches.length === 0) return
+  const tr = activeView.state.tr
+  for (let i = st.matches.length - 1; i >= 0; i--) {
+    const m = st.matches[i]
+    tr.insertText(replacement, m.from, m.to) // mutates & returns `this`; marks inherited via marksAcross
+  }
+  activeView.dispatch(tr)
+  const next = key.getState(activeView.state)
+  if (next) syncUi(next)
 }

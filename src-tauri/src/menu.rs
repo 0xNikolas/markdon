@@ -26,6 +26,9 @@ pub fn build(app: &App) -> tauri::Result<Menu<Wry>> {
     let goto_line = MenuItemBuilder::with_id("menu:goto_line", "Go to Line…")
         .accelerator("CmdOrCtrl+L")
         .build(app)?;
+    let find_replace = MenuItemBuilder::with_id("menu:find_replace", "Find and Replace…")
+        .accelerator("CmdOrCtrl+Alt+F")
+        .build(app)?;
     let settings = MenuItemBuilder::with_id("menu:settings", "Settings…")
         .accelerator("CmdOrCtrl+,")
         .build(app)?;
@@ -58,6 +61,7 @@ pub fn build(app: &App) -> tauri::Result<Menu<Wry>> {
         .item(&PredefinedMenuItem::select_all(app, None)?)
         .separator()
         .item(&find)
+        .item(&find_replace)
         .separator()
         .item(&goto_line)
         .build()?;
@@ -91,6 +95,7 @@ mod tests {
             "CmdOrCtrl+Shift+S",
             "CmdOrCtrl+Shift+E",
             "CmdOrCtrl+F",
+            "CmdOrCtrl+Alt+F",
             "CmdOrCtrl+L",
             "CmdOrCtrl+,",
         ] {

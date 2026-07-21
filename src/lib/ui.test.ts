@@ -29,6 +29,7 @@ const {
   fileBreadcrumb,
   isInsideRoot,
   isGotoLineFallbackKey,
+  isFindReplaceFallbackKey,
 } = await import('./ui')
 
 describe('formatInt', () => {
@@ -231,6 +232,32 @@ describe('isGotoLineFallbackKey', () => {
   it('is false with neither modifier held', () => {
     expect(isGotoLineFallbackKey({ metaKey: false, ctrlKey: false, key: 'l' }, true)).toBe(false)
     expect(isGotoLineFallbackKey({ metaKey: false, ctrlKey: false, key: 'l' }, false)).toBe(false)
+  })
+})
+
+describe('isFindReplaceFallbackKey', () => {
+  it('requires altKey plus metaKey or ctrlKey, on KeyF', () => {
+    expect(isFindReplaceFallbackKey({ metaKey: true, ctrlKey: false, altKey: true, code: 'KeyF' })).toBe(true)
+    expect(isFindReplaceFallbackKey({ metaKey: false, ctrlKey: true, altKey: true, code: 'KeyF' })).toBe(true)
+  })
+
+  it('ignores every code but KeyF', () => {
+    expect(isFindReplaceFallbackKey({ metaKey: true, ctrlKey: false, altKey: true, code: 'KeyG' })).toBe(false)
+  })
+
+  it('requires altKey (plain Cmd+F is find, not find-and-replace)', () => {
+    expect(isFindReplaceFallbackKey({ metaKey: true, ctrlKey: false, altKey: false, code: 'KeyF' })).toBe(false)
+  })
+
+  it('requires metaKey or ctrlKey -- Alt+F alone does not fire', () => {
+    expect(isFindReplaceFallbackKey({ metaKey: false, ctrlKey: false, altKey: true, code: 'KeyF' })).toBe(false)
+  })
+
+  it('checks e.code, not e.key -- macOS Option+F types the florin sign (ƒ), not "f"', () => {
+    // Same physical KeyF regardless of what character Option produced.
+    expect(
+      isFindReplaceFallbackKey({ metaKey: true, ctrlKey: false, altKey: true, code: 'KeyF' }),
+    ).toBe(true)
   })
 })
 
