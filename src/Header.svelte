@@ -2,6 +2,8 @@
   import Icon from './Icon.svelte'
   import { workspaceName, fileBreadcrumb, split, toggleSplit, requestExport, openSettings } from './lib/ui'
   import { workspace } from './lib/workspace'
+  import wordmarkLight from './assets/brand/wordmark-light.svg?raw'
+  import wordmarkDark from './assets/brand/wordmark-dark.svg?raw'
 
   interface Props {
     path: string | null
@@ -19,9 +21,11 @@
   <div class="left">
     <!-- Native traffic lights overlay here (x=20 + 52px wide group). -->
     <span class="traffic-spacer" aria-hidden="true"></span>
-    <span class="brand">
-      <span class="chip">m&gt;<span class="caret"></span></span>
-      <span class="wordmark">markdon</span>
+    <!-- Two 120x28 wordmark variants ship in the DOM; [data-theme] on :root
+         toggles which is visible (CSS-only, no JS theme subscription). -->
+    <span class="brand" role="img" aria-label="markdon">
+      <span class="wordmark-light" aria-hidden="true">{@html wordmarkLight}</span>
+      <span class="wordmark-dark" aria-hidden="true">{@html wordmarkDark}</span>
     </span>
   </div>
   <div class="center">
@@ -74,28 +78,23 @@
   .brand {
     display: flex;
     align-items: center;
-    gap: 8px;
   }
-  .chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    background: #0f1729; /* fixed in BOTH themes (nodes 11:135 / 11:17) */
-    color: #ffffff;
-    border-radius: 4px;
-    padding: 4px 8px;
-    font: 700 13px var(--font-mono);
-    line-height: 1;
+  .brand :global(svg) {
+    display: block;
+    width: 120px;
+    height: 28px;
   }
-  .caret {
-    width: 4px;
-    height: 14px;
-    background: var(--accent);
-    border-radius: 1px;
+  /* Light-theme wordmark shows by default; dark-theme variant swaps in via
+     :root[data-theme='dark'] (see app.css). Both stay in the DOM so the swap
+     is pure CSS -- no JS theme subscription needed here. */
+  .wordmark-dark {
+    display: none;
   }
-  .wordmark {
-    font: 700 15px var(--font-ui);
-    color: var(--fg-strong);
+  :global(:root[data-theme='dark']) .wordmark-light {
+    display: none;
+  }
+  :global(:root[data-theme='dark']) .wordmark-dark {
+    display: block;
   }
   .center {
     display: flex;
