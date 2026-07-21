@@ -12,10 +12,14 @@ import {
   retargetPath,
   detachToUntitled,
   revertBuffer,
+  resetReadonlyMemory,
 } from './doc'
 
 describe('doc store', () => {
-  beforeEach(() => newDoc()) // reset (also bumps loadId, fine for isolation)
+  beforeEach(() => {
+    newDoc() // reset (also bumps loadId, fine for isolation)
+    resetReadonlyMemory()
+  })
 
   it('openDoc sets path and content, is clean, bumps loadId', () => {
     const before = get(doc).loadId
@@ -210,5 +214,84 @@ describe('detachToUntitled', () => {
     expect(s.savedContent).toBe('')
     expect(isDirty(s)).toBe(true)
     expect(s.loadId).toBe(loadId) // buffer preserved, no remount
+  })
+})
+
+describe('readonly memory (per-path, survives switching files)', () => {
+  beforeEach(() => {
+    newDoc()
+    resetReadonlyMemory()
+  })
+
+  it('re-opening a readonly-opened path without the flag stays readonly', () => {
+    // The Finder double-click bug: file opened readonly, user switches to
+    // another file via the sidebar (openDoc without the flag), then back —
+    // the readonly state must follow the path, not the call site.
+    openDoc('/tmp/a.md', '# A', true)
+    openDoc('/tmp/b.md', '# B')
+    openDoc('/tmp/a.md', '# A') // sidebar switch: no readonly arg
+    expect(get(doc).readonly).toBe(true)
+  })
+
+  it('a path never opened readonly opens editable', () => {
+    openDoc('/tmp/a.md', '# A')
+    expect(get(doc).readonly).toBe(false)
+  })
+
+  it('enableEditing clears the memory: the path re-opens editable', () => {
+    openDoc('/tmp/a.md', '# A', true)
+    enableEditing()
+    openDoc('/tmp/b.md', '# B')
+    openDoc('/tmp/a.md', '# A')
+    expect(get(doc).readonly).toBe(false)
+  })
+
+  it('enterReadonly (manual toggle) persists across a switch too', () => {
+    openDoc('/tmp/a.md', '# A')
+    enterReadonly()
+    openDoc('/tmp/b.md', '# B')
+    openDoc('/tmp/a.md', '# A')
+    expect(get(doc).readonly).toBe(true)
+  })
+
+  it('markSaved clears the memory (a completed write proves edit intent)', () => {
+    openDoc('/tmp/a.md', '# A', true)
+    markSaved('/tmp/a.md', '# A')
+    openDoc('/tmp/b.md', '# B')
+    openDoc('/tmp/a.md', '# A')
+    expect(get(doc).readonly).toBe(false)
+  })
+
+  it('revertBuffer clears the memory (a revert makes the buffer editable)', () => {
+    openDoc('/tmp/a.md', '# A', true)
+    enableEditing() // History revert is disabled while readonly; lift first
+    enterReadonly()
+    revertBuffer('# older A')
+    openDoc('/tmp/b.md', '# B')
+    openDoc('/tmp/a.md', '# A')
+    expect(get(doc).readonly).toBe(false)
+  })
+
+  it('retargetPath moves the memory with a renamed file', () => {
+    openDoc('/tmp/a.md', '# A', true)
+    retargetPath('/tmp/a.md', '/tmp/renamed.md')
+    openDoc('/tmp/b.md', '# B')
+    openDoc('/tmp/renamed.md', '# A')
+    expect(get(doc).readonly).toBe(true)
+  })
+
+  it('retargetPath moves the memory when an ancestor folder moves', () => {
+    openDoc('/ws/docs/a.md', '# A', true)
+    retargetPath('/ws/docs', '/ws/notes')
+    openDoc('/tmp/b.md', '# B')
+    openDoc('/ws/notes/a.md', '# A')
+    expect(get(doc).readonly).toBe(true)
+  })
+
+  it('detachToUntitled clears the memory for the detached path', () => {
+    openDoc('/tmp/a.md', '# A', true)
+    detachToUntitled()
+    openDoc('/tmp/a.md', '# A')
+    expect(get(doc).readonly).toBe(false)
   })
 })

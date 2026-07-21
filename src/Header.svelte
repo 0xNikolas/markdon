@@ -23,7 +23,7 @@
     <span class="traffic-spacer" aria-hidden="true"></span>
     <!-- Two 120x28 wordmark variants ship in the DOM; [data-theme] on :root
          toggles which is visible (CSS-only, no JS theme subscription). -->
-    <span class="brand" role="img" aria-label="markdon">
+    <span class="brand" role="img" aria-label="Markdon">
       <span class="wordmark-light" aria-hidden="true">{@html wordmarkLight}</span>
       <span class="wordmark-dark" aria-hidden="true">{@html wordmarkDark}</span>
     </span>

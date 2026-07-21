@@ -59,7 +59,7 @@ pub fn build(app: &App) -> tauri::Result<(Menu<Wry>, CheckMenuItem<Wry>)> {
         .accelerator("CmdOrCtrl+,")
         .build(app)?;
 
-    let app_menu = SubmenuBuilder::new(app, "markdon")
+    let app_menu = SubmenuBuilder::new(app, "Markdon")
         .item(&settings)
         .separator()
         .item(&PredefinedMenuItem::quit(app, None)?)

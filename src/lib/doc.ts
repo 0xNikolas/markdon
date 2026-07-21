@@ -14,13 +14,38 @@ const initial: DocState = { path: null, content: '', savedContent: '', readonly:
 
 export const doc: Writable<DocState> = writable(initial)
 
+/**
+ * Paths whose documents are currently read-only. Readonly is a property of the
+ * DOCUMENT, not of the open-call: a Finder-opened (or manually locked) file
+ * must stay readonly when the user switches away via the sidebar and back —
+ * call sites like handleOpenFile re-open with no flag and previously dropped
+ * it, silently unlocking the buffer (and letting the editor's normalization
+ * pass dirty an untouched file). Cleared by the same actions that lift
+ * readonly on the live doc: enableEditing, a completed write (markSaved),
+ * revertBuffer; moved by retargetPath alongside the file.
+ */
+const readonlyPaths = new Set<string>()
+
+/** Test support: forget all remembered readonly paths. */
+export function resetReadonlyMemory(): void {
+  readonlyPaths.clear()
+}
+
 /** Derived, never stored: the buffer differs from what we last synced to disk. */
 export function isDirty(s: Pick<DocState, 'content' | 'savedContent'>): boolean {
   return s.content !== s.savedContent
 }
 
 export function openDoc(path: string, content: string, readonly = false): void {
-  doc.update((s) => ({ path, content, savedContent: content, readonly, loadId: s.loadId + 1 }))
+  if (readonly) readonlyPaths.add(path)
+  const effective = readonly || readonlyPaths.has(path)
+  doc.update((s) => ({
+    path,
+    content,
+    savedContent: content,
+    readonly: effective,
+    loadId: s.loadId + 1,
+  }))
 }
 
 export function newDoc(): void {
@@ -38,11 +63,15 @@ export function edit(content: string): void {
  * ordinary save path, where readonly is already false).
  */
 export function markSaved(path: string, savedContent: string): void {
+  readonlyPaths.delete(path)
   doc.update((s) => ({ ...s, path, savedContent, readonly: false }))
 }
 
 export function enableEditing(): void {
-  doc.update((s) => ({ ...s, readonly: false }))
+  doc.update((s) => {
+    if (s.path !== null) readonlyPaths.delete(s.path)
+    return { ...s, readonly: false }
+  })
 }
 
 /**
@@ -55,7 +84,11 @@ export function enableEditing(): void {
  * defensive and no-ops if handed a dirty buffer anyway.
  */
 export function enterReadonly(): void {
-  doc.update((s) => (isDirty(s) ? s : { ...s, readonly: true }))
+  doc.update((s) => {
+    if (isDirty(s)) return s
+    if (s.path !== null) readonlyPaths.add(s.path)
+    return { ...s, readonly: true }
+  })
 }
 
 /**
@@ -67,7 +100,10 @@ export function enterReadonly(): void {
  * NEVER writes disk directly.
  */
 export function revertBuffer(content: string): void {
-  doc.update((s) => ({ ...s, content, readonly: false, loadId: s.loadId + 1 }))
+  doc.update((s) => {
+    if (s.path !== null) readonlyPaths.delete(s.path) // a revert makes the doc editable
+    return { ...s, content, readonly: false, loadId: s.loadId + 1 }
+  })
 }
 
 /**
@@ -80,6 +116,17 @@ export function revertBuffer(content: string): void {
  * workspace both react to it). A no-op when the open doc isn't affected.
  */
 export function retargetPath(oldPrefix: string, newPrefix: string): void {
+  // Move readonly memory alongside the file (exact match or subtree). Iterates
+  // the whole set, but it only holds currently-locked docs — a handful at most.
+  for (const p of [...readonlyPaths]) {
+    if (p === oldPrefix) {
+      readonlyPaths.delete(p)
+      readonlyPaths.add(newPrefix)
+    } else if (p.startsWith(oldPrefix + '/')) {
+      readonlyPaths.delete(p)
+      readonlyPaths.add(newPrefix + p.slice(oldPrefix.length))
+    }
+  }
   doc.update((s) => {
     if (s.path === null) return s
     if (s.path === oldPrefix) return { ...s, path: newPrefix }
@@ -100,5 +147,8 @@ export function retargetPath(oldPrefix: string, newPrefix: string): void {
  * editor keeps the live buffer rather than remounting empty.
  */
 export function detachToUntitled(): void {
-  doc.update((s) => ({ ...s, path: null, savedContent: '' }))
+  doc.update((s) => {
+    if (s.path !== null) readonlyPaths.delete(s.path) // the path no longer exists on disk
+    return { ...s, path: null, savedContent: '' }
+  })
 }
