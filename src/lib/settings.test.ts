@@ -62,6 +62,19 @@ describe('parseSettings', () => {
     expect(parseSettings(JSON.stringify({ version: 1, exportFormat: 'pdf' })).exportFormat).toBe('pdf')
   })
 
+  it('defaults openMode to tab', () => {
+    expect(parseSettings(null).openMode).toBe('tab')
+    expect(DEFAULTS.openMode).toBe('tab')
+  })
+
+  it('rejects an unknown openMode value, falling back to tab', () => {
+    expect(parseSettings(JSON.stringify({ version: 1, openMode: 'popup' })).openMode).toBe('tab')
+  })
+
+  it('round-trips openMode: window', () => {
+    expect(parseSettings(JSON.stringify({ version: 1, openMode: 'window' })).openMode).toBe('window')
+  })
+
   it('falls back to defaults when version is not 1 (migration stub)', () => {
     expect(parseSettings(JSON.stringify({ version: 2, theme: 'dark' }))).toEqual(DEFAULTS)
   })
@@ -85,6 +98,7 @@ describe('parseSettings', () => {
       tabWidth: 4,
       autoCloseBrackets: false,
       exportFormat: 'md',
+      openMode: 'window',
     }
     expect(parseSettings(JSON.stringify(full))).toEqual(full)
   })

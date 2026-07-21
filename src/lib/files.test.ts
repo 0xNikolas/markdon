@@ -5,12 +5,14 @@ const invoke = vi.fn()
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
 
 import { doc, newDoc, edit, isDirty, openDoc } from './doc'
-import { open, save, saveAs, openPath } from './files'
+import { open, save, saveAs, openPath, openInPreferredTarget } from './files'
 import { errorMessage } from './errors'
+import { openList } from './openList'
 
 beforeEach(() => {
   invoke.mockReset()
   newDoc()
+  openList.set([])
 })
 
 describe('openPath', () => {
@@ -29,6 +31,25 @@ describe('openPath', () => {
     invoke.mockRejectedValue('nope')
     await openPath('/tmp/missing.md')
     expect(get(errorMessage)).toContain('Could not open file')
+  })
+
+  it('adds the path to the open list on success', async () => {
+    invoke.mockResolvedValue('# From association')
+    await openPath('/tmp/assoc.md')
+    expect(get(openList)).toEqual(['/tmp/assoc.md'])
+  })
+
+  it('re-opening an already-listed path does not duplicate it', async () => {
+    invoke.mockResolvedValue('# body')
+    await openPath('/tmp/a.md')
+    await openPath('/tmp/a.md')
+    expect(get(openList)).toEqual(['/tmp/a.md'])
+  })
+
+  it('leaves the open list untouched when the read fails', async () => {
+    invoke.mockRejectedValue('nope')
+    await openPath('/tmp/missing.md')
+    expect(get(openList)).toEqual([])
   })
 })
 
@@ -49,6 +70,20 @@ describe('open', () => {
     invoke.mockResolvedValue(null)
     await open()
     expect(get(doc).path).toBeNull()
+  })
+
+  it('adds the picked path to the open list', async () => {
+    invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === 'open_file_dialog' ? { path: '/tmp/a.md', content: '# Loaded' } : undefined,
+    )
+    await open()
+    expect(get(openList)).toEqual(['/tmp/a.md'])
+  })
+
+  it('leaves the open list untouched when the dialog is cancelled', async () => {
+    invoke.mockResolvedValue(null)
+    await open()
+    expect(get(openList)).toEqual([])
   })
 })
 
@@ -105,6 +140,24 @@ describe('saveAs', () => {
     invoke.mockRejectedValue('no display server')
     await saveAs()
     expect(get(errorMessage)).toContain('Could not save file')
+  })
+
+  it('adds the newly saved-as path to the open list', async () => {
+    newDoc()
+    edit('draft')
+    invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === 'save_file_dialog' ? '/tmp/new.md' : undefined,
+    )
+    await saveAs()
+    expect(get(openList)).toEqual(['/tmp/new.md'])
+  })
+})
+
+describe('openInPreferredTarget', () => {
+  it('Stage 1: always delegates to the caller-supplied in-place opener', () => {
+    const opened: string[] = []
+    openInPreferredTarget('/tmp/a.md', (p) => opened.push(p))
+    expect(opened).toEqual(['/tmp/a.md'])
   })
 })
 

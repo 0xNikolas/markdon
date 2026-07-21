@@ -5,7 +5,8 @@
   import { getCurrentWindow } from '@tauri-apps/api/window'
   import { get } from 'svelte/store'
   import { doc, edit, newDoc, isDirty, enableEditing } from './lib/doc'
-  import { open, save, saveAs, openPath } from './lib/files'
+  import { open, save, saveAs, openPath, openInPreferredTarget } from './lib/files'
+  import { openList, removeOpen, neighbourAfterClose } from './lib/openList'
   import { conflict, reloadFromDisk, dismissConflict, initFileSync } from './lib/fileSync'
   import Editor from './Editor.svelte'
   import SplitView from './SplitView.svelte'
@@ -35,6 +36,33 @@
   function guarded(action: () => void) {
     if (isDirty(get(doc))) pendingAction = action
     else action()
+  }
+
+  // Single entry point for opening a path from the sidebar (Open Files strip
+  // or Workspace tree alike) -- routes through openInPreferredTarget (task
+  // 21's tab/window choke-point; Stage 1 always opens in-place) wrapping the
+  // existing guarded openPath. A click on the already-active row is a no-op.
+  function handleOpenFile(path: string) {
+    if (path === get(doc).path) return
+    openInPreferredTarget(path, (p) => guarded(() => openPath(p)))
+  }
+
+  // Sidebar Open Files close affordance. A non-active entry can never be
+  // dirty (switching away from a file always resolves the dirty-guard
+  // first), so closing it is a bare list removal. Closing the active entry
+  // still runs the guard, then switches to the neighbour computed BEFORE
+  // removal (previous, else next, else null -> falls back to newDoc()).
+  function onCloseFile(path: string) {
+    if (path !== get(doc).path) {
+      openList.update((l) => removeOpen(l, path))
+      return
+    }
+    guarded(() => {
+      const next = neighbourAfterClose(get(openList), path, get(doc).path)
+      openList.update((l) => removeOpen(l, path))
+      if (next === null) newDoc()
+      else openPath(next)
+    })
   }
 
   // Open a file the OS handed us via a .md file association (Finder double-click).
@@ -162,7 +190,9 @@
          point beyond the File menu (sidebar-fix, task 12). -->
     <Sidebar
       activePath={$doc.path}
-      onOpenFile={(p) => { if (p !== $doc.path) guarded(() => openPath(p)) }}
+      openFiles={$openList}
+      onOpenFile={handleOpenFile}
+      onCloseFile={onCloseFile}
       onNewFile={() => guarded(() => newDoc())}
     />
     <div class="content">

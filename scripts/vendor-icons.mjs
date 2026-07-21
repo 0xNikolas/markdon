@@ -37,6 +37,7 @@ const outDir = join(here, '../src/assets/icons')
 // Only the glyphs consumed by the app (Header, SettingsModal, Sidebar). Keep
 // names aligned with the brand design system.
 const ICONS = [
+  'app-window',
   'bold',
   'chevron-down',
   'chevron-right',
@@ -54,6 +55,7 @@ const ICONS = [
   'link-2',
   'settings',
   'split-square-vertical',
+  'x',
 ]
 
 // Stable single-line opening tag (viewBox first) — no fixed width/height, no

@@ -23,6 +23,14 @@ export interface Settings {
   tabWidth: 2 | 4
   autoCloseBrackets: boolean
   exportFormat: 'html' | 'md' | 'pdf'
+  /**
+   * Where a newly opened file lands (task 21). 'tab' = MODE A, add to the
+   * sidebar's Open Files list in this window (today's behavior). 'window' =
+   * MODE B, spawn a second app window — Stage 2 only; until it lands,
+   * `openInPreferredTarget` (files.ts) falls back to in-place for both
+   * values, so the preference is safe to expose early.
+   */
+  openMode: 'tab' | 'window'
 }
 
 export type SettingKey = keyof Omit<Settings, 'version'>
@@ -40,6 +48,7 @@ export const DEFAULTS: Settings = {
   tabWidth: 2,
   autoCloseBrackets: true,
   exportFormat: 'html',
+  openMode: 'tab',
 }
 
 const clampFontSize = (n: unknown): number =>
@@ -76,6 +85,7 @@ export function parseSettings(raw: string | null): Settings {
     tabWidth: pick(o.tabWidth, [2, 4] as const, DEFAULTS.tabWidth),
     autoCloseBrackets: typeof o.autoCloseBrackets === 'boolean' ? o.autoCloseBrackets : DEFAULTS.autoCloseBrackets,
     exportFormat: pick(o.exportFormat, ['html', 'md', 'pdf'] as const, DEFAULTS.exportFormat),
+    openMode: pick(o.openMode, ['tab', 'window'] as const, DEFAULTS.openMode),
   }
 }
 

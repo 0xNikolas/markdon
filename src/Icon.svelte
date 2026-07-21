@@ -1,4 +1,5 @@
 <script lang="ts" module>
+  import appWindow from './assets/icons/app-window.svg?raw'
   import chevronDown from './assets/icons/chevron-down.svg?raw'
   import chevronRight from './assets/icons/chevron-right.svg?raw'
   import ellipsis from './assets/icons/ellipsis.svg?raw'
@@ -13,8 +14,10 @@
   import layoutGrid from './assets/icons/layout-grid.svg?raw'
   import settings from './assets/icons/settings.svg?raw'
   import splitSquareVertical from './assets/icons/split-square-vertical.svg?raw'
+  import x from './assets/icons/x.svg?raw'
 
   const icons = {
+    'app-window': appWindow,
     'chevron-down': chevronDown,
     'chevron-right': chevronRight,
     ellipsis,
@@ -29,6 +32,7 @@
     'layout-grid': layoutGrid,
     settings,
     'split-square-vertical': splitSquareVertical,
+    x,
   } as const
 
   export type IconName = keyof typeof icons

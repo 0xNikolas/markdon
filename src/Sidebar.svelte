@@ -30,16 +30,17 @@
     pasteTargetDir,
     folderPaths,
   } from './lib/fileops'
-  import { isInsideRoot } from './lib/ui'
   import { focusTrap } from './lib/focusTrap'
   import { portal } from './lib/portal'
 
   interface Props {
     activePath: string | null
+    openFiles: string[]
     onOpenFile: (path: string) => void
+    onCloseFile: (path: string) => void
     onNewFile: () => void
   }
-  let { activePath, onOpenFile, onNewFile }: Props = $props()
+  let { activePath, openFiles, onOpenFile, onCloseFile, onNewFile }: Props = $props()
 
   // Collapse state keyed by dir path. Absent/false = expanded (matches the
   // design's open folders); toggled per folder, local to this component.
@@ -178,15 +179,14 @@
     collapsed[d.path] = !collapsed[d.path]
   }
 
-  // A file opened without (or outside) a workspace grant still has an open
-  // doc but no tree row to show it in -- surface it as its own "Open File"
-  // section (VS Code Open Editors-style) instead of leaving the sidebar
-  // silent about what's on screen. Never expands the filesystem allowlist:
-  // this only reads $workspace.root, already granted by openWorkspace().
-  let showOpenFile = $derived(
-    activePath !== null && ($workspace.root === null || !isInsideRoot(activePath, $workspace.root)),
-  )
-  let openFileName = $derived(activePath?.split('/').filter(Boolean).pop() ?? activePath ?? '')
+  // Whether any document is open at all -- used below to choose between the
+  // quiet "Open Folder" row (a doc is open, no workspace tree) and the full
+  // empty-state panel (nothing open anywhere).
+  let docOpen = $derived(activePath !== null)
+
+  function basename(path: string): string {
+    return path.split('/').filter(Boolean).pop() ?? path
+  }
 </script>
 
 {#snippet fileRow(f: WorkspaceFile)}
@@ -227,16 +227,38 @@
 {/snippet}
 
 <nav class="sidebar" aria-label="Workspace">
-  {#if showOpenFile}
+  {#if openFiles.length > 0}
+    <!-- VS Code "Open Editors"-style strip: every opened document, in- or
+         out-of-workspace, so there's one consistent surface for "what's on
+         screen" rather than the tree alone. Paths-only (task 21 Stage 1) --
+         the single-doc model is unchanged, this is just a switch list. -->
     <div class="header">
-      <span class="label">Open File</span>
+      <span class="label">Open Files</span>
     </div>
     <div class="tree">
-      <div class="file-row active static" aria-current="true">
-        <span class="active-bar"></span>
-        <Icon name={fileIcon(openFileName)} size={16} />
-        <span class="name">{openFileName}</span>
-      </div>
+      {#each openFiles as path (path)}
+        <!-- Two sibling buttons, not a nested button-in-button: the row opens
+             the file, the small trailing button closes it (stopPropagation
+             so a close click never also switches to it first). -->
+        <div class="open-file-row" class:active={path === activePath}>
+          <button
+            class="open-file-main"
+            aria-current={path === activePath ? 'true' : undefined}
+            onclick={() => onOpenFile(path)}
+          >
+            <span class="active-bar"></span>
+            <Icon name={fileIcon(basename(path))} size={16} />
+            <span class="name">{basename(path)}</span>
+          </button>
+          <button
+            class="close-file"
+            aria-label="Close {basename(path)}"
+            onclick={(e) => { e.stopPropagation(); onCloseFile(path) }}
+          >
+            <Icon name="x" size={12} />
+          </button>
+        </div>
+      {/each}
     </div>
   {/if}
   <div class="header">
@@ -270,7 +292,7 @@
       {#each $workspace.tree.dirs as d (d.path)}{@render dirRows(d)}{/each}
       {#each $workspace.tree.files as f (f.path)}{@render fileRow(f)}{/each}
     </div>
-  {:else if showOpenFile}
+  {:else if docOpen}
     <!-- A file is open: the big empty-state panel would just shout at a user
          who is already reading a document, so offer a quiet row instead. -->
     <button class="open-folder-row" onclick={openWorkspace}>
@@ -455,11 +477,11 @@
   /* Non-markdown rows (.nonmd) are now selectable buttons (focus/cut/copy/
      move/delete) but never open a document; they read as slightly muted via
      their file-text icon. Hover/active applies to every non-open row. */
-  .file-row:not(.active):not(.static):hover {
+  .file-row:not(.active):hover {
     background: var(--surface-hover);
     color: var(--fg-secondary);
   }
-  .file-row:not(.active):not(.static):active {
+  .file-row:not(.active):active {
     background: var(--surface-active);
   }
   .file-row.active {
@@ -470,11 +492,6 @@
   .file-row.active:hover,
   .file-row.active:active {
     background: var(--accent-tint-strong);
-  }
-  /* The "Open File" row is not a button -- it's already the open doc, so
-     clicking it is a no-op. Same active styling, but no pointer affordance. */
-  .file-row.static {
-    cursor: default;
   }
   /* Selected-but-not-open rows (multi-select via Select All, or a focused
      folder/non-md file): a quiet surface fill distinct from the accent-tinted
@@ -506,6 +523,75 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* Open Files row: two sibling buttons (open-file-main + close-file) inside
+     a plain div, not a nested button-in-button. Matches .file-row's look but
+     the row itself carries no click handler -- only its children do. */
+  .open-file-row {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    border-radius: 6px;
+    transition: background-color 0.1s ease;
+  }
+  .open-file-row:hover {
+    background: var(--surface-hover);
+  }
+  .open-file-row.active {
+    background: var(--accent-tint);
+  }
+  .open-file-row.active:hover {
+    background: var(--accent-tint-strong);
+  }
+  .open-file-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+    padding: 8px 4px 8px 16px;
+    border: 0;
+    background: none;
+    color: var(--fg-muted);
+    font: 400 13px var(--font-ui);
+    cursor: pointer;
+    text-align: left;
+  }
+  .open-file-row.active .open-file-main {
+    color: var(--fg-strong);
+    font-weight: 600;
+  }
+  .open-file-row.active .open-file-main .active-bar {
+    background: var(--accent);
+  }
+  /* Hidden until the row is hovered/focused, but always in the tab order
+     (keyboard-reachable per the close-affordance requirement). */
+  .close-file {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    margin-right: 8px;
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    background: none;
+    color: var(--fg-faint);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.1s ease, background-color 0.1s ease, color 0.1s ease;
+  }
+  .open-file-row:hover .close-file,
+  .open-file-row:focus-within .close-file,
+  .close-file:focus-visible {
+    opacity: 1;
+  }
+  .close-file:hover {
+    background: var(--surface-active);
+    color: var(--fg-secondary);
   }
 
   /* Ghost panel shown when no workspace is open -- discoverable entry point

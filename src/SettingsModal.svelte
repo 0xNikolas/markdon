@@ -7,15 +7,20 @@
   import { APP_SHORTCUTS } from './lib/shortcuts'
   import { focusTrap } from './lib/focusTrap'
 
-  type TabId = 'editor' | 'appearance' | 'export' | 'shortcuts'
-  const TABS: { id: TabId; label: string; icon: 'file-pen' | 'layout-grid' | 'file-up' | 'keyboard' }[] = [
+  type TabId = 'general' | 'editor' | 'appearance' | 'export' | 'shortcuts'
+  const TABS: {
+    id: TabId
+    label: string
+    icon: 'app-window' | 'file-pen' | 'layout-grid' | 'file-up' | 'keyboard'
+  }[] = [
+    { id: 'general', label: 'General', icon: 'app-window' },
     { id: 'editor', label: 'Editor', icon: 'file-pen' },
     { id: 'appearance', label: 'Appearance', icon: 'layout-grid' },
     { id: 'export', label: 'Export Options', icon: 'file-up' },
     { id: 'shortcuts', label: 'Shortcuts', icon: 'keyboard' },
   ]
 
-  let activeTab = $state<TabId>('editor')
+  let activeTab = $state<TabId>('general')
   let version = $state('')
   let tabRefs: (HTMLButtonElement | undefined)[] = []
 
@@ -66,6 +71,10 @@
     { value: 'html', label: 'HTML' },
     { value: 'md', label: 'Markdown' },
     { value: 'pdf', label: 'PDF' },
+  ]
+  const OPEN_MODES: { value: Settings['openMode']; label: string }[] = [
+    { value: 'tab', label: 'Open in same window' },
+    { value: 'window', label: 'Open in new window' },
   ]
 </script>
 
@@ -138,7 +147,27 @@
           <h2 id="settings-title">Preferences</h2>
         </div>
 
-      {#if activeTab === 'editor'}
+      {#if activeTab === 'general'}
+        <div id="panel-general" role="tabpanel" aria-labelledby="tab-general" class="panel">
+          <section class="section">
+            <h3>Opening Files</h3>
+            <div class="field-row">
+              <span class="label">New files</span>
+              <div class="selector">
+                <select
+                  value={$settings.openMode}
+                  onchange={(e) => updateSetting('openMode', e.currentTarget.value as Settings['openMode'])}
+                >
+                  {#each OPEN_MODES as m (m.value)}
+                    <option value={m.value}>{m.label}</option>
+                  {/each}
+                </select>
+                <span class="chev"><Icon name="chevron-down" size={10} /></span>
+              </div>
+            </div>
+          </section>
+        </div>
+      {:else if activeTab === 'editor'}
         <div id="panel-editor" role="tabpanel" aria-labelledby="tab-editor" class="panel">
           <section class="section">
             <h3>Typography</h3>
