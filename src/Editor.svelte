@@ -21,6 +21,9 @@
   import './editor-theme.css' // must come after the Crepe theme to override its fonts
   import { searchPlugin } from './lib/searchPlugin'
   import { registerHtmlSource, unregisterHtmlSource } from './lib/export'
+  import boldIcon from './assets/icons/bold.svg?raw'
+  import italicIcon from './assets/icons/italic.svg?raw'
+  import linkIcon from './assets/icons/link-2.svg?raw'
 
   interface Props {
     initialContent: string
@@ -41,7 +44,13 @@
   let destroyed = false
 
   onMount(async () => {
-    crepe = new Crepe({ root: el, defaultValue: initialContent })
+    crepe = new Crepe({
+      root: el,
+      defaultValue: initialContent,
+      featureConfigs: {
+        [Crepe.Feature.Toolbar]: { boldIcon, italicIcon, linkIcon },
+      },
+    })
     crepe.editor.use(searchPlugin) // before create(): the editor exists pre-create (CrepeBuilder ctor)
     crepe.on((listener) => {
       listener.markdownUpdated((_ctx, markdown) => onChange(markdown))

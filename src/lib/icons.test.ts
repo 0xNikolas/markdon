@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 const iconsDir = join(dirname(fileURLToPath(import.meta.url)), '../assets/icons')
 
 const EXPECTED = [
+  'bold.svg',
   'chevron-down.svg',
   'chevron-right.svg',
   'file-code.svg',
@@ -19,8 +20,10 @@ const EXPECTED = [
   'file-up.svg',
   'folder-open.svg',
   'folder.svg',
+  'italic.svg',
   'keyboard.svg',
   'layout-grid.svg',
+  'link-2.svg',
   'settings.svg',
   'split-square-vertical.svg',
 ]

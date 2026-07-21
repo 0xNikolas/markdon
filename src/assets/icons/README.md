@@ -25,31 +25,38 @@ heavy). `src/lib/icons.test.ts` is the regression gate for this contract.
 
 ## Currently vendored (consumed by the UI)
 
-`chevron-down`, `chevron-right`, `file-code`, `file-pen`, `file-plus`,
-`file-text`, `file-up`, `folder`, `folder-open`, `keyboard`, `layout-grid`,
-`settings`, `split-square-vertical`.
+`bold`, `chevron-down`, `chevron-right`, `file-code`, `file-pen`, `file-plus`,
+`file-text`, `file-up`, `folder`, `folder-open`, `italic`, `keyboard`,
+`layout-grid`, `link-2`, `settings`, `split-square-vertical`.
 
 Sidebar file-type mapping (`src/lib/workspace.ts`'s `fileIcon`): markdown
 files get `file-code` (matches the design's Icon Set); every other file
 shown for context gets the generic `file-text` so it doesn't read as code.
 Folder rows swap `folder` / `folder-open` on expand via `folderIcon`.
 
+`bold` / `italic` / `link-2` are the brand Icon Set's formatting glyphs; they
+override the Crepe selection toolbar's built-in bold/italic/link icons (see
+`src/Editor.svelte`, wired via `Crepe`'s `featureConfigs`) rather than going
+through `src/Icon.svelte` — the toolbar consumes each as a raw SVG string
+(`?raw` import) instead of an `<Icon name>` component instance.
+
 To add one: append its lucide name to the `ICONS` array in
-`scripts/vendor-icons.mjs`, re-run `bun run vendor:icons`, add the import +
-entry in `src/Icon.svelte`, and extend `EXPECTED` in `src/lib/icons.test.ts`.
-Do not vendor glyphs nothing consumes (YAGNI — no dead assets).
+`scripts/vendor-icons.mjs`, re-run `bun run vendor:icons`, wire it into its
+consumer (`src/Icon.svelte` for inline UI glyphs, or a raw `?raw` import for
+library-level overrides like the Crepe toolbar), and extend `EXPECTED` in
+`src/lib/icons.test.ts`. Do not vendor glyphs nothing consumes (YAGNI — no
+dead assets).
 
 ## Brand-identity icon set — reserved for future markdown actions
 
 The brand-identity Figma page (Icon Set section 04) defines a toolbar glyph set
-for future markdown-editing actions. When those actions are built, vendor the
-matching lucide names below (all confirmed present in `lucide-static`):
+for markdown-editing actions. `bold`, `italic`, and `link-2` are now shipped
+(see above — they override the Crepe selection toolbar's icons). The
+remaining glyphs below have no current UI counterpart; vendor them when their
+actions are built (all confirmed present in `lucide-static`):
 
 | Design action        | Lucide name                     |
 | -------------------- | ------------------------------- |
-| Bold                 | `bold`                          |
-| Italic               | `italic`                        |
-| Link                 | `link-2`                        |
 | Heading              | `heading`                       |
 | List                 | `list`                          |
 | Preview / visibility | `eye`                           |

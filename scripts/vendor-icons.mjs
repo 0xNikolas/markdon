@@ -24,6 +24,7 @@ const outDir = join(here, '../src/assets/icons')
 // Only the glyphs consumed by the app (Header, SettingsModal, Sidebar). Keep
 // names aligned with the brand design system.
 const ICONS = [
+  'bold',
   'chevron-down',
   'chevron-right',
   'file-code',
@@ -33,8 +34,10 @@ const ICONS = [
   'file-up',
   'folder',
   'folder-open',
+  'italic',
   'keyboard',
   'layout-grid',
+  'link-2',
   'settings',
   'split-square-vertical',
 ]
