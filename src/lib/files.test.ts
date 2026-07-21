@@ -8,11 +8,13 @@ import { doc, newDoc, edit, isDirty, openDoc } from './doc'
 import { open, save, saveAs, openPath, openInPreferredTarget } from './files'
 import { errorMessage } from './errors'
 import { openList } from './openList'
+import { settings, DEFAULTS } from './settings'
 
 beforeEach(() => {
   invoke.mockReset()
   newDoc()
   openList.set([])
+  settings.set({ ...DEFAULTS }) // openMode: 'tab' (MODE A) unless a test opts in
 })
 
 describe('openPath', () => {
@@ -154,10 +156,42 @@ describe('saveAs', () => {
 })
 
 describe('openInPreferredTarget', () => {
-  it('Stage 1: always delegates to the caller-supplied in-place opener', () => {
+  it("MODE A ('tab'): delegates to the caller-supplied in-place opener", () => {
     const opened: string[] = []
     openInPreferredTarget('/tmp/a.md', (p) => opened.push(p))
     expect(opened).toEqual(['/tmp/a.md'])
+    expect(invoke).not.toHaveBeenCalledWith('open_document_window', expect.anything())
+  })
+
+  it("MODE B ('window'): spawns a new window and does NOT open in place", () => {
+    settings.set({ ...DEFAULTS, openMode: 'window' })
+    invoke.mockResolvedValue(undefined)
+    const opened: string[] = []
+    openInPreferredTarget('/tmp/a.md', (p) => opened.push(p))
+    expect(invoke).toHaveBeenCalledWith('open_document_window', { path: '/tmp/a.md' })
+    expect(opened).toEqual([]) // focused window keeps its own doc
+  })
+
+  it("MODE B: falls back to opening in place if spawning the window fails", async () => {
+    settings.set({ ...DEFAULTS, openMode: 'window' })
+    errorMessage.set(null)
+    invoke.mockRejectedValue('no window config to clone')
+    const opened: string[] = []
+    openInPreferredTarget('/tmp/a.md', (p) => opened.push(p))
+    await vi.waitFor(() => expect(opened).toEqual(['/tmp/a.md']))
+    expect(get(errorMessage)).toContain('Could not open a new window')
+  })
+
+  it("MODE B: File > Open routes the picked file to a new window", async () => {
+    settings.set({ ...DEFAULTS, openMode: 'window' })
+    invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === 'open_file_dialog' ? { path: '/tmp/a.md', content: '# Loaded' } : undefined,
+    )
+    await open()
+    expect(invoke).toHaveBeenCalledWith('open_document_window', { path: '/tmp/a.md' })
+    // The focused window's own doc is untouched (the new window loads it).
+    expect(get(doc).path).toBeNull()
+    expect(get(openList)).toEqual([])
   })
 })
 

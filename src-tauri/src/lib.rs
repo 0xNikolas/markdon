@@ -8,10 +8,11 @@ mod pdf;
 mod watcher;
 mod workspace;
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use tauri::Emitter;
-use tauri::Manager;
+use tauri::{AppHandle, Emitter, EventTarget, Manager, State, WebviewWindow};
 #[cfg(desktop)]
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
@@ -21,16 +22,122 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 #[derive(Default)]
 pub struct OpenedFiles(pub Mutex<Vec<String>>);
 
+/// The label of the window that currently has focus, self-tracked from
+/// `WindowEvent::Focused(true)` (the stable API — `get_focused_window()` is gated
+/// behind Tauri's `unstable` feature, deliberately avoided). MODE B routes app-
+/// global macOS menu commands to this window, since an app menu bar carries no
+/// window identity of its own.
+#[derive(Default)]
+pub struct FocusedWindow(pub Mutex<Option<String>>);
+
+/// Files assigned to a spawned document window but not yet consumed by it. The
+/// spawner stashes `label -> path` here; the new window's frontend drains its own
+/// entry on mount via `take_window_file`.
+#[derive(Default)]
+pub struct PendingWindowFile(pub Mutex<HashMap<String, String>>);
+
+/// Monotonic counter for spawned-window labels (`doc-1`, `doc-2`, …). The
+/// `doc-*` prefix is load-bearing: capabilities/default.json grants the default
+/// permission set to `doc-*`, so any future spawned window MUST keep this prefix
+/// or it will silently lack IPC/event permissions.
+static NEXT_WIN: AtomicU64 = AtomicU64::new(1);
+
+/// Which window label should receive an app-global menu command: the focused
+/// one, falling back to `main` when nothing is tracked as focused (e.g. a menu
+/// clicked while a native dialog owns focus). Pure so it is unit-testable
+/// without a GUI.
+fn menu_target(focused: &Option<String>) -> String {
+    focused.clone().unwrap_or_else(|| "main".into())
+}
+
+/// Per-window setup applied to BOTH the config `main` window and every spawned
+/// `doc-*` window: self-tracks focus into `FocusedWindow`, and handles close
+/// requests per-window (routing `window:close-requested` to the closing window
+/// only, so one window's close prompt never fires in another).
+fn wire_window(window: &WebviewWindow, app: &AppHandle) {
+    let label = window.label().to_string();
+
+    // Seed focus on creation so a menu command issued before the first
+    // Focused(true) event still has a best-effort target.
+    if window.is_focused().unwrap_or(false) {
+        *app.state::<FocusedWindow>().0.lock().unwrap() = Some(label.clone());
+    }
+
+    let app_focus = app.clone();
+    let lbl_focus = label.clone();
+    let app_close = app.clone();
+    let lbl_close = label;
+    window.on_window_event(move |event| match event {
+        tauri::WindowEvent::Focused(true) => {
+            *app_focus.state::<FocusedWindow>().0.lock().unwrap() = Some(lbl_focus.clone());
+        }
+        tauri::WindowEvent::CloseRequested { api, .. } => {
+            api.prevent_close();
+            // Belt-and-braces: the plugin normally persists on RunEvent::Exit,
+            // which still fires after the frontend calls window.destroy(), but
+            // saving here makes persistence independent of exit handling.
+            #[cfg(desktop)]
+            let _ = app_close.save_window_state(StateFlags::all());
+            // Route to the closing window ONLY (+ carry its label in the payload
+            // as defensive insurance the frontend can filter on).
+            let _ = app_close.emit_to(
+                EventTarget::webview_window(&lbl_close),
+                "window:close-requested",
+                serde_json::json!({ "target": lbl_close }),
+            );
+        }
+        _ => {}
+    });
+}
+
 /// Drain and return any pending file-open paths. The frontend calls this on mount
 /// (cold start) and whenever a `file:opened` event fires (already-running app).
 /// Draining guarantees each path is delivered exactly once regardless of ordering.
 #[tauri::command]
-fn take_opened_files(state: tauri::State<'_, OpenedFiles>) -> Vec<String> {
+fn take_opened_files(state: State<'_, OpenedFiles>) -> Vec<String> {
     let mut files = state.0.lock().unwrap();
     std::mem::take(&mut *files)
 }
 
-/// Queue the given file URLs and ping the frontend to drain them.
+/// Drain the file assigned to a spawned window (set by `open_document_window`).
+/// Returns `None` once consumed, so a re-mount can't re-open a stale path.
+#[tauri::command]
+fn take_window_file(label: String, pending: State<'_, PendingWindowFile>) -> Option<String> {
+    pending.0.lock().unwrap().remove(&label)
+}
+
+/// Spawn a second window of the SAME app to host `path` (MODE B). The path must
+/// already be granted (it comes from a dialog pick, OS open, or an already-open
+/// entry — all of which grant it), so this only re-`ensure`s and never widens the
+/// allowlist on its own. The new window inherits titleBarStyle/size from
+/// tauri.conf.json via `from_config`; its frontend drains `path` on mount.
+#[tauri::command]
+fn open_document_window(
+    path: String,
+    app: AppHandle,
+    allowed: State<'_, allowlist::AllowedPaths>,
+    pending: State<'_, PendingWindowFile>,
+) -> Result<(), String> {
+    allowed.ensure(&path)?;
+    let label = format!("doc-{}", NEXT_WIN.fetch_add(1, Ordering::Relaxed));
+    pending.0.lock().unwrap().insert(label.clone(), path);
+    let mut cfg = app
+        .config()
+        .app
+        .windows
+        .first()
+        .cloned()
+        .ok_or_else(|| "no window config to clone".to_string())?;
+    cfg.label = label.clone();
+    let window = tauri::WebviewWindowBuilder::from_config(&app, &cfg)
+        .map_err(|e| e.to_string())?
+        .build()
+        .map_err(|e| e.to_string())?;
+    wire_window(&window, &app);
+    Ok(())
+}
+
+/// Queue the given file URLs and ping the focused window to drain them.
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 fn queue_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
     let paths: Vec<String> = urls
@@ -49,13 +156,25 @@ fn queue_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
     if let Some(state) = app.try_state::<OpenedFiles>() {
         state.0.lock().unwrap().extend(paths);
     }
-    let _ = app.emit("file:opened", ());
+    // Ping the focused window (which decides tab-vs-window per its own
+    // openMode preference). Fall back to `main` when nothing is focused yet.
+    let focused = app
+        .try_state::<FocusedWindow>()
+        .and_then(|f| f.0.lock().unwrap().clone());
+    let target = menu_target(&focused);
+    let _ = app.emit_to(
+        EventTarget::webview_window(&target),
+        "file:opened",
+        serde_json::json!({ "target": target }),
+    );
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
         .manage(OpenedFiles::default())
+        .manage(FocusedWindow::default())
+        .manage(PendingWindowFile::default())
         .manage(watcher::FileWatcher::default())
         .manage(allowlist::AllowedPaths::default())
         .manage(pdf::PendingPrintHtml::default())
@@ -91,23 +210,28 @@ pub fn run() {
             let menu = menu::build(app)?;
             app.set_menu(menu)?;
             app.on_menu_event(|app_handle, event| {
-                // Menu item ids ARE the event names (e.g. "menu:open").
-                let _ = app_handle.emit(event.id().0.as_str(), ());
+                // Menu item ids ARE the event names (e.g. "menu:open"). An app-
+                // global macOS menu bar carries no window identity, so route the
+                // command to the focused window rather than broadcasting it (in
+                // MODE B a broadcast would fire in every window at once).
+                let focused = app_handle
+                    .state::<FocusedWindow>()
+                    .0
+                    .lock()
+                    .unwrap()
+                    .clone();
+                let target = menu_target(&focused);
+                let _ = app_handle.emit_to(
+                    EventTarget::webview_window(&target),
+                    event.id().0.as_str(),
+                    serde_json::json!({ "target": target }),
+                );
             });
 
-            let window = app.get_webview_window("main").unwrap();
-            let handle = app.handle().clone();
-            window.on_window_event(move |event| {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    // Belt-and-braces: the plugin normally persists on RunEvent::Exit,
-                    // which still fires after the frontend calls window.destroy(),
-                    // but saving here makes persistence independent of exit handling.
-                    #[cfg(desktop)]
-                    let _ = handle.save_window_state(StateFlags::all());
-                    let _ = handle.emit("window:close-requested", ());
-                }
-            });
+            // Wire the config-defined `main` window the same way spawned
+            // windows are wired: focus tracking + per-window close routing.
+            let main = app.get_webview_window("main").unwrap();
+            wire_window(&main, app.handle());
 
             Ok(())
         })
@@ -116,6 +240,8 @@ pub fn run() {
             commands::read_file,
             commands::write_file,
             take_opened_files,
+            take_window_file,
+            open_document_window,
             watcher::watch_file,
             watcher::unwatch,
             dialogs::open_file_dialog,
@@ -145,4 +271,46 @@ pub fn run() {
                 queue_opened_urls(_app_handle, urls);
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn menu_target_prefers_focused_label() {
+        assert_eq!(menu_target(&Some("doc-3".to_string())), "doc-3");
+    }
+
+    #[test]
+    fn menu_target_defaults_to_main_when_unfocused() {
+        assert_eq!(menu_target(&None), "main");
+    }
+
+    #[test]
+    fn pending_window_file_drains_exactly_once() {
+        // take_window_file's body is `pending.0.lock().remove(&label)`; assert
+        // the drain-once semantics that stop a re-mount re-opening a stale path.
+        let pending = PendingWindowFile::default();
+        pending
+            .0
+            .lock()
+            .unwrap()
+            .insert("doc-1".into(), "/docs/a.md".into());
+        assert_eq!(
+            pending.0.lock().unwrap().remove("doc-1"),
+            Some("/docs/a.md".to_string())
+        );
+        assert_eq!(pending.0.lock().unwrap().remove("doc-1"), None);
+    }
+
+    #[test]
+    fn spawned_labels_are_unique_and_doc_prefixed() {
+        // The counter must hand out distinct `doc-*` labels (capabilities glob
+        // `doc-*` depends on the prefix; the map keys on the label).
+        let a = NEXT_WIN.fetch_add(1, Ordering::Relaxed);
+        let b = NEXT_WIN.fetch_add(1, Ordering::Relaxed);
+        assert_ne!(a, b);
+        assert!(format!("doc-{a}").starts_with("doc-"));
+    }
 }

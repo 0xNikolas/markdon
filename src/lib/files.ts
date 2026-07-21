@@ -4,6 +4,7 @@ import { doc, openDoc, markSaved } from './doc'
 import { reportError } from './errors'
 import { openList, addOpen } from './openList'
 import { recordSave } from './history'
+import { settings } from './settings'
 
 interface OpenedFile {
   path: string
@@ -25,8 +26,12 @@ export async function open(): Promise<void> {
     // The dialog lives in Rust so the backend can vouch for the picked path.
     const picked = await invoke<OpenedFile | null>('open_file_dialog')
     if (picked === null) return // cancelled
-    openDoc(picked.path, picked.content)
-    openList.update((l) => addOpen(l, picked.path))
+    // Honor the openMode preference: 'window' spawns a fresh window for the
+    // pick (re-read there); 'tab' opens the already-loaded content in place.
+    openInPreferredTarget(picked.path, (p) => {
+      openDoc(p, picked.content)
+      openList.update((l) => addOpen(l, p))
+    })
   } catch (e) {
     reportError(`Could not open file: ${String(e)}`)
   }
@@ -34,14 +39,21 @@ export async function open(): Promise<void> {
 
 /**
  * Single choke-point for "open `path`, honoring the openMode preference"
- * (task 21). Stage 1 (MODE A only) always opens in-place via the
- * caller-supplied `openInPlace` — the same guarded `openPath()` App.svelte
- * already used pre-feature. Stage 2 will branch here: when
- * `get(settings).openMode === 'window'`, invoke `open_document_window`
- * instead of calling `openInPlace`, leaving the focused window's own doc
- * untouched.
+ * (task 21). MODE A ('tab', the default) opens in-place via the caller-supplied
+ * `openInPlace` — the same guarded `openPath()` App.svelte already used. MODE B
+ * ('window') spawns a second app window to host `path` and leaves the focused
+ * window's own doc untouched. If spawning fails (e.g. the command is somehow
+ * unavailable) it degrades gracefully to opening in place, so the preference is
+ * never a dead end.
  */
 export function openInPreferredTarget(path: string, openInPlace: (path: string) => void): void {
+  if (get(settings).openMode === 'window') {
+    invoke('open_document_window', { path }).catch((e) => {
+      reportError(`Could not open a new window: ${String(e)}`)
+      openInPlace(path)
+    })
+    return
+  }
   openInPlace(path)
 }
 

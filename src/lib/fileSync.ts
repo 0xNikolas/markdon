@@ -1,10 +1,10 @@
 import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
 import { get, writable, type Writable } from 'svelte/store'
 import { doc, openDoc } from './doc'
 import { reportError } from './errors'
 import { watchStatus } from './ui'
 import { recordExternal } from './history'
+import { listenScoped } from './windowing'
 
 /**
  * When set, the open file changed on disk while the buffer had unsaved edits.
@@ -87,7 +87,7 @@ export async function initFileSync(): Promise<() => void> {
     } else invoke('unwatch').catch(() => {})
   })
 
-  const unlisten = await listen('file:external-change', async () => {
+  const unlisten = await listenScoped('file:external-change', async () => {
     const before = get(doc)
     if (before.path === null) return
     let disk: string

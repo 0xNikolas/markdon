@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { listen } from '@tauri-apps/api/event'
   import { invoke } from '@tauri-apps/api/core'
   import { getCurrentWindow } from '@tauri-apps/api/window'
+  import { listenScoped, currentLabel } from './lib/windowing'
   import { get } from 'svelte/store'
   import { doc, edit, newDoc, isDirty, enableEditing, revertBuffer } from './lib/doc'
   import { recordRevert } from './lib/history'
@@ -83,22 +83,32 @@
   }
 
   // Open a file the OS handed us via a .md file association (Finder double-click).
-  // Drains the Rust-side buffer; opens the first path through the same guard as
-  // File → Open. Called on mount (cold launch) and on each `file:opened` ping.
+  // Drains the Rust-side buffer and routes the first path through the openMode
+  // preference: MODE A opens it in-place (guarded, read-only like before); MODE
+  // B spawns a fresh window for it, leaving this (focused) window's doc alone.
+  // Called on mount (cold launch) and on each `file:opened` ping.
   async function drainOpenedFiles() {
     const paths = await invoke<string[]>('take_opened_files')
-    if (paths.length > 0) guarded(() => openPath(paths[0], true))
+    if (paths.length > 0) openInPreferredTarget(paths[0], (p) => guarded(() => openPath(p, true)))
+  }
+
+  // A spawned document window (doc-N) drains the file it was created to host
+  // (set by open_document_window). Drains exactly once — a re-mount gets None.
+  // The focused/main window's own take is a harmless no-op (nothing pending).
+  async function takeAssignedFile() {
+    const assigned = await invoke<string | null>('take_window_file', { label: currentLabel() })
+    if (assigned) openPath(assigned)
   }
 
   onMount(() => {
     const unsub = Promise.all([
-      listen('menu:new', () => guarded(() => newDoc())),
-      listen('menu:open', () => guarded(() => open())),
-      listen('menu:save', () => save()),
-      listen('menu:save_as', () => saveAs()),
-      listen('menu:find', () => routeFind()),
-      listen('menu:find_replace', () => routeFindReplace()),
-      listen('menu:goto_line', () => {
+      listenScoped('menu:new', () => guarded(() => newDoc())),
+      listenScoped('menu:open', () => guarded(() => open())),
+      listenScoped('menu:save', () => save()),
+      listenScoped('menu:save_as', () => saveAs()),
+      listenScoped('menu:find', () => routeFind()),
+      listenScoped('menu:find_replace', () => routeFindReplace()),
+      listenScoped('menu:goto_line', () => {
         // Same gating as the Cmd+L keydown fallback below: the native Edit
         // menu item isn't disabled by app state (menu.rs has no such wiring),
         // so without this the item stays clickable while the discard-guard
@@ -108,7 +118,7 @@
         if (pendingAction !== null || get(settingsOpen) || get(gotoOpen)) return
         openGoto()
       }),
-      listen('menu:history', () => {
+      listenScoped('menu:history', () => {
         // Untitled/never-saved docs have no history — the menu item no-ops.
         // Same modal-precedence gating as the goto branch above: the native
         // File-menu item isn't disabled by app state, so without this it would
@@ -118,13 +128,14 @@
         if (pendingAction !== null || get(settingsOpen) || get(gotoOpen) || get(historyOpen)) return
         openHistory()
       }),
-      listen('menu:settings', () => openSettings()),
-      listen('menu:open_folder', () => openWorkspace()),
-      listen('menu:export', () => exportDocument()),
-      listen('window:close-requested', () => guarded(() => getCurrentWindow().destroy())),
-      listen('file:opened', () => drainOpenedFiles()),
+      listenScoped('menu:settings', () => openSettings()),
+      listenScoped('menu:open_folder', () => openWorkspace()),
+      listenScoped('menu:export', () => exportDocument()),
+      listenScoped('window:close-requested', () => guarded(() => getCurrentWindow().destroy())),
+      listenScoped('file:opened', () => drainOpenedFiles()),
     ])
     drainOpenedFiles() // cold launch: pick up the file the app was opened with
+    takeAssignedFile() // spawned window: open the file it was created to host
     const teardownSync = initFileSync() // watch the open file for external changes
     const teardownWorkspace = initWorkspace() // restore + refresh the workspace tree
     // Header's Export button increments exportTick rather than calling
