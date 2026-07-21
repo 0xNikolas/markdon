@@ -10,6 +10,8 @@ vi.mock('@tauri-apps/api/window', () => ({
 
 import {
   isMarkdownFile,
+  fileIcon,
+  folderIcon,
   workspace,
   openWorkspace,
   refreshWorkspace,
@@ -47,6 +49,28 @@ describe('isMarkdownFile', () => {
     ['noext', false],
   ])('%s -> %s', (name, expected) => {
     expect(isMarkdownFile(name)).toBe(expected)
+  })
+})
+
+describe('fileIcon', () => {
+  it.each([
+    ['notes.md', 'file-code'],
+    ['README.MARKDOWN', 'file-code'],
+    ['image.png', 'file-text'],
+    ['data.json', 'file-text'],
+    ['Makefile', 'file-text'],
+  ])('%s -> %s', (name, expected) => {
+    expect(fileIcon(name)).toBe(expected)
+  })
+})
+
+describe('folderIcon', () => {
+  it('is folder-open when expanded', () => {
+    expect(folderIcon(true)).toBe('folder-open')
+  })
+
+  it('is folder when collapsed', () => {
+    expect(folderIcon(false)).toBe('folder')
   })
 })
 

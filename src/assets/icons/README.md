@@ -26,8 +26,13 @@ heavy). `src/lib/icons.test.ts` is the regression gate for this contract.
 ## Currently vendored (consumed by the UI)
 
 `chevron-down`, `chevron-right`, `file-code`, `file-pen`, `file-plus`,
-`file-up`, `folder`, `keyboard`, `layout-grid`, `settings`,
-`split-square-vertical`.
+`file-text`, `file-up`, `folder`, `folder-open`, `keyboard`, `layout-grid`,
+`settings`, `split-square-vertical`.
+
+Sidebar file-type mapping (`src/lib/workspace.ts`'s `fileIcon`): markdown
+files get `file-code` (matches the design's Icon Set); every other file
+shown for context gets the generic `file-text` so it doesn't read as code.
+Folder rows swap `folder` / `folder-open` on expand via `folderIcon`.
 
 To add one: append its lucide name to the `ICONS` array in
 `scripts/vendor-icons.mjs`, re-run `bun run vendor:icons`, add the import +
@@ -50,6 +55,5 @@ matching lucide names below (all confirmed present in `lucide-static`):
 | Preview / visibility | `eye`                           |
 | Open external        | `arrow-up-right-from-square` / `square-arrow-out-up-right` |
 | Type / outline       | `type-outline`                  |
-| Folder (open state)  | `folder-open`                   |
 
 These are intentionally **not** shipped yet (nothing consumes them).

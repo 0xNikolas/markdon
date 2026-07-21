@@ -1,6 +1,14 @@
 <script lang="ts">
   import Icon from './Icon.svelte'
-  import { workspace, isMarkdownFile, type WorkspaceDir, type WorkspaceFile } from './lib/workspace'
+  import {
+    workspace,
+    isMarkdownFile,
+    fileIcon,
+    folderIcon,
+    openWorkspace,
+    type WorkspaceDir,
+    type WorkspaceFile,
+  } from './lib/workspace'
 
   interface Props {
     activePath: string | null
@@ -22,14 +30,14 @@
       onclick={() => onOpenFile(f.path)}
     >
       <span class="active-bar"></span>
-      <Icon name="file-code" size={16} />
+      <Icon name={fileIcon(f.name)} size={16} />
       <span class="name">{f.name}</span>
     </button>
   {:else}
     <!-- Non-markdown files are shown for context but can't be opened here. -->
     <div class="file-row disabled" aria-disabled="true">
       <span class="active-bar"></span>
-      <Icon name="file-code" size={16} />
+      <Icon name={fileIcon(f.name)} size={16} />
       <span class="name">{f.name}</span>
     </div>
   {/if}
@@ -44,7 +52,7 @@
     <span class="chevron" class:open={!collapsed[d.path]}>
       <Icon name="chevron-right" size={12} />
     </span>
-    <Icon name="folder" size={16} />
+    <Icon name={folderIcon(!collapsed[d.path])} size={16} />
     <span class="name">{d.name}</span>
   </button>
   {#if !collapsed[d.path]}
@@ -66,6 +74,20 @@
     <div class="tree">
       {#each $workspace.tree.dirs as d (d.path)}{@render dirRows(d)}{/each}
       {#each $workspace.tree.files as f (f.path)}{@render fileRow(f)}{/each}
+    </div>
+  {:else}
+    <!-- No workspace open yet: an always-visible sidebar (rather than one that
+         only appears once a folder is picked) teaches the feature on first
+         run, matching the design's populated state -- this empty panel is
+         its unpopulated counterpart, not a hidden mode. -->
+    <div class="empty">
+      <span class="empty-icon"><Icon name="folder-open" size={28} /></span>
+      <p class="empty-title">No folder open</p>
+      <p class="empty-body">Open a folder to browse its markdown files here.</p>
+      <button class="open-folder" onclick={openWorkspace}>
+        <Icon name="folder" size={14} />
+        Open Folder
+      </button>
     </div>
   {/if}
 </nav>
@@ -209,5 +231,52 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* Ghost panel shown when no workspace is open -- discoverable entry point
+     for openWorkspace() beyond the File menu. */
+  .empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 4px;
+    padding: 24px 12px;
+    margin-top: 12px;
+  }
+  .empty-icon {
+    display: inline-flex;
+    color: var(--fg-faint);
+    opacity: 0.6;
+    margin-bottom: 8px;
+  }
+  .empty-title {
+    margin: 0;
+    font: 600 13px var(--font-ui);
+    color: var(--fg-secondary);
+  }
+  .empty-body {
+    margin: 0 0 12px;
+    font: 400 12px var(--font-ui);
+    color: var(--fg-faint);
+  }
+  .open-folder {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border: 0;
+    border-radius: 6px;
+    background: var(--accent-solid);
+    color: var(--on-accent);
+    font: 600 12px var(--font-ui);
+    cursor: pointer;
+    transition: background-color 0.1s ease;
+  }
+  .open-folder:hover {
+    background: var(--accent-solid-hover);
+  }
+  .open-folder:active {
+    background: var(--accent-solid-active);
   }
 </style>

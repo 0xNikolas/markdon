@@ -18,7 +18,7 @@
   import { searchUi, openFind, closeFind, shouldForceCloseFind } from './lib/searchPlugin'
   import { openSourceSearch } from './lib/sourceEditor'
   import { settingsOpen, openSettings, split, exportTick } from './lib/ui'
-  import { workspace, openWorkspace, initWorkspace } from './lib/workspace'
+  import { openWorkspace, initWorkspace } from './lib/workspace'
   import { exportDocument } from './lib/export'
   import { focusTrap } from './lib/focusTrap'
 
@@ -156,13 +156,15 @@
   <Header path={$doc.path} dirty={isDirty($doc)} />
   <Banner />
   <div class="body">
-    {#if $workspace.root !== null}
-      <Sidebar
-        activePath={$doc.path}
-        onOpenFile={(p) => { if (p !== $doc.path) guarded(() => openPath(p)) }}
-        onNewFile={() => guarded(() => newDoc())}
-      />
-    {/if}
+    <!-- Always rendered, not gated on whether a workspace is open: Sidebar
+         itself renders an empty-state panel when there's no folder yet, which
+         teaches the feature and gives openWorkspace() a discoverable entry
+         point beyond the File menu (sidebar-fix, task 12). -->
+    <Sidebar
+      activePath={$doc.path}
+      onOpenFile={(p) => { if (p !== $doc.path) guarded(() => openPath(p)) }}
+      onNewFile={() => guarded(() => newDoc())}
+    />
     <div class="content">
       {#if $doc.readonly}
         <div class="readonly-bar" role="status">

@@ -40,6 +40,21 @@ export function isMarkdownFile(name: string): boolean {
   return /\.(md|markdown)$/i.test(name)
 }
 
+/**
+ * Lucide icon name for a sidebar file row. Markdown files (the only openable
+ * rows) get `file-code`, matching the design's Icon Set; every other file is
+ * shown for context only and gets the generic `file-text` glyph so it doesn't
+ * read as another code file.
+ */
+export function fileIcon(name: string): 'file-code' | 'file-text' {
+  return isMarkdownFile(name) ? 'file-code' : 'file-text'
+}
+
+/** Lucide icon name for a sidebar folder row's open/closed state. */
+export function folderIcon(open: boolean): 'folder' | 'folder-open' {
+  return open ? 'folder-open' : 'folder'
+}
+
 /** Adopt a Rust `Workspace`, updating the store and the Header breadcrumb name. */
 function adopt(ws: Workspace): void {
   workspace.set({ root: ws.root, tree: ws.tree })

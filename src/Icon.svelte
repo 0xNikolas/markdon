@@ -4,8 +4,10 @@
   import fileCode from './assets/icons/file-code.svg?raw'
   import filePen from './assets/icons/file-pen.svg?raw'
   import filePlus from './assets/icons/file-plus.svg?raw'
+  import fileText from './assets/icons/file-text.svg?raw'
   import fileUp from './assets/icons/file-up.svg?raw'
   import folder from './assets/icons/folder.svg?raw'
+  import folderOpen from './assets/icons/folder-open.svg?raw'
   import keyboard from './assets/icons/keyboard.svg?raw'
   import layoutGrid from './assets/icons/layout-grid.svg?raw'
   import settings from './assets/icons/settings.svg?raw'
@@ -17,8 +19,10 @@
     'file-code': fileCode,
     'file-pen': filePen,
     'file-plus': filePlus,
+    'file-text': fileText,
     'file-up': fileUp,
     folder,
+    'folder-open': folderOpen,
     keyboard,
     'layout-grid': layoutGrid,
     settings,
