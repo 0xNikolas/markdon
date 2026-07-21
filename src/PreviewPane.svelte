@@ -9,8 +9,10 @@
 
   interface Props {
     content: string
+    /** The pane's scroll container, exposed for SplitView's scroll sync. */
+    scrollEl?: HTMLElement
   }
-  let { content }: Props = $props()
+  let { content, scrollEl = $bindable(undefined) }: Props = $props()
 
   let el: HTMLDivElement
   let crepe: Crepe | undefined
@@ -30,6 +32,9 @@
   let destroyed = false
 
   onMount(() => {
+    // `el` (Crepe's mount root) is the pane's actual overflow:auto scroller
+    // -- Crepe's own .milkdown/.ProseMirror CSS sets no height or overflow.
+    scrollEl = el
     crepe = new Crepe({
       root: el,
       defaultValue: content,
@@ -94,6 +99,7 @@
     clearTimeout(timer)
     if (source) unregisterHtmlSource(source)
     void crepe?.destroy()
+    scrollEl = undefined
   })
 </script>
 

@@ -22,8 +22,10 @@
     initialContent: string
     readonly?: boolean
     onChange: (markdown: string) => void
+    /** Notified with the EditorView once created, for SplitView's scroll sync. */
+    onViewReady?: (view: EditorView) => void
   }
-  let { initialContent, readonly = false, onChange }: Props = $props()
+  let { initialContent, readonly = false, onChange, onViewReady }: Props = $props()
 
   let el: HTMLDivElement
   let view: EditorView | undefined
@@ -35,6 +37,7 @@
     })
     view = new EditorView({ state, parent: el })
     registerSourceView(view)
+    onViewReady?.(view)
     cursor.set({ line: 1, col: 0 }) // seed the status bar for the caret at doc start
   })
 
