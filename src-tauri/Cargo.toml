@@ -30,6 +30,16 @@ tempfile = "3"
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-window-state = "2"
 
+# PDF export drives the native macOS print panel (NSPrintOperation) directly on
+# the WKWebView reached via tauri's `with_webview`. Versions pinned to match the
+# ones tauri 2.11 / wry 0.55 already resolve in Cargo.lock (objc2 0.6, objc2-*
+# 0.3) so no lockfile churn. See src/pdf.rs.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = { version = "0.3", features = ["NSPrintInfo", "NSPrintOperation"] }
+objc2-web-kit = { version = "0.3", features = ["WKWebView", "objc2-app-kit"] }
+
 [dev-dependencies]
 # Only to unit-test that the "CmdOrCtrl+," settings accelerator parses (see
 # menu.rs tests) — tauri's MenuItemBuilder swallows parse failures silently

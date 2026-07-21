@@ -195,15 +195,13 @@ export async function exportDocument(): Promise<void> {
     }
 
     if (format === 'pdf') {
-      // The macOS print dialog ("Save as PDF") owns saving; no save_file_dialog
-      // or write_file here. Whether the print sheet's default save filename is
-      // seeded from the HTML <title> (baked in by buildExportHtml) or from the
-      // helper window's own NSWindow title is UNVERIFIED -- no GUI run per
-      // house rules, and this competes with pdf.rs's window title (see its
-      // module doc comment). We pass the same docTitle through as `title` so
-      // Rust's resolve_window_title sets the window title to match the HTML
-      // title, making the default filename correct either way rather than
-      // asserting which one macOS actually reads.
+      // The native macOS print panel ("Save as PDF") owns saving; no
+      // save_file_dialog or write_file here. Rust opens a short-lived helper
+      // window on the same HTML and, once it renders, presents the panel via
+      // NSPrintOperation (see pdf.rs). We pass docTitle as `title`: Rust sets
+      // both the print job title and the helper window title from it, so the
+      // "Save as PDF" sheet defaults to `<docTitle>.pdf` (the HTML <title>
+      // baked in by buildExportHtml carries the same value as a backstop).
       await invoke('export_pdf', { html: contents, title: docTitle(state.path) })
       return
     }

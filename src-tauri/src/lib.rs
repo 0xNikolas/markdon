@@ -120,8 +120,7 @@ pub fn run() {
             dialogs::open_workspace_dialog,
             workspace::list_workspace,
             workspace::restore_workspace,
-            pdf::export_pdf,
-            pdf::close_pdf_export
+            pdf::export_pdf
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
