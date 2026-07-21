@@ -71,6 +71,38 @@ export function closeGoto(): void {
   gotoOpen.set(false)
 }
 
+// -- Go to Line keyboard fallback --------------------------------------------
+
+/**
+ * True on Apple platforms. CodeMirror's own selectLine binding is mac-only
+ * (`{ key: 'Alt-l', mac: 'Ctrl-l', run: selectLine }` in
+ * @codemirror/commands) -- everywhere else Ctrl-L doesn't collide with CM,
+ * so only mac needs the metaKey-only carve-out in isGotoLineFallbackKey.
+ */
+export function isMacPlatform(): boolean {
+  const nav = typeof navigator === 'undefined' ? undefined : navigator
+  const platform = nav?.platform ?? nav?.userAgent ?? ''
+  return /Mac|iPhone|iPad|iPod/.test(platform)
+}
+
+/**
+ * True when `e` is the CmdOrCtrl+L Go to Line keyboard fallback for the
+ * given platform. On mac, ctrlKey is EXCLUDED even alongside metaKey --
+ * CodeMirror binds mac Ctrl-L to selectLine, so treating it as Go to Line
+ * in split mode would fight CM's own binding. Everywhere else CmdOrCtrl+L
+ * IS Ctrl+L (there's no metaKey to fall back from), and CM's non-mac
+ * selectLine binding is Alt-L, not Ctrl-L, so ctrlKey is safe to honor there
+ * -- excluding it unconditionally would make the fallback unreachable by
+ * keyboard on Windows/Linux.
+ */
+export function isGotoLineFallbackKey(
+  e: { metaKey: boolean; ctrlKey: boolean; key: string },
+  mac: boolean,
+): boolean {
+  if (e.key.toLowerCase() !== 'l') return false
+  return mac ? e.metaKey && !e.ctrlKey : e.metaKey || e.ctrlKey
+}
+
 /** Export request counter; the export feature subscribes and acts on ticks. */
 export const exportTick: Writable<number> = writable(0)
 export function requestExport(): void {

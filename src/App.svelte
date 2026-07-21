@@ -19,7 +19,17 @@
   import Sidebar from './Sidebar.svelte'
   import { searchUi, openFind, closeFind, shouldForceCloseFind } from './lib/searchPlugin'
   import { openSourceSearch, clearPendingLine } from './lib/sourceEditor'
-  import { settingsOpen, openSettings, gotoOpen, openGoto, closeGoto, split, exportTick } from './lib/ui'
+  import {
+    settingsOpen,
+    openSettings,
+    gotoOpen,
+    openGoto,
+    closeGoto,
+    split,
+    exportTick,
+    isMacPlatform,
+    isGotoLineFallbackKey,
+  } from './lib/ui'
   import { openWorkspace, initWorkspace } from './lib/workspace'
   import { exportDocument } from './lib/export'
   import { focusTrap } from './lib/focusTrap'
@@ -81,7 +91,16 @@
       listen('menu:save', () => save()),
       listen('menu:save_as', () => saveAs()),
       listen('menu:find', () => routeFind()),
-      listen('menu:goto_line', () => openGoto()),
+      listen('menu:goto_line', () => {
+        // Same gating as the Cmd+L keydown fallback below: the native Edit
+        // menu item isn't disabled by app state (menu.rs has no such wiring),
+        // so without this the item stays clickable while the discard-guard
+        // modal or Settings is open, stacking GoToLineBar's focus trap behind
+        // them and, on close, stripping `inert` out from under the modal
+        // that's still open (focusTrap.destroy() unconditionally clears it).
+        if (pendingAction !== null || get(settingsOpen) || get(gotoOpen)) return
+        openGoto()
+      }),
       listen('menu:settings', () => openSettings()),
       listen('menu:open_folder', () => openWorkspace()),
       listen('menu:export', () => exportDocument()),
@@ -139,13 +158,17 @@
   // In split mode CodeMirror owns its panel's Esc, so we only close the
   // FindBar here (WYSIWYG).
   //
-  // Cmd+L is a metaKey-ONLY fallback for the same reason (native accelerator
-  // not reaching the webview) -- NEVER ctrlKey too: @codemirror/commands
-  // binds mac:'Ctrl-l' to selectLine, so treating Ctrl+L as Go to Line in
-  // split mode would fight CM's own binding. Unlike the ungated Cmd+F
+  // Go to Line's fallback is gated per-platform (isGotoLineFallbackKey):
+  // on mac it's metaKey-ONLY, NEVER ctrlKey too, since @codemirror/commands
+  // binds mac:'Ctrl-l' to selectLine and treating Ctrl+L as Go to Line in
+  // split mode would fight CM's own binding; everywhere else CmdOrCtrl+L IS
+  // Ctrl+L and CM's non-mac selectLine binding is Alt-L (no collision), so
+  // ctrlKey is honored there too -- otherwise the fallback would be
+  // unreachable by keyboard on Windows/Linux. Unlike the ungated Cmd+F
   // fallback above, this one explicitly skips while another modal/overlay
   // is already up (pendingAction, Settings, or the popover itself) so it
   // can't double-open or steal focus from a higher-priority surface.
+  const macPlatform = isMacPlatform()
   function handleWindowKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape' && $searchUi.open && pendingAction === null) {
       e.preventDefault()
@@ -157,7 +180,7 @@
     } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
       e.preventDefault()
       routeFind()
-    } else if (e.metaKey && !e.ctrlKey && e.key.toLowerCase() === 'l') {
+    } else if (isGotoLineFallbackKey(e, macPlatform)) {
       if (pendingAction !== null || $settingsOpen || $gotoOpen) return
       e.preventDefault()
       openGoto()

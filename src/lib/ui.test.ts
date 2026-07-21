@@ -28,6 +28,7 @@ const {
   requestExport,
   fileBreadcrumb,
   isInsideRoot,
+  isGotoLineFallbackKey,
 } = await import('./ui')
 
 describe('formatInt', () => {
@@ -189,6 +190,47 @@ describe('isInsideRoot', () => {
   it('is false for a segment-less root (would otherwise vacuously match everything)', () => {
     expect(isInsideRoot('/Users/nicu/notes/secret.md', '/')).toBe(false)
     expect(isInsideRoot('/Users/nicu/notes/secret.md', '')).toBe(false)
+  })
+})
+
+describe('isGotoLineFallbackKey', () => {
+  it('ignores every key but L', () => {
+    expect(isGotoLineFallbackKey({ metaKey: true, ctrlKey: false, key: 'k' }, true)).toBe(false)
+    expect(isGotoLineFallbackKey({ metaKey: true, ctrlKey: false, key: 'k' }, false)).toBe(false)
+  })
+
+  it('is case-insensitive on the key', () => {
+    expect(isGotoLineFallbackKey({ metaKey: true, ctrlKey: false, key: 'L' }, true)).toBe(true)
+  })
+
+  describe('on mac', () => {
+    it('fires on metaKey alone', () => {
+      expect(isGotoLineFallbackKey({ metaKey: true, ctrlKey: false, key: 'l' }, true)).toBe(true)
+    })
+
+    it('never fires with ctrlKey, even alongside metaKey (CM binds mac Ctrl-L to selectLine)', () => {
+      expect(isGotoLineFallbackKey({ metaKey: true, ctrlKey: true, key: 'l' }, true)).toBe(false)
+      expect(isGotoLineFallbackKey({ metaKey: false, ctrlKey: true, key: 'l' }, true)).toBe(false)
+    })
+  })
+
+  describe('off mac', () => {
+    it('fires on ctrlKey alone (CmdOrCtrl+L IS Ctrl+L there)', () => {
+      expect(isGotoLineFallbackKey({ metaKey: false, ctrlKey: true, key: 'l' }, false)).toBe(true)
+    })
+
+    it('also fires on metaKey alone', () => {
+      expect(isGotoLineFallbackKey({ metaKey: true, ctrlKey: false, key: 'l' }, false)).toBe(true)
+    })
+
+    it('fires with both held (no CM collision off mac -- selectLine binds Alt-L there)', () => {
+      expect(isGotoLineFallbackKey({ metaKey: true, ctrlKey: true, key: 'l' }, false)).toBe(true)
+    })
+  })
+
+  it('is false with neither modifier held', () => {
+    expect(isGotoLineFallbackKey({ metaKey: false, ctrlKey: false, key: 'l' }, true)).toBe(false)
+    expect(isGotoLineFallbackKey({ metaKey: false, ctrlKey: false, key: 'l' }, false)).toBe(false)
   })
 })
 
