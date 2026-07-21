@@ -10,6 +10,7 @@
   import { openList, removeOpen, neighbourAfterClose } from './lib/openList'
   import { conflict, reloadFromDisk, dismissConflict, initFileSync } from './lib/fileSync'
   import { reportError } from './lib/errors'
+  import { allowsNativeContextMenu } from './lib/contextMenu'
   import Editor from './Editor.svelte'
   import SplitView from './SplitView.svelte'
   import Header from './Header.svelte'
@@ -396,7 +397,16 @@
   }
 </script>
 
-<svelte:window onkeydown={handleWindowKeydown} />
+<!-- Suppress the WKWebView default context menu outside editable text: its only
+     entry on app chrome is "Reload", which reloads the whole webview and wipes
+     every in-memory store (Open Files list, unsaved buffer). Editable surfaces
+     (Crepe's contenteditable, inputs) keep the native copy/paste/spellcheck menu. -->
+<svelte:window
+  onkeydown={handleWindowKeydown}
+  oncontextmenu={(e) => {
+    if (!allowsNativeContextMenu(e.target as HTMLElement | null)) e.preventDefault()
+  }}
+/>
 
 <main class="app">
   <!-- Header hosts the native traffic-light overlay: nothing may render above it. -->
