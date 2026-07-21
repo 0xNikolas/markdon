@@ -356,7 +356,7 @@
     align-items: center;
     gap: 10px;
     padding: 10px 16px;
-    border-radius: 8px;
+    border-radius: 6px;
     background: transparent;
     border: none;
     color: var(--fg-secondary);
@@ -385,7 +385,7 @@
   }
   .content-header h2 {
     margin: 0;
-    font: 700 18px var(--font-ui);
+    font: 700 23px var(--font-ui);
     color: var(--fg-strong);
   }
   .close {

@@ -1,8 +1,13 @@
 /**
  * Dependency-free Svelte action that traps Tab focus inside `node` while it
- * is mounted (the Settings modal dialog). The Tab-cycling keydown handler is
- * the PRIMARY containment mechanism (it works regardless of platform
- * support); `inert` on the background is an enhancement layered on top.
+ * is mounted (used by the Settings modal and the unsaved-changes guard
+ * modal). The Tab-cycling keydown handler is the PRIMARY containment
+ * mechanism (it works regardless of platform support); `inert` on the
+ * background is an enhancement layered on top.
+ *
+ * Initial focus normally lands on the first focusable element inside `node`.
+ * Mark a different element with `data-autofocus` (e.g. a Cancel button) to
+ * override that -- it's used instead as long as it isn't disabled/hidden.
  *
  * Not unit-tested: it's DOM-only (focus, `inert`, keyboard events) and the
  * project's vitest config runs `environment: 'node'` with no jsdom/component
@@ -37,7 +42,11 @@ export function focusTrap(node: HTMLElement): { destroy(): void } {
   }
 
   node.addEventListener('keydown', onKeydown)
-  focusables()[0]?.focus()
+  const autofocus = node.querySelector<HTMLElement>('[data-autofocus]')
+  const initial = autofocus && !autofocus.hasAttribute('disabled') && autofocus.offsetParent !== null
+    ? autofocus
+    : focusables()[0]
+  initial?.focus()
 
   return {
     destroy() {

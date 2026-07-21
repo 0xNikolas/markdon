@@ -20,6 +20,7 @@
   import { settingsOpen, openSettings, split, exportTick } from './lib/ui'
   import { workspace, openWorkspace, initWorkspace } from './lib/workspace'
   import { exportDocument } from './lib/export'
+  import { focusTrap } from './lib/focusTrap'
 
   // Action to run if the user chooses to discard unsaved changes. When set, the
   // confirm modal is shown. Guards New, Open, and window close uniformly.
@@ -123,6 +124,18 @@
     action?.()
   }
   function cancel() { pendingAction = null }
+
+  // Esc cancels the guard modal, same as clicking Cancel -- but stays inert
+  // while a save is in flight (the buttons are disabled(saving) too).
+  // stopPropagation keeps this from also tripping the window-level Escape
+  // handler (which only acts on the find bar, and is gated on
+  // pendingAction === null anyway, but this mirrors SettingsModal's pattern).
+  function onModalKeydown(e: KeyboardEvent) {
+    if (e.key !== 'Escape') return
+    e.stopPropagation()
+    if (!saving) cancel()
+  }
+
   async function saveAndContinue() {
     saving = true
     try {
@@ -188,11 +201,18 @@
 
 {#if pendingAction}
   <div class="modal-backdrop">
-    <div class="modal" role="dialog" aria-modal="true">
+    <div
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      tabindex="-1"
+      use:focusTrap
+      onkeydown={onModalKeydown}
+    >
       <p>You have unsaved changes. Save them before continuing?</p>
       <div class="actions">
         <button class="danger" disabled={saving} onclick={discard}>Don't Save</button>
-        <button disabled={saving} onclick={cancel}>Cancel</button>
+        <button disabled={saving} data-autofocus onclick={cancel}>Cancel</button>
         <button class="primary" disabled={saving} onclick={saveAndContinue}>Save</button>
       </div>
     </div>
