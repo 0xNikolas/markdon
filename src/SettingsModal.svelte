@@ -86,7 +86,10 @@
       <div class="badge-row">
         <!-- macOS-style close control (window traffic-light convention): red
              dot, glyph revealed on hover/focus. Replaces the old top-right
-             x-circle button per the prefs-close redesign. -->
+             x-circle button per the prefs-close redesign. It is now the
+             first focusable element in DOM order, so the active tab below
+             carries data-autofocus to keep initial keyboard focus on the
+             tablist (focusTrap.ts) instead of this tiny control. -->
         <button class="traffic-close" aria-label="Close settings" onclick={closeSettings}>
           <span class="glyph" aria-hidden="true"></span>
         </button>
@@ -111,6 +114,7 @@
             aria-selected={activeTab === tab.id}
             aria-controls="panel-{tab.id}"
             tabindex={activeTab === tab.id ? 0 : -1}
+            data-autofocus={activeTab === tab.id ? true : undefined}
             class="tab-row"
             class:active={activeTab === tab.id}
             onclick={() => selectTab(tab.id)}
