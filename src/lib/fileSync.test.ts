@@ -34,6 +34,19 @@ describe('classifyExternalChange', () => {
     ).toBe('reload')
   })
 
+  it('reloads a normalization-clean buffer when disk differs (not a conflict)', () => {
+    // The editor re-serialized the loaded content ('* x' -> '- x') but the
+    // user typed nothing: content !== savedContent yet the buffer is logically
+    // clean, so an external change silently reloads instead of prompting.
+    expect(
+      classifyExternalChange(
+        { content: '- x\n', savedContent: '* x\n', normalized: '- x\n' },
+        'external\n',
+        null,
+      ),
+    ).toBe('reload')
+  })
+
   it('flags a conflict when a dirty buffer differs from disk', () => {
     expect(
       classifyExternalChange({ content: 'mine', savedContent: 'base' }, 'theirs', null),

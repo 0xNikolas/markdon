@@ -92,7 +92,7 @@ describe('open', () => {
 describe('save', () => {
   it('writes to the existing path and records the saved content', async () => {
     // arrange a document already backed by a path, with unsaved edits
-    doc.set({ path: '/tmp/a.md', content: 'body', savedContent: 'old', readonly: false, loadId: 1 })
+    doc.set({ path: '/tmp/a.md', content: 'body', savedContent: 'old', normalized: null, readonly: false, loadId: 1 })
     invoke.mockResolvedValue(undefined)
     await save()
     expect(invoke).toHaveBeenCalledWith('write_file', { path: '/tmp/a.md', contents: 'body' })
@@ -113,7 +113,7 @@ describe('save', () => {
   })
 
   it('keeps edits typed during an in-flight save dirty', async () => {
-    doc.set({ path: '/tmp/a.md', content: 'v1', savedContent: 'v0', readonly: false, loadId: 1 })
+    doc.set({ path: '/tmp/a.md', content: 'v1', savedContent: 'v0', normalized: null, readonly: false, loadId: 1 })
     invoke.mockImplementation(async () => {
       edit('v2') // the user types while write_file is in flight
     })
@@ -224,7 +224,7 @@ describe('error handling', () => {
 
   it('reports an error when write_file rejects and keeps dirty', async () => {
     errorMessage.set(null)
-    doc.set({ path: '/tmp/a.md', content: 'body', savedContent: 'old', readonly: false, loadId: 1 })
+    doc.set({ path: '/tmp/a.md', content: 'body', savedContent: 'old', normalized: null, readonly: false, loadId: 1 })
     invoke.mockRejectedValue('disk full')
     await save()
     expect(get(errorMessage)).toContain('Could not save file')

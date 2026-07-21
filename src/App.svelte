@@ -4,7 +4,16 @@
   import { getCurrentWindow } from '@tauri-apps/api/window'
   import { listenScoped } from './lib/windowing'
   import { get } from 'svelte/store'
-  import { doc, edit, newDoc, isDirty, enableEditing, enterReadonly, revertBuffer } from './lib/doc'
+  import {
+    doc,
+    edit,
+    newDoc,
+    isDirty,
+    enableEditing,
+    enterReadonly,
+    revertBuffer,
+    adoptNormalization,
+  } from './lib/doc'
   import { recordRevert } from './lib/history'
   import { open, save, saveAs, openPath, openInPreferredTarget } from './lib/files'
   import { openList, removeOpen, neighbourAfterClose } from './lib/openList'
@@ -95,6 +104,25 @@
         enterReadonly()
       })
     }
+  }
+
+  // WYSIWYG editor updates. Milkdown's listener debounces (200ms), so all of
+  // Crepe's mount-time normalization transactions collapse into the FIRST
+  // emission: on an untouched buffer that emission is the editor's canonical
+  // re-serialization of what we loaded, not a user edit — adopt it as the
+  // clean baseline (doc.ts adoptNormalization; phantom-"Edited" fix) instead
+  // of dirtying the doc. Every later emission is a real edit. A user managing
+  // to type inside that first 200ms window gets folded into the baseline; the
+  // next emission (their following keystroke) restores dirty correctly.
+  // The split-view source editor (CodeMirror) is byte-accurate and keeps
+  // calling edit() directly.
+  function onEditorChange(md: string) {
+    const s = get(doc)
+    if (!s.readonly && s.content === s.savedContent && md !== s.content) {
+      adoptNormalization(md)
+      return
+    }
+    edit(md)
   }
 
   // Single entry point for opening a path from the sidebar (Open Files strip
@@ -452,7 +480,7 @@
             onChange={edit}
           />
         {:else}
-          <Editor initialContent={$doc.content} readonly={$doc.readonly} onChange={edit} />
+          <Editor initialContent={$doc.content} readonly={$doc.readonly} onChange={onEditorChange} />
         {/if}
       {/key}
     </div>

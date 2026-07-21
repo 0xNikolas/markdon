@@ -5,12 +5,29 @@ export interface DocState {
   content: string
   /** Exactly what our last read/write put on disk. Dirty ⇔ content differs. */
   savedContent: string
+  /**
+   * The WYSIWYG editor's canonical re-serialization of an untouched load, when
+   * it differs from the file bytes (bullet style, escapes, trailing newline —
+   * Milkdown re-emits the whole doc on its first doc-changing transaction).
+   * A buffer equal to this baseline is logically CLEAN even though it differs
+   * from `savedContent`; without it, merely opening such a file showed a
+   * phantom "Edited" tag and a discard prompt on switch. `savedContent` stays
+   * disk-truth — external-change classification depends on that.
+   */
+  normalized: string | null
   /** OS-opened files start read-only; lifted per-document via enableEditing. */
   readonly: boolean
   loadId: number
 }
 
-const initial: DocState = { path: null, content: '', savedContent: '', readonly: false, loadId: 0 }
+const initial: DocState = {
+  path: null,
+  content: '',
+  savedContent: '',
+  normalized: null,
+  readonly: false,
+  loadId: 0,
+}
 
 export const doc: Writable<DocState> = writable(initial)
 
@@ -31,9 +48,15 @@ export function resetReadonlyMemory(): void {
   readonlyPaths.clear()
 }
 
-/** Derived, never stored: the buffer differs from what we last synced to disk. */
-export function isDirty(s: Pick<DocState, 'content' | 'savedContent'>): boolean {
-  return s.content !== s.savedContent
+/**
+ * Derived, never stored: the buffer differs from what we last synced to disk
+ * AND from the editor's normalization baseline (see DocState.normalized) — a
+ * buffer sitting exactly on either is clean.
+ */
+export function isDirty(
+  s: Pick<DocState, 'content' | 'savedContent'> & { normalized?: string | null },
+): boolean {
+  return s.content !== s.savedContent && s.content !== (s.normalized ?? s.savedContent)
 }
 
 export function openDoc(path: string, content: string, readonly = false): void {
@@ -43,18 +66,40 @@ export function openDoc(path: string, content: string, readonly = false): void {
     path,
     content,
     savedContent: content,
+    normalized: null, // fresh load: the editor re-derives its baseline
     readonly: effective,
     loadId: s.loadId + 1,
   }))
 }
 
 export function newDoc(): void {
-  doc.update((s) => ({ path: null, content: '', savedContent: '', readonly: false, loadId: s.loadId + 1 }))
+  doc.update((s) => ({
+    path: null,
+    content: '',
+    savedContent: '',
+    normalized: null,
+    readonly: false,
+    loadId: s.loadId + 1,
+  }))
 }
 
 export function edit(content: string): void {
   // A readonly buffer must stay clean even if the editor leaks an update event.
   doc.update((s) => (s.readonly ? s : { ...s, content }))
+}
+
+/**
+ * Adopt the WYSIWYG editor's first re-serialization of an untouched load as
+ * the clean baseline (see DocState.normalized): content moves to the editor's
+ * canonical form without reading as dirty; `savedContent` stays disk-truth.
+ * Defensive no-op on readonly or already-edited buffers — only the untouched
+ * post-load state may adopt (App gates on the same condition; the store
+ * re-checks so a racing edit can't be silently blessed as "normalization").
+ */
+export function adoptNormalization(content: string): void {
+  doc.update((s) =>
+    s.readonly || s.content !== s.savedContent ? s : { ...s, content, normalized: content },
+  )
 }
 
 /**
@@ -64,7 +109,9 @@ export function edit(content: string): void {
  */
 export function markSaved(path: string, savedContent: string): void {
   readonlyPaths.delete(path)
-  doc.update((s) => ({ ...s, path, savedContent, readonly: false }))
+  // The baseline is void once a write lands: keeping it would let an undo back
+  // to the pre-save serialization read as clean while differing from disk.
+  doc.update((s) => ({ ...s, path, savedContent, normalized: null, readonly: false }))
 }
 
 export function enableEditing(): void {
@@ -102,7 +149,9 @@ export function enterReadonly(): void {
 export function revertBuffer(content: string): void {
   doc.update((s) => {
     if (s.path !== null) readonlyPaths.delete(s.path) // a revert makes the doc editable
-    return { ...s, content, readonly: false, loadId: s.loadId + 1 }
+    // Drop the baseline: a revert is a deliberate unsaved change and must read
+    // dirty even if it happens to land on the old normalization.
+    return { ...s, content, normalized: null, readonly: false, loadId: s.loadId + 1 }
   })
 }
 

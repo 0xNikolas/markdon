@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { get, writable, type Writable } from 'svelte/store'
-import { doc, openDoc } from './doc'
+import { doc, openDoc, isDirty } from './doc'
 import { reportError } from './errors'
 import { watchStatus } from './ui'
 import { recordExternal } from './history'
@@ -27,13 +27,16 @@ export type ExternalChange = 'ignore' | 'reload' | 'conflict'
  * - `conflict`— buffer has unsaved edits that differ from disk: ask the user.
  */
 export function classifyExternalChange(
-  current: { content: string; savedContent: string },
+  current: { content: string; savedContent: string; normalized?: string | null },
   disk: string,
   declined: string | null,
 ): ExternalChange {
   if (disk === current.content) return 'ignore'
   if (disk === current.savedContent) return 'ignore' // our own save; buffer just has newer edits
-  if (current.content === current.savedContent) return 'reload'
+  // Clean per isDirty — including a buffer sitting on the editor's
+  // normalization baseline (content differs from disk bytes, user typed
+  // nothing): silently adopt the external version rather than prompting.
+  if (!isDirty(current)) return 'reload'
   if (disk === declined) return 'ignore'
   return 'conflict'
 }

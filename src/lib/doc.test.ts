@@ -13,6 +13,7 @@ import {
   detachToUntitled,
   revertBuffer,
   resetReadonlyMemory,
+  adoptNormalization,
 } from './doc'
 
 describe('doc store', () => {
@@ -278,6 +279,58 @@ describe('readonly memory (per-path, survives switching files)', () => {
     openDoc('/tmp/b.md', '# B')
     openDoc('/tmp/renamed.md', '# A')
     expect(get(doc).readonly).toBe(true)
+  })
+
+  it('adoptNormalization keeps the buffer CLEAN and remembers the baseline', () => {
+    // The Crepe editor's first (debounced) emission for an untouched buffer is
+    // its re-serialization of what we loaded — not a user edit. Adopting it
+    // must not dirty the doc (the phantom-"Edited" bug).
+    openDoc('/tmp/a.md', '* bullet\n')
+    adoptNormalization('- bullet\n')
+    const s = get(doc)
+    expect(s.content).toBe('- bullet\n')
+    expect(s.savedContent).toBe('* bullet\n') // disk truth untouched
+    expect(isDirty(s)).toBe(false)
+  })
+
+  it('a real edit after adoption reads dirty; undoing back to the baseline reads clean', () => {
+    openDoc('/tmp/a.md', '* bullet\n')
+    adoptNormalization('- bullet\n')
+    edit('- bullet\n- more\n')
+    expect(isDirty(get(doc))).toBe(true)
+    edit('- bullet\n')
+    expect(isDirty(get(doc))).toBe(false)
+  })
+
+  it('adoptNormalization refuses a dirty buffer (only untouched loads adopt)', () => {
+    openDoc('/tmp/a.md', '# A')
+    edit('# A typed')
+    adoptNormalization('# A normalized')
+    const s = get(doc)
+    expect(s.content).toBe('# A typed')
+    expect(isDirty(s)).toBe(true)
+  })
+
+  it('adoptNormalization refuses a readonly buffer', () => {
+    openDoc('/tmp/a.md', '# A', true)
+    adoptNormalization('# A normalized')
+    expect(get(doc).content).toBe('# A')
+  })
+
+  it('opening another file clears the baseline', () => {
+    openDoc('/tmp/a.md', '* x\n')
+    adoptNormalization('- x\n')
+    openDoc('/tmp/b.md', '# B')
+    const s = get(doc)
+    expect(s.normalized).toBeNull()
+    expect(isDirty(s)).toBe(false)
+  })
+
+  it('saving the normalized content reads clean afterwards', () => {
+    openDoc('/tmp/a.md', '* x\n')
+    adoptNormalization('- x\n')
+    markSaved('/tmp/a.md', '- x\n')
+    expect(isDirty(get(doc))).toBe(false)
   })
 
   it('retargetPath moves the memory when an ancestor folder moves', () => {
