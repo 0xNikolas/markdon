@@ -7,7 +7,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { EditorState } from '@milkdown/kit/prose/state'
 import { Schema } from '@milkdown/kit/prose/model'
 
-import { buildSearchPlugin, searchUi } from './searchPlugin'
+import { buildSearchPlugin, searchUi, shouldForceCloseFind } from './searchPlugin'
 
 const schema = new Schema({
   nodes: {
@@ -55,5 +55,23 @@ describe('searchPlugin apply', () => {
 
     expect(after).not.toBe(before)
     expect(after?.matches.length).toBe(1)
+  })
+})
+
+describe('shouldForceCloseFind', () => {
+  // Regression for the split-toggle FindBar leak: the header's Split Preview
+  // button calls toggleSplit() directly, bypassing routeFind()'s mode-aware
+  // Cmd+F routing entirely. If the WYSIWYG FindBar was already open, entering
+  // split unmounts the only <Editor> the plugin's activeView could point at
+  // (its view.destroy() hook nulls activeView), so the stale FindBar keeps
+  // rendering above <SplitView> and every interaction becomes a silent no-op
+  // (dispatch() early-returns without activeView). App.svelte's effect calls
+  // closeFind() exactly when this predicate is true, for any control that
+  // flips `split`, not just the header button.
+  it('closes only when entering split while the find bar is open', () => {
+    expect(shouldForceCloseFind(true, true)).toBe(true)
+    expect(shouldForceCloseFind(true, false)).toBe(false)
+    expect(shouldForceCloseFind(false, true)).toBe(false)
+    expect(shouldForceCloseFind(false, false)).toBe(false)
   })
 })

@@ -15,7 +15,7 @@
   import FindBar from './FindBar.svelte'
   import SettingsModal from './SettingsModal.svelte'
   import Sidebar from './Sidebar.svelte'
-  import { searchUi, openFind, closeFind } from './lib/searchPlugin'
+  import { searchUi, openFind, closeFind, shouldForceCloseFind } from './lib/searchPlugin'
   import { openSourceSearch } from './lib/sourceEditor'
   import { settingsOpen, openSettings, split } from './lib/ui'
   import { workspace, openWorkspace, initWorkspace } from './lib/workspace'
@@ -72,6 +72,18 @@
     if (get(split)) openSourceSearch()
     else openFind()
   }
+
+  // The header's Split Preview button calls toggleSplit() directly --
+  // it never goes through routeFind(), which only routes *new* Cmd+F
+  // invocations and does nothing for a FindBar that was already open when
+  // the mode switch happens. Entering split unmounts the WYSIWYG <Editor>,
+  // so a FindBar left open would render above <SplitView> as a stale,
+  // permanently unresponsive overlay (see shouldForceCloseFind). Reacting
+  // to $split here (rather than only inside toggleSplit/the button handler)
+  // covers every control that flips split, present or future.
+  $effect(() => {
+    if (shouldForceCloseFind($split, $searchUi.open)) closeFind()
+  })
 
   // Esc closes the find bar even when focus is inside the editor (FindBar's
   // own onkeydown only sees Esc while its input is focused). Also a

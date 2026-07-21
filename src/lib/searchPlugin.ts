@@ -142,6 +142,20 @@ export function closeFind(): void {
   searchUi.update((ui) => ({ ...ui, open: false, query: '', count: 0, activeIndex: -1 }))
 }
 
+/**
+ * True when a mode switch should force-close an already-open WYSIWYG find
+ * bar. Split mode has no target for it: entering split unmounts the only
+ * <Editor> the plugin's `activeView` could point at (its view.destroy()
+ * hook nulls `activeView`), so a FindBar left open would render above
+ * <SplitView> with every interaction silently no-oping (dispatch()
+ * early-returns without an activeView). This covers any control that flips
+ * `split` -- not just routeFind()'s Cmd+F handling, which only routes *new*
+ * find invocations and does nothing for a bar that was already open.
+ */
+export function shouldForceCloseFind(enteringSplit: boolean, findOpen: boolean): boolean {
+  return enteringSplit && findOpen
+}
+
 export function setQuery(query: string): void {
   dispatch({ type: 'set', query })
 }
