@@ -98,8 +98,15 @@
       {#each $workspace.tree.dirs as d (d.path)}{@render dirRows(d)}{/each}
       {#each $workspace.tree.files as f (f.path)}{@render fileRow(f)}{/each}
     </div>
+  {:else if showOpenFile}
+    <!-- A file is open: the big empty-state panel would just shout at a user
+         who is already reading a document, so offer a quiet row instead. -->
+    <button class="open-folder-row" onclick={openWorkspace}>
+      <Icon name="folder" size={14} />
+      Open Folder…
+    </button>
   {:else}
-    <!-- No workspace open yet: an always-visible sidebar (rather than one that
+    <!-- Nothing open at all: an always-visible sidebar (rather than one that
          only appears once a folder is picked) teaches the feature on first
          run, matching the design's populated state -- this empty panel is
          its unpopulated counterpart, not a hidden mode. -->
@@ -306,5 +313,26 @@
   }
   .open-folder:active {
     background: var(--accent-solid-active);
+  }
+
+  /* Quiet inline variant shown when a document is already open. */
+  .open-folder-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 12px 8px 16px;
+    border: 0;
+    border-radius: 6px;
+    background: none;
+    color: var(--fg-muted);
+    font: 400 13px var(--font-ui);
+    cursor: pointer;
+    text-align: left;
+    transition: background-color 0.1s ease, color 0.1s ease;
+  }
+  .open-folder-row:hover {
+    background: var(--surface);
+    color: var(--fg-secondary);
   }
 </style>
