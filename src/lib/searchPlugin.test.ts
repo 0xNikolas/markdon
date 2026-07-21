@@ -13,6 +13,7 @@ import {
   buildSearchPlugin,
   searchUi,
   shouldForceCloseFind,
+  shouldFocusFind,
   replaceOne,
   replaceAll,
   setCaseSensitive,
@@ -136,6 +137,23 @@ describe('shouldForceCloseFind', () => {
     expect(shouldForceCloseFind(true, false)).toBe(false)
     expect(shouldForceCloseFind(false, true)).toBe(false)
     expect(shouldForceCloseFind(false, false)).toBe(false)
+  })
+})
+
+describe('shouldFocusFind', () => {
+  // Regression for the replace-row focus-steal bug: FindBar's focus effect
+  // reads $searchUi, so it re-runs on EVERY searchUi.update() (the whole
+  // store object is the reactive source, not the `open` field alone) --
+  // including the updates that setCaseSensitive/setWholeWord/replaceOne/
+  // replaceAll/toggleReplaceRow now fire while the bar is already open. A
+  // bare "isOpen" check would re-focus the Find input on each of those,
+  // e.g. after every Enter-to-replace keystroke, breaking iterative
+  // replace. Only the actual false->true transition should focus.
+  it('focuses only on the false->true transition of open', () => {
+    expect(shouldFocusFind(false, true)).toBe(true)
+    expect(shouldFocusFind(true, true)).toBe(false)
+    expect(shouldFocusFind(true, false)).toBe(false)
+    expect(shouldFocusFind(false, false)).toBe(false)
   })
 })
 

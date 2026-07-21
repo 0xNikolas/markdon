@@ -183,6 +183,24 @@ export function shouldForceCloseFind(enteringSplit: boolean, findOpen: boolean):
   return enteringSplit && findOpen
 }
 
+/**
+ * True only on the false->true transition of `open` -- i.e. the bar just
+ * opened (Cmd+F or Cmd+Alt+F), not "the bar happens to be open right now".
+ * FindBar's focus effect must use this, not a bare `if ($searchUi.open)`:
+ * Svelte's store subscription re-runs an effect that reads `$searchUi` on
+ * EVERY searchUi.update() call, because the whole store object is the
+ * reactive source, not the individual `open` field. setCaseSensitive,
+ * setWholeWord, replaceOne, replaceAll and toggleReplaceRow all update
+ * searchUi while the bar is already open (chip clicks, Replace/Replace All,
+ * Enter in the replace field, the chevron), so an unconditional focus() on
+ * every re-run would yank focus back to the Find input after each of those
+ * -- breaking iterative replace-via-Enter and stealing focus from whatever
+ * control the user just used.
+ */
+export function shouldFocusFind(wasOpen: boolean, isOpen: boolean): boolean {
+  return isOpen && !wasOpen
+}
+
 export function setQuery(query: string): void {
   dispatch({ type: 'set', query })
 }

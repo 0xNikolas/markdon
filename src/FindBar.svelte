@@ -9,19 +9,22 @@
     setWholeWord,
     replaceOne,
     replaceAll,
+    shouldFocusFind,
   } from './lib/searchPlugin'
   import { doc } from './lib/doc'
   import Icon from './Icon.svelte'
 
   let inputEl: HTMLInputElement | undefined = $state()
 
-  // Focus the find input whenever the bar opens (Cmd+F while already open is
-  // a no-op re-focus, which is harmless). openReplace() (Cmd+Alt+F / the
-  // Find and Replace menu item) also flips `open`, so this covers both entry
-  // points -- the replace row's own visibility is driven by replaceOpen
-  // separately and doesn't need its own focus effect.
+  // Focus the find input only on the false->true transition of `open` --
+  // see shouldFocusFind's doc comment for why a bare `if ($searchUi.open)`
+  // is wrong here (it would re-focus on every searchUi.update(), including
+  // the ones this commit added for chip clicks / replace / the chevron).
+  let wasOpen = false
   $effect(() => {
-    if ($searchUi.open) inputEl?.focus()
+    const isOpen = $searchUi.open
+    if (shouldFocusFind(wasOpen, isOpen)) inputEl?.focus()
+    wasOpen = isOpen
   })
 
   function onInput(e: Event) {
