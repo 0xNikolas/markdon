@@ -32,6 +32,11 @@ export const APP_SHORTCUTS: Shortcut[] = [
     keys: ['Cmd', 'L'],
     note: 'Accepts a line, or line:col (col is 0-based, matching the status bar).',
   },
+  {
+    label: 'File History…',
+    keys: ['Cmd', 'Y'],
+    note: 'View and revert to previous saved versions; revert loads as unsaved changes.',
+  },
   { label: 'Settings', keys: ['Cmd', ','] },
   { label: 'Undo', keys: ['Cmd', 'Z'] },
   { label: 'Redo', keys: ['Cmd', 'Shift', 'Z'] },

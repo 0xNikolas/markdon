@@ -10,6 +10,7 @@ import {
   enableEditing,
   retargetPath,
   detachToUntitled,
+  revertBuffer,
 } from './doc'
 
 describe('doc store', () => {
@@ -139,6 +140,30 @@ describe('retargetPath', () => {
     newDoc()
     retargetPath('/ws/old.md', '/ws/new.md')
     expect(get(doc).path).toBeNull()
+  })
+})
+
+describe('revertBuffer', () => {
+  beforeEach(() => newDoc())
+
+  it('loads content as unsaved changes, preserving savedContent and path, bumping loadId', () => {
+    openDoc('/ws/a.md', '# current')
+    const loadId = get(doc).loadId
+    revertBuffer('# old version')
+    const s = get(doc)
+    expect(s.content).toBe('# old version')
+    expect(s.savedContent).toBe('# current') // disk truth untouched
+    expect(s.path).toBe('/ws/a.md') // still the same file
+    expect(isDirty(s)).toBe(true) // buffer now differs from disk
+    expect(s.loadId).toBe(loadId + 1) // editor remounts with the reverted text
+  })
+
+  it('always makes the buffer editable, even reverting a read-only doc', () => {
+    openDoc('/ws/a.md', '# current', true)
+    revertBuffer('# old version')
+    const s = get(doc)
+    expect(s.readonly).toBe(false)
+    expect(s.content).toBe('# old version')
   })
 })
 

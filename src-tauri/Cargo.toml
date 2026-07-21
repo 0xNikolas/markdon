@@ -28,6 +28,12 @@ tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
 notify = "6"
 tempfile = "3"
+# File History (task 24): SHA-256 of the canonical file path (bucket key) and of
+# snapshot content (dedupe), hex-encoded into the bucket directory name. Both were
+# already transitive deps (Cargo.lock pins sha2 0.10.9, hex 0.4.3), promoted to
+# direct here for src/history.rs — zero lockfile churn.
+sha2 = "0.10"
+hex = "0.4"
 # Move-to-Trash for the sidebar Delete op. On macOS this wraps
 # NSFileManager.trashItem via the objc2 0.6 / objc2-foundation 0.3 stack already
 # vendored below for pdf.rs, so no new native-dependency family is introduced.

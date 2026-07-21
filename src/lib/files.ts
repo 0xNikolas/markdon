@@ -3,6 +3,7 @@ import { get } from 'svelte/store'
 import { doc, openDoc, markSaved } from './doc'
 import { reportError } from './errors'
 import { openList, addOpen } from './openList'
+import { recordSave } from './history'
 
 interface OpenedFile {
   path: string
@@ -51,6 +52,10 @@ export async function save(): Promise<void> {
   try {
     await invoke('write_file', { path: state.path, contents: state.content })
     markSaved(state.path, state.content)
+    // Best-effort File History snapshot (task 24): never awaited into the save
+    // outcome, errors swallowed inside recordSave — a history failure must never
+    // turn a good save into a reported failure.
+    void recordSave(state.path)
   } catch (e) {
     reportError(`Could not save file: ${String(e)}`)
   }
@@ -65,6 +70,7 @@ export async function saveAs(): Promise<void> {
     if (selected === null) return // cancelled
     await invoke('write_file', { path: selected, contents: state.content })
     markSaved(selected, state.content)
+    void recordSave(selected) // best-effort history snapshot (see save())
     openList.update((l) => addOpen(l, selected))
   } catch (e) {
     reportError(`Could not save file: ${String(e)}`)

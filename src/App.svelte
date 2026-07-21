@@ -4,7 +4,8 @@
   import { invoke } from '@tauri-apps/api/core'
   import { getCurrentWindow } from '@tauri-apps/api/window'
   import { get } from 'svelte/store'
-  import { doc, edit, newDoc, isDirty, enableEditing } from './lib/doc'
+  import { doc, edit, newDoc, isDirty, enableEditing, revertBuffer } from './lib/doc'
+  import { recordRevert } from './lib/history'
   import { open, save, saveAs, openPath, openInPreferredTarget } from './lib/files'
   import { openList, removeOpen, neighbourAfterClose } from './lib/openList'
   import { conflict, reloadFromDisk, dismissConflict, initFileSync } from './lib/fileSync'
@@ -16,6 +17,7 @@
   import FindBar from './FindBar.svelte'
   import SettingsModal from './SettingsModal.svelte'
   import GoToLineBar from './GoToLineBar.svelte'
+  import HistoryModal from './HistoryModal.svelte'
   import Sidebar from './Sidebar.svelte'
   import { searchUi, openFind, openReplace, closeFind, shouldForceCloseFind } from './lib/searchPlugin'
   import { openSourceSearch, clearPendingLine } from './lib/sourceEditor'
@@ -25,6 +27,9 @@
     gotoOpen,
     openGoto,
     closeGoto,
+    historyOpen,
+    openHistory,
+    closeHistory,
     split,
     exportTick,
     isMacPlatform,
@@ -102,6 +107,16 @@
         // that's still open (focusTrap.destroy() unconditionally clears it).
         if (pendingAction !== null || get(settingsOpen) || get(gotoOpen)) return
         openGoto()
+      }),
+      listen('menu:history', () => {
+        // Untitled/never-saved docs have no history — the menu item no-ops.
+        // Same modal-precedence gating as the goto branch above: the native
+        // File-menu item isn't disabled by app state, so without this it would
+        // stack HistoryModal's focus trap behind the discard-guard/Settings/
+        // Go-to-Line overlays (or itself) and strip `inert` on close.
+        if (get(doc).path === null) return
+        if (pendingAction !== null || get(settingsOpen) || get(gotoOpen) || get(historyOpen)) return
+        openHistory()
       }),
       listen('menu:settings', () => openSettings()),
       listen('menu:open_folder', () => openWorkspace()),
@@ -207,6 +222,20 @@
       e.preventDefault()
       openGoto()
     }
+  }
+
+  // File History revert: load the selected version into the buffer as UNSAVED
+  // changes (disk truth untouched; user confirms with Cmd+S). Routed through the
+  // existing discard guard so any current unsaved edits aren't silently lost, and
+  // a best-effort pre-revert snapshot captures the current on-disk state first so
+  // the revert is itself reversible.
+  function applyRevert(content: string) {
+    guarded(() => {
+      const p = get(doc).path
+      if (p) void recordRevert(p)
+      revertBuffer(content)
+      closeHistory()
+    })
   }
 
   function discard() {
@@ -320,6 +349,10 @@
 
 {#if $gotoOpen}
   <GoToLineBar />
+{/if}
+
+{#if $historyOpen}
+  <HistoryModal path={$doc.path} onRevert={applyRevert} />
 {/if}
 
 <style>

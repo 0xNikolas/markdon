@@ -2,6 +2,7 @@ mod allowlist;
 mod commands;
 mod dialogs;
 mod fileops;
+mod history;
 mod menu;
 mod pdf;
 mod watcher;
@@ -128,6 +129,9 @@ pub fn run() {
             fileops::copy_entry,
             fileops::duplicate_entry,
             fileops::delete_entries,
+            history::record_history,
+            history::list_history,
+            history::read_history_version,
             pdf::export_pdf
         ])
         .build(tauri::generate_context!())

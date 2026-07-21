@@ -4,6 +4,7 @@ import { get, writable, type Writable } from 'svelte/store'
 import { doc, openDoc } from './doc'
 import { reportError } from './errors'
 import { watchStatus } from './ui'
+import { recordExternal } from './history'
 
 /**
  * When set, the open file changed on disk while the buffer had unsaved edits.
@@ -42,6 +43,10 @@ export function reloadFromDisk(content: string): void {
   const current = get(doc)
   if (current.path === null) return
   openDoc(current.path, content, current.readonly)
+  // Record the adopted on-disk version so an external overwrite is recoverable
+  // from File History (task 24). Best-effort; 'keep mine' dismissals record
+  // nothing. Rust re-reads the file, so passing the path is enough.
+  void recordExternal(current.path)
   conflict.set(null)
   dismissedDisk = null
 }

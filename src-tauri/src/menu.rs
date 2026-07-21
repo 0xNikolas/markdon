@@ -17,6 +17,9 @@ pub fn build(app: &App) -> tauri::Result<Menu<Wry>> {
     let save_as = MenuItemBuilder::with_id("menu:save_as", "Save As…")
         .accelerator("CmdOrCtrl+Shift+S")
         .build(app)?;
+    let history = MenuItemBuilder::with_id("menu:history", "File History…")
+        .accelerator("CmdOrCtrl+Y")
+        .build(app)?;
     let export = MenuItemBuilder::with_id("menu:export", "Export…")
         .accelerator("CmdOrCtrl+Shift+E")
         .build(app)?;
@@ -46,6 +49,8 @@ pub fn build(app: &App) -> tauri::Result<Menu<Wry>> {
         .separator()
         .item(&save)
         .item(&save_as)
+        .separator()
+        .item(&history)
         .separator()
         .item(&export)
         .build()?;
@@ -94,6 +99,7 @@ mod tests {
             "CmdOrCtrl+S",
             "CmdOrCtrl+Shift+S",
             "CmdOrCtrl+Shift+E",
+            "CmdOrCtrl+Y",
             "CmdOrCtrl+F",
             "CmdOrCtrl+Alt+F",
             "CmdOrCtrl+L",

@@ -71,6 +71,15 @@ export function closeGoto(): void {
   gotoOpen.set(false)
 }
 
+/** File History modal visibility. Mirrors settingsOpen/openSettings/closeSettings. */
+export const historyOpen: Writable<boolean> = writable(false)
+export function openHistory(): void {
+  historyOpen.set(true)
+}
+export function closeHistory(): void {
+  historyOpen.set(false)
+}
+
 // -- Go to Line keyboard fallback --------------------------------------------
 
 /**

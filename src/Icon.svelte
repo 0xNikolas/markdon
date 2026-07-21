@@ -10,6 +10,7 @@
   import fileUp from './assets/icons/file-up.svg?raw'
   import folder from './assets/icons/folder.svg?raw'
   import folderOpen from './assets/icons/folder-open.svg?raw'
+  import history from './assets/icons/history.svg?raw'
   import keyboard from './assets/icons/keyboard.svg?raw'
   import layoutGrid from './assets/icons/layout-grid.svg?raw'
   import settings from './assets/icons/settings.svg?raw'
@@ -28,6 +29,7 @@
     'file-up': fileUp,
     folder,
     'folder-open': folderOpen,
+    history,
     keyboard,
     'layout-grid': layoutGrid,
     settings,

@@ -46,6 +46,18 @@ export function enableEditing(): void {
 }
 
 /**
+ * Load a File History version into the buffer as UNSAVED changes (task 24).
+ * `savedContent` and `path` are left untouched — disk truth is unchanged — so
+ * the doc reads as dirty and the user confirms with Cmd+S. `readonly` is cleared
+ * (a revert always makes the buffer editable) and `loadId` is bumped so the
+ * {#key $doc.loadId} block remounts the editor with the reverted text. Revert
+ * NEVER writes disk directly.
+ */
+export function revertBuffer(content: string): void {
+  doc.update((s) => ({ ...s, content, readonly: false, loadId: s.loadId + 1 }))
+}
+
+/**
  * Follow a rename/move of the open file — or of an ancestor folder of it — by
  * rewriting `path` in place. `oldPrefix`/`newPrefix` are the source and
  * destination paths of the moved entry (a file, or a folder whose subtree

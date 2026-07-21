@@ -49,6 +49,7 @@ const ICONS = [
   'file-up',
   'folder',
   'folder-open',
+  'history',
   'italic',
   'keyboard',
   'layout-grid',
