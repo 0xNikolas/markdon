@@ -25,6 +25,31 @@ export interface Clipboard {
 /** App-internal file clipboard. `null` disables Paste. */
 export const clipboard: Writable<Clipboard | null> = writable(null)
 
+/**
+ * Reset selection/focus/clipboard. Every path they hold is only meaningful
+ * inside the workspace it was captured in, so a switch to a different root
+ * (Open Folder, or the launch-time restore) must drop them — otherwise a Cut
+ * from the old workspace can be Pasted into the new one, silently moving a
+ * file across workspaces, and a stale `focused` misdirects New File.
+ */
+export function clearFileOpsState(): void {
+  selection.set(new Set())
+  focused.set(null)
+  clipboard.set(null)
+}
+
+// Clear file-ops state whenever the open workspace's root changes — including
+// the very first adopt (openWorkspace, refreshWorkspace, restoreWorkspace all
+// funnel through `workspace.set` in workspace.ts's `adopt`). A same-root
+// update (e.g. refreshWorkspace re-walking the tree) must NOT clear, so the
+// selection survives an ordinary refresh.
+let lastRoot: string | null = get(workspace).root
+workspace.subscribe((s) => {
+  if (s.root === lastRoot) return
+  lastRoot = s.root
+  clearFileOpsState()
+})
+
 // -- pure helpers (unit-tested) ----------------------------------------------
 
 /**
@@ -224,6 +249,14 @@ export async function performMove(paths: string[], destDir: string): Promise<voi
  * Paste the clipboard into the resolved target directory. Copy mode calls
  * copy_entry; cut mode calls move_entry (and follows the open doc), then clears
  * the clipboard. refreshWorkspace() reconciles the tree with disk afterwards.
+ *
+ * A cut-paste processes `cb.paths` in order and tracks how many completed
+ * successfully. If one fails partway through, the clipboard is repaired to
+ * hold only the not-yet-moved items (itself included) instead of either the
+ * original full list (which would re-attempt already-moved items and error)
+ * or being dropped entirely (which would strand them with no way to retry).
+ * Copy-paste is unaffected by a failure: the clipboard already persists
+ * copies as-is, so no repair is needed.
  */
 export async function paste(): Promise<void> {
   const cb = get(clipboard)
@@ -231,6 +264,7 @@ export async function paste(): Promise<void> {
   const dir = pasteTargetDir(get(focused), folderPaths(get(workspace).tree), get(workspace).root)
   if (dir === null) return
   const results: string[] = []
+  let movedCount = 0
   try {
     for (const src of cb.paths) {
       if (cb.mode === 'copy') {
@@ -239,11 +273,16 @@ export async function paste(): Promise<void> {
         const p = await moveEntry(src, dir)
         retargetPath(src, p)
         results.push(p)
+        movedCount++
       }
     }
     if (cb.mode === 'cut') clipboard.set(null)
   } catch (e) {
     reportError(`Could not paste: ${String(e)}`)
+    if (cb.mode === 'cut') {
+      const remaining = cb.paths.slice(movedCount)
+      clipboard.set(remaining.length > 0 ? { mode: 'cut', paths: remaining } : null)
+    }
   }
   await refreshWorkspace()
   if (results.length > 0) afterMutation(results)

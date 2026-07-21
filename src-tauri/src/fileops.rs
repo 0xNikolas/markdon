@@ -34,13 +34,18 @@ fn valid_leaf_name(name: &str) -> Result<(), String> {
 
 /// Build a duplicate name by inserting `" copy"` / `" copy N"` before the
 /// extension. A leading dot (dotfile) is not treated as an extension separator.
+/// Directories have no extension to preserve, so the suffix is always appended
+/// at the end (`v1.2-release` -> `v1.2-release copy`, not `v1 copy.2-release`).
 /// Pure so the suffixing rule is unit-testable without the filesystem.
-fn dup_name(name: &str, n: usize) -> String {
+fn dup_name(name: &str, n: usize, is_dir: bool) -> String {
     let suffix = if n == 1 {
         " copy".to_string()
     } else {
         format!(" copy {n}")
     };
+    if is_dir {
+        return format!("{name}{suffix}");
+    }
     match name.rfind('.') {
         Some(idx) if idx > 0 => format!("{}{}{}", &name[..idx], suffix, &name[idx..]),
         _ => format!("{name}{suffix}"),
@@ -48,10 +53,10 @@ fn dup_name(name: &str, n: usize) -> String {
 }
 
 /// First non-colliding duplicate name in `dir` (`note.md` -> `note copy.md`,
-/// then `note copy 2.md`, ...).
-fn unique_dup_name(dir: &Path, name: &str) -> String {
+/// then `note copy 2.md`, ...; a directory always suffixes at the end).
+fn unique_dup_name(dir: &Path, name: &str, is_dir: bool) -> String {
     for n in 1.. {
-        let candidate = dup_name(name, n);
+        let candidate = dup_name(name, n, is_dir);
         if !dir.join(&candidate).exists() {
             return candidate;
         }
@@ -206,11 +211,10 @@ pub(crate) fn copy_entry_impl(
 pub(crate) fn duplicate_entry_impl(allowed: &AllowedPaths, path: &str) -> Result<String, String> {
     allowed.ensure(path)?;
     let src = Path::new(path);
-    if fs::symlink_metadata(src)
+    let file_type = fs::symlink_metadata(src)
         .map_err(|e| e.to_string())?
-        .file_type()
-        .is_symlink()
-    {
+        .file_type();
+    if file_type.is_symlink() {
         return Err("cannot duplicate a symlink".into());
     }
     let parent = src.parent().ok_or("no parent")?;
@@ -218,7 +222,7 @@ pub(crate) fn duplicate_entry_impl(allowed: &AllowedPaths, path: &str) -> Result
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or("non-UTF-8 name")?;
-    let dest = parent.join(unique_dup_name(parent, name));
+    let dest = parent.join(unique_dup_name(parent, name, file_type.is_dir()));
     copy_tree(src, &dest)?;
     let p = path_to_string(&dest)?;
     allowed.allow(&p);
@@ -327,12 +331,21 @@ mod tests {
 
     #[test]
     fn dup_name_inserts_before_extension() {
-        assert_eq!(dup_name("note.md", 1), "note copy.md");
-        assert_eq!(dup_name("note.md", 2), "note copy 2.md");
-        assert_eq!(dup_name("photos", 1), "photos copy");
-        assert_eq!(dup_name("archive.tar.gz", 1), "archive.tar copy.gz");
+        assert_eq!(dup_name("note.md", 1, false), "note copy.md");
+        assert_eq!(dup_name("note.md", 2, false), "note copy 2.md");
+        assert_eq!(dup_name("photos", 1, false), "photos copy");
+        assert_eq!(dup_name("archive.tar.gz", 1, false), "archive.tar copy.gz");
         // Leading dot is not an extension separator.
-        assert_eq!(dup_name(".env", 1), ".env copy");
+        assert_eq!(dup_name(".env", 1, false), ".env copy");
+    }
+
+    #[test]
+    fn dup_name_always_appends_for_directories() {
+        // A directory's dot is not an extension -- the suffix goes at the very
+        // end, never spliced into the middle of the name.
+        assert_eq!(dup_name("v1.2-release", 1, true), "v1.2-release copy");
+        assert_eq!(dup_name("v1.2-release", 2, true), "v1.2-release copy 2");
+        assert_eq!(dup_name("photos", 1, true), "photos copy");
     }
 
     // -- create ---------------------------------------------------------------
@@ -539,6 +552,16 @@ mod tests {
         assert_eq!(Path::new(&p1), dir.path().join("note copy.md"));
         let p2 = duplicate_entry_impl(&a, f.to_str().unwrap()).unwrap();
         assert_eq!(Path::new(&p2), dir.path().join("note copy 2.md"));
+    }
+
+    #[test]
+    fn duplicate_a_dotted_folder_name_appends_rather_than_splicing() {
+        let (dir, a) = granted();
+        let folder = dir.path().join("v1.2-release");
+        fs::create_dir(&folder).unwrap();
+        let p = duplicate_entry_impl(&a, folder.to_str().unwrap()).unwrap();
+        assert_eq!(Path::new(&p), dir.path().join("v1.2-release copy"));
+        assert!(Path::new(&p).is_dir());
     }
 
     // -- delete ---------------------------------------------------------------

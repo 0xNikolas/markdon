@@ -126,6 +126,36 @@ describe('isSelfOrDescendant', () => {
   })
 })
 
+describe('workspace root changes clear file-ops state', () => {
+  it('resets selection, focused, and clipboard when the root changes', () => {
+    focusRow('/ws/docs/note.md')
+    cutSelection()
+    expect(get(selection).size).toBe(1)
+    expect(get(focused)).toBe('/ws/docs/note.md')
+    expect(get(clipboard)).not.toBeNull()
+
+    // A different workspace is opened (Open Folder / restore) -- same shape
+    // of update `adopt()` performs in workspace.ts.
+    workspace.set({ root: '/other', tree: dir('other', '/other') })
+
+    expect(get(selection).size).toBe(0)
+    expect(get(focused)).toBeNull()
+    expect(get(clipboard)).toBeNull()
+  })
+
+  it('does not clear on a same-root refresh (e.g. refreshWorkspace)', () => {
+    focusRow('/ws/docs/note.md')
+    cutSelection()
+
+    // Same root, new tree object -- what refreshWorkspace's adopt() does.
+    workspace.set({ root: '/ws', tree: dir('ws', '/ws') })
+
+    expect(get(selection).size).toBe(1)
+    expect(get(focused)).toBe('/ws/docs/note.md')
+    expect(get(clipboard)).not.toBeNull()
+  })
+})
+
 describe('clipboard clears after a cut-paste but not a copy-paste', () => {
   it('cut-paste (move) clears the clipboard', async () => {
     focusRow('/ws/docs/note.md')
@@ -149,6 +179,38 @@ describe('clipboard clears after a cut-paste but not a copy-paste', () => {
     expect(invoke).toHaveBeenCalledWith('copy_entry', {
       src: '/ws/readme.md',
       destDir: '/ws/docs',
+    })
+  })
+
+  it('a partial-failure cut-paste leaves exactly the unprocessed items in the clipboard', async () => {
+    // Three items cut; the first move succeeds, the second rejects. The third
+    // is never attempted. A retry must only touch what didn't already move.
+    selection.set(new Set(['/ws/docs/note.md', '/ws/img/logo.svg', '/ws/readme.md']))
+    cutSelection()
+    invoke
+      .mockResolvedValueOnce('/ws/note.md') // move_entry(note.md) succeeds
+      .mockRejectedValueOnce('disk full') // move_entry(logo.svg) fails
+      .mockResolvedValueOnce({ root: '/ws', tree }) // refreshWorkspace() after the catch
+    focused.set('/ws') // paste target = root
+    await paste()
+    expect(get(clipboard)).toEqual({
+      mode: 'cut',
+      paths: ['/ws/img/logo.svg', '/ws/readme.md'],
+    })
+    expect(get(errorMessage)).toContain('paste')
+  })
+
+  it('a fully-failed cut-paste (nothing moved) leaves the clipboard untouched', async () => {
+    selection.set(new Set(['/ws/docs/note.md', '/ws/readme.md']))
+    cutSelection()
+    invoke
+      .mockRejectedValueOnce('denied') // move_entry(note.md) fails immediately
+      .mockResolvedValueOnce({ root: '/ws', tree }) // refreshWorkspace() after the catch
+    focused.set('/ws')
+    await paste()
+    expect(get(clipboard)).toEqual({
+      mode: 'cut',
+      paths: ['/ws/docs/note.md', '/ws/readme.md'],
     })
   })
 })

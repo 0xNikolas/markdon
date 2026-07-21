@@ -128,7 +128,7 @@
     deleteConfirm = null
   }
 
-  function handleAction(action: FileOpAction) {
+  async function handleAction(action: FileOpAction) {
     const sel = [...$selection]
     switch (action) {
       case 'new-file':
@@ -141,7 +141,10 @@
         if (sel.length === 1) promptRename(sel[0])
         break
       case 'duplicate':
-        for (const p of sel) performDuplicate(p)
+        // Sequential, matching how paste()/performMove() serialize a batch:
+        // each performDuplicate() call refreshes the whole tree, so firing
+        // them unsequenced races concurrent refreshes against each other.
+        for (const p of sel) await performDuplicate(p)
         break
       case 'move':
         if (sel.length >= 1) moveSources = sel
