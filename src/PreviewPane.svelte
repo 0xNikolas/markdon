@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from 'svelte'
   import { Crepe } from '@milkdown/crepe'
-  import { replaceAll } from '@milkdown/kit/utils'
+  import { replaceAll, getHTML } from '@milkdown/kit/utils'
   import '@milkdown/crepe/theme/common/style.css'
   import '@milkdown/crepe/theme/frame.css'
   import './editor-theme.css' // after the Crepe theme, to override its fonts
+  import { registerHtmlSource, unregisterHtmlSource } from './lib/export'
 
   interface Props {
     content: string
@@ -19,6 +20,10 @@
   // untrack captures the initial value without making this a reactive read.
   let lastPushed = untrack(() => content)
   let timer: ReturnType<typeof setTimeout> | undefined
+  // Export's HTML source while split mode is mounted -- registered once this
+  // pane's Crepe instance exists so export works in split mode too
+  // (amendments.md #5: Editor.svelte AND PreviewPane share the slot).
+  let source: (() => string) | undefined
 
   onMount(() => {
     crepe = new Crepe({
@@ -35,6 +40,10 @@
     })
     crepe.setReadonly(true) // flips only the editable prop -> replaceAll still dispatches
     ready = crepe.create() // NO markdownUpdated listener -> no echo back into edit()
+    ready.then(() => {
+      source = () => crepe!.editor.action(getHTML())
+      registerHtmlSource(source)
+    })
   })
 
   // Live sync: debounce bursts, then replace the whole preview doc. replaceAll's
@@ -51,6 +60,7 @@
 
   onDestroy(() => {
     clearTimeout(timer)
+    if (source) unregisterHtmlSource(source)
     void crepe?.destroy()
   })
 </script>

@@ -15,10 +15,12 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
   import { Crepe } from '@milkdown/crepe'
+  import { getHTML } from '@milkdown/kit/utils'
   import '@milkdown/crepe/theme/common/style.css'
   import '@milkdown/crepe/theme/frame.css'
   import './editor-theme.css' // must come after the Crepe theme to override its fonts
   import { searchPlugin } from './lib/searchPlugin'
+  import { registerHtmlSource, unregisterHtmlSource } from './lib/export'
 
   interface Props {
     initialContent: string
@@ -29,6 +31,9 @@
 
   let el: HTMLDivElement
   let crepe: Crepe | undefined
+  // Export's HTML source for this (WYSIWYG) view mode; registered post-create
+  // since getHTML() reads editorViewCtx, which only exists after create().
+  let source: (() => string) | undefined
 
   onMount(async () => {
     crepe = new Crepe({ root: el, defaultValue: initialContent })
@@ -38,6 +43,8 @@
     })
     crepe.setReadonly(readonly)
     await crepe.create()
+    source = () => crepe!.editor.action(getHTML())
+    registerHtmlSource(source)
   })
 
   // Toggle in place (no remount) when Enable editing lifts the flag.
@@ -45,7 +52,10 @@
     crepe?.setReadonly(readonly)
   })
 
-  onDestroy(() => crepe?.destroy())
+  onDestroy(() => {
+    if (source) unregisterHtmlSource(source)
+    crepe?.destroy()
+  })
 </script>
 
 <div class="editor" bind:this={el}></div>

@@ -17,6 +17,9 @@ pub fn build(app: &App) -> tauri::Result<Menu<Wry>> {
     let save_as = MenuItemBuilder::with_id("menu:save_as", "Save As…")
         .accelerator("CmdOrCtrl+Shift+S")
         .build(app)?;
+    let export = MenuItemBuilder::with_id("menu:export", "Export…")
+        .accelerator("CmdOrCtrl+Shift+E")
+        .build(app)?;
     let find = MenuItemBuilder::with_id("menu:find", "Find…")
         .accelerator("CmdOrCtrl+F")
         .build(app)?;
@@ -37,6 +40,8 @@ pub fn build(app: &App) -> tauri::Result<Menu<Wry>> {
         .separator()
         .item(&save)
         .item(&save_as)
+        .separator()
+        .item(&export)
         .build()?;
 
     // Native edit items so system shortcuts (copy/paste/undo/redo) work.
@@ -79,6 +84,7 @@ mod tests {
             "CmdOrCtrl+Shift+O",
             "CmdOrCtrl+S",
             "CmdOrCtrl+Shift+S",
+            "CmdOrCtrl+Shift+E",
             "CmdOrCtrl+F",
             "CmdOrCtrl+,",
         ] {

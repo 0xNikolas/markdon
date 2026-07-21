@@ -17,8 +17,9 @@
   import Sidebar from './Sidebar.svelte'
   import { searchUi, openFind, closeFind, shouldForceCloseFind } from './lib/searchPlugin'
   import { openSourceSearch } from './lib/sourceEditor'
-  import { settingsOpen, openSettings, split } from './lib/ui'
+  import { settingsOpen, openSettings, split, exportTick } from './lib/ui'
   import { workspace, openWorkspace, initWorkspace } from './lib/workspace'
+  import { exportDocument } from './lib/export'
 
   // Action to run if the user chooses to discard unsaved changes. When set, the
   // confirm modal is shown. Guards New, Open, and window close uniformly.
@@ -52,16 +53,30 @@
       listen('menu:find', () => routeFind()),
       listen('menu:settings', () => openSettings()),
       listen('menu:open_folder', () => openWorkspace()),
+      listen('menu:export', () => exportDocument()),
       listen('window:close-requested', () => guarded(() => getCurrentWindow().destroy())),
       listen('file:opened', () => drainOpenedFiles()),
     ])
     drainOpenedFiles() // cold launch: pick up the file the app was opened with
     const teardownSync = initFileSync() // watch the open file for external changes
     const teardownWorkspace = initWorkspace() // restore + refresh the workspace tree
+    // Header's Export button increments exportTick rather than calling
+    // exportDocument() directly (ui.ts's requestExport contract) -- skip the
+    // subscribe's immediate replay of the current value so mounting doesn't
+    // trigger a spurious export.
+    let firstExportTick = true
+    const unsubExportTick = exportTick.subscribe(() => {
+      if (firstExportTick) {
+        firstExportTick = false
+        return
+      }
+      exportDocument()
+    })
     return () => {
       unsub.then((fns) => fns.forEach((f) => f()))
       teardownSync.then((fn) => fn())
       teardownWorkspace.then((fn) => fn())
+      unsubExportTick()
     }
   })
 
