@@ -14,6 +14,7 @@ export const APP_SHORTCUTS: Shortcut[] = [
   { label: 'Open…', keys: ['Cmd', 'O'] },
   { label: 'Save', keys: ['Cmd', 'S'] },
   { label: 'Save As…', keys: ['Cmd', 'Shift', 'S'] },
+  { label: 'Export…', keys: ['Cmd', 'Shift', 'E'] },
   { label: 'Find', keys: ['Cmd', 'F'] },
   { label: 'Settings', keys: ['Cmd', ','] },
   { label: 'Undo', keys: ['Cmd', 'Z'] },

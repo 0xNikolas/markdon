@@ -124,27 +124,59 @@ function exportFilter(format: ExportFormat): { name: string; extensions: string[
     : { name: 'Markdown', extensions: ['md', 'markdown'] }
 }
 
+const SOURCE_RETRY_ATTEMPTS = 10
+const SOURCE_RETRY_DELAY_MS = 100
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * Bridge the registration gap during a split-mode toggle: the outgoing
+ * view's htmlSource is unregistered synchronously (onDestroy), but the
+ * incoming view only registers after its async crepe.create() resolves
+ * (amendments.md #5's shared-slot mechanism, split across Editor.svelte and
+ * PreviewPane.svelte). An export invoked in that window would otherwise see
+ * `htmlSource === null` for a doc that is, from the user's perspective,
+ * still open. Poll briefly instead of failing immediately; bounded so a
+ * genuinely broken registration still surfaces reportError rather than
+ * hanging.
+ */
+async function waitForHtmlSource(): Promise<(() => string) | null> {
+  for (let attempt = 0; attempt < SOURCE_RETRY_ATTEMPTS && htmlSource === null; attempt++) {
+    await delay(SOURCE_RETRY_DELAY_MS)
+  }
+  return htmlSource
+}
+
 /**
  * Export the current document per settings.exportFormat. Not guarded by the
  * dirty-modal (snapshots the current buffer; nothing is lost) and never
  * calls markSaved or mutates doc -- exporting is not saving.
+ *
+ * The entire fallible section -- resolving the HTML source, building the
+ * template, showing the save dialog, and writing the file -- runs inside
+ * one try/catch so a throwing htmlSource() (e.g. a stale closure over a
+ * destroyed Crepe instance) reaches reportError instead of becoming an
+ * unhandled promise rejection.
  */
 export async function exportDocument(): Promise<void> {
   const state = get(doc)
   const format = get(settings).exportFormat
 
-  let contents: string
-  if (format === 'html') {
-    if (htmlSource === null) {
-      reportError('Export failed: editor is not ready')
-      return
-    }
-    contents = buildExportHtml(docTitle(state.path), htmlSource())
-  } else {
-    contents = state.content // markdown path: buffer as-is, byte-for-byte
-  }
-
   try {
+    let contents: string
+    if (format === 'html') {
+      const source = htmlSource ?? (await waitForHtmlSource())
+      if (source === null) {
+        reportError('Export failed: editor is not ready')
+        return
+      }
+      contents = buildExportHtml(docTitle(state.path), source())
+    } else {
+      contents = state.content // markdown path: buffer as-is, byte-for-byte
+    }
+
     const selected = await invoke<string | null>('save_file_dialog', {
       defaultPath: deriveExportFilename(state.path, format),
       filters: [exportFilter(format)],

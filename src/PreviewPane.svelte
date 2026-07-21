@@ -24,6 +24,10 @@
   // pane's Crepe instance exists so export works in split mode too
   // (amendments.md #5: Editor.svelte AND PreviewPane share the slot).
   let source: (() => string) | undefined
+  // Set in onDestroy; checked after `ready` resolves so a pane unmounted
+  // mid-create (fast split-mode toggle) never registers a closure over an
+  // already-destroyed Crepe instance -- see Editor.svelte's matching guard.
+  let destroyed = false
 
   onMount(() => {
     crepe = new Crepe({
@@ -41,7 +45,21 @@
     crepe.setReadonly(true) // flips only the editable prop -> replaceAll still dispatches
     ready = crepe.create() // NO markdownUpdated listener -> no echo back into edit()
     ready.then(() => {
-      source = () => crepe!.editor.action(getHTML())
+      if (destroyed) return // unmounted while create() was in flight -- don't register
+      // Export needs doc.content verbatim, but this pane only reflects it
+      // after the 150ms debounce below settles, so a getHTML() call right
+      // after typing could otherwise serialize a stale preview. Flush any
+      // pending push synchronously first: `flushPendingUpdate` reads the
+      // `content` prop directly (a rune, so this always reads its current
+      // value, never a stale closure) and applies replaceAll immediately.
+      // replaceAll's non-flush path dispatches synchronously to the
+      // ProseMirror view (see the $effect below), so by the time
+      // flushPendingUpdate returns the DOM already matches doc.content,
+      // and the subsequent getHTML() call serializes that same content.
+      source = () => {
+        flushPendingUpdate()
+        return crepe!.editor.action(getHTML())
+      }
       registerHtmlSource(source)
     })
   })
@@ -53,12 +71,26 @@
     if (md === lastPushed) return
     clearTimeout(timer)
     timer = setTimeout(() => {
+      timer = undefined
       lastPushed = md
       void ready?.then(() => crepe?.editor.action(replaceAll(md)))
     }, 150)
   })
 
+  // Cancels a pending debounced push (if any) and applies it to the Crepe
+  // doc immediately, synchronously, using the latest `content` prop. See
+  // the call site above for why this makes exported HTML always reflect
+  // doc.content at invocation time regardless of the 150ms debounce.
+  function flushPendingUpdate(): void {
+    if (timer === undefined) return
+    clearTimeout(timer)
+    timer = undefined
+    lastPushed = content
+    crepe?.editor.action(replaceAll(content))
+  }
+
   onDestroy(() => {
+    destroyed = true
     clearTimeout(timer)
     if (source) unregisterHtmlSource(source)
     void crepe?.destroy()

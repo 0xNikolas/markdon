@@ -34,6 +34,11 @@
   // Export's HTML source for this (WYSIWYG) view mode; registered post-create
   // since getHTML() reads editorViewCtx, which only exists after create().
   let source: (() => string) | undefined
+  // Set in onDestroy; checked after the `await crepe.create()` below so a
+  // view unmounted mid-create (e.g. a fast split-mode toggle) never
+  // registers a closure over an already-destroyed Crepe instance -- that
+  // stale closure would throw when export later called it.
+  let destroyed = false
 
   onMount(async () => {
     crepe = new Crepe({ root: el, defaultValue: initialContent })
@@ -43,6 +48,7 @@
     })
     crepe.setReadonly(readonly)
     await crepe.create()
+    if (destroyed) return // unmounted while create() was in flight -- don't register
     source = () => crepe!.editor.action(getHTML())
     registerHtmlSource(source)
   })
@@ -53,6 +59,7 @@
   })
 
   onDestroy(() => {
+    destroyed = true
     if (source) unregisterHtmlSource(source)
     crepe?.destroy()
   })

@@ -144,14 +144,65 @@ describe('exportDocument orchestration', () => {
     expect(invoke).toHaveBeenCalledTimes(1) // only the dialog, no write_file
   })
 
-  it('html format with no registered source reports an error and never invokes', async () => {
+  it('html format with no registered source retries briefly, then reports an error and never invokes', async () => {
+    vi.useFakeTimers()
+    try {
+      openDoc('/a/b/notes.md', '# Hi')
+      settings.set({ ...DEFAULTS, exportFormat: 'html' })
+
+      const promise = exportDocument()
+      await vi.advanceTimersByTimeAsync(2000) // exhaust all retry attempts (~10 x 100ms)
+      await promise
+
+      expect(get(errorMessage)).toContain('Export failed')
+      expect(invoke).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('html format: retries briefly if the source registers late (the split-toggle window), then succeeds', async () => {
+    // Guards finding 3(b): toggling split mode unregisters the old view's
+    // htmlSource synchronously while the new view only registers after its
+    // async crepe.create() resolves. exportDocument() must not fail
+    // immediately just because it landed in that gap.
+    vi.useFakeTimers()
+    try {
+      openDoc('/a/b/notes.md', '# Hi')
+      settings.set({ ...DEFAULTS, exportFormat: 'html' })
+      invoke.mockImplementation(async (cmd: unknown) =>
+        cmd === 'save_file_dialog' ? '/a/b/notes.html' : undefined,
+      )
+
+      const promise = exportDocument()
+      const source = () => '<h1>Registered late</h1>'
+      registerHtmlSource(source) // simulate the incoming view finishing crepe.create()
+      await vi.advanceTimersByTimeAsync(100) // let the pending retry tick observe it
+      await promise
+
+      expect(invoke).toHaveBeenCalledWith(
+        'write_file',
+        expect.objectContaining({ contents: expect.stringContaining('<h1>Registered late</h1>') }),
+      )
+      unregisterHtmlSource(source)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a throwing htmlSource surfaces via reportError, not an unhandled rejection, and never invokes', async () => {
     openDoc('/a/b/notes.md', '# Hi')
     settings.set({ ...DEFAULTS, exportFormat: 'html' })
+    const throwing = () => {
+      throw new Error('serialize boom')
+    }
+    registerHtmlSource(throwing)
 
     await exportDocument()
 
-    expect(get(errorMessage)).toContain('Export failed')
+    expect(get(errorMessage)).toContain('Could not export')
     expect(invoke).not.toHaveBeenCalled()
+    unregisterHtmlSource(throwing)
   })
 
   it('does not touch doc.savedContent/path -- export is not save', async () => {
