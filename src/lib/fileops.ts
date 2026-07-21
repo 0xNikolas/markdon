@@ -167,6 +167,12 @@ export function focusRow(path: string): void {
   selection.set(new Set([path]))
 }
 
+/** Deselect everything: empty-space click in the sidebar (spec 2026-07-21). */
+export function clearSelection(): void {
+  selection.set(new Set())
+  focused.set(null)
+}
+
 /** Snapshot the current selection into the clipboard as a cut or copy. */
 export function cutSelection(): void {
   const paths = [...get(selection)]

@@ -16,6 +16,7 @@ import {
   isSelfOrDescendant,
   selection,
   focused,
+  clearSelection,
   clipboard,
   focusRow,
   cutSelection,
@@ -324,5 +325,15 @@ describe('performDelete', () => {
     invoke.mockRejectedValueOnce('denied').mockResolvedValueOnce({ root: '/ws', tree })
     await performDelete(['/ws/readme.md'])
     expect(get(openList)).toEqual(['/ws/readme.md'])
+  })
+})
+
+describe('clearSelection', () => {
+  it('empties the selection and drops the focus anchor', () => {
+    selection.set(new Set(['/ws/a.md', '/ws/b.md']))
+    focused.set('/ws/a.md')
+    clearSelection()
+    expect(get(selection).size).toBe(0)
+    expect(get(focused)).toBeNull()
   })
 })
