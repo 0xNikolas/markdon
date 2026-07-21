@@ -102,7 +102,10 @@ export function fileBreadcrumb(
 
   if (workspaceRoot !== null && workspaceName !== null) {
     const rootSegments = workspaceRoot.split('/').filter(Boolean)
-    const inWorkspace = rootSegments.every((seg, i) => segments[i] === seg)
+    // A segment-less root ('/' or '') would make every() vacuously true and
+    // leak the file's full ancestry into the header — fall through instead.
+    const inWorkspace =
+      rootSegments.length > 0 && rootSegments.every((seg, i) => segments[i] === seg)
     if (inWorkspace) {
       const dirs = segments.slice(rootSegments.length, -1)
       return { crumbs: [workspaceName, ...dirs], filename }

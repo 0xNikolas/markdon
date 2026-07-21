@@ -142,6 +142,19 @@ describe('fileBreadcrumb', () => {
   it('has no crumbs for a top-level file with no parent folder in its path', () => {
     expect(fileBreadcrumb('todo.md', null, null)).toEqual({ crumbs: [], filename: 'todo.md' })
   })
+
+  it('never leaks full ancestry when the workspace root has no path segments', () => {
+    // Root '/' (or '') would make the ancestry check vacuously true; must fall
+    // back to the parent-only form instead of exposing the whole path.
+    expect(fileBreadcrumb('/Users/nicu/notes/secret.md', '/', 'Macintosh HD')).toEqual({
+      crumbs: ['notes'],
+      filename: 'secret.md',
+    })
+    expect(fileBreadcrumb('/Users/nicu/notes/secret.md', '', 'x')).toEqual({
+      crumbs: ['notes'],
+      filename: 'secret.md',
+    })
+  })
 })
 
 describe('exportTick', () => {
