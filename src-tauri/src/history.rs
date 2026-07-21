@@ -96,7 +96,7 @@ fn sha256hex(bytes: &[u8]) -> String {
 }
 
 /// Bucket directory name for a canonical absolute path: `sha256hex(path)`.
-pub fn bucket_key(canonical: &str) -> String {
+pub(crate) fn bucket_key(canonical: &str) -> String {
     sha256hex(canonical.as_bytes())
 }
 
@@ -107,7 +107,7 @@ fn bucket_dir_in(base: &Path, canonical: &str) -> PathBuf {
 /// A one-line preview: the first ATX heading (`# …`) if any, else the first ~80
 /// non-empty characters (whitespace collapsed). Char-based truncation keeps it
 /// UTF-8 safe.
-pub fn extract_preview(content: &str) -> String {
+pub(crate) fn extract_preview(content: &str) -> String {
     for line in content.lines() {
         if let Some(h) = atx_heading(line) {
             if !h.is_empty() {
@@ -133,7 +133,7 @@ fn atx_heading(line: &str) -> Option<&str> {
 /// `-N` suffix). Any path separator, `..`, empty stem, or non-`.md` extension
 /// makes a non-digit appear in a segment and is rejected — this is the trust
 /// boundary that stops a compromised webview naming an arbitrary store file.
-pub fn valid_id(id: &str) -> bool {
+pub(crate) fn valid_id(id: &str) -> bool {
     let Some(stem) = id.strip_suffix(".md") else {
         return false;
     };
@@ -175,7 +175,7 @@ fn unique_id(entries: &[Entry], now_ms: u64) -> String {
 /// `MAX_AGE_DAYS` EXCEPT always keep the newest `MIN_KEEP`. `entries` must be
 /// oldest-first; survivors stay in place and the removed entries are returned so
 /// the caller can delete their snapshot files.
-pub fn prune(entries: &mut Vec<Entry>, now_ms: u64) -> Vec<Entry> {
+pub(crate) fn prune(entries: &mut Vec<Entry>, now_ms: u64) -> Vec<Entry> {
     let max_age_ms = MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
     let cutoff = now_ms.saturating_sub(max_age_ms);
     let total = entries.len();
@@ -233,7 +233,7 @@ fn write_index(bucket: &Path, index: &Index) -> Result<(), String> {
 /// `app_data_dir()`. Content-deduped against the newest entry (a save with no
 /// change writes nothing), then pruned. Returns the new entry id, or None when
 /// deduped.
-pub fn record_snapshot(
+pub(crate) fn record_snapshot(
     base: &Path,
     canonical: &str,
     content: &str,
@@ -272,7 +272,7 @@ pub fn record_snapshot(
 }
 
 /// Metadata list for a bucket, newest-first (empty if no history yet).
-pub fn list_snapshots(base: &Path, canonical: &str) -> Vec<Entry> {
+pub(crate) fn list_snapshots(base: &Path, canonical: &str) -> Vec<Entry> {
     let bucket = bucket_dir_in(base, canonical);
     let mut index = load_index(&bucket);
     index.entries.reverse();
@@ -282,7 +282,7 @@ pub fn list_snapshots(base: &Path, canonical: &str) -> Vec<Entry> {
 /// Read one version's content. `id` must pass `valid_id` AND be a known entry in
 /// the index — both checks are mandatory (a compromised webview must not read an
 /// arbitrary store file by naming it).
-pub fn read_snapshot(base: &Path, canonical: &str, id: &str) -> Result<String, String> {
+pub(crate) fn read_snapshot(base: &Path, canonical: &str, id: &str) -> Result<String, String> {
     if !valid_id(id) {
         return Err("bad version id".into());
     }
