@@ -83,54 +83,60 @@
     use:focusTrap
     onkeydown={onDialogKeydown}
   >
-    <aside class="sidebar">
-      <div class="badge-row">
-        <!-- macOS-style close control (window traffic-light convention): red
-             dot, glyph revealed on hover/focus. Replaces the old top-right
-             x-circle button per the prefs-close redesign. It is now the
-             first focusable element in DOM order, so the active tab below
-             carries data-autofocus to keep initial keyboard focus on the
-             tablist (focusTrap.ts) instead of this tiny control. -->
-        <button class="traffic-close" aria-label="Close settings" onclick={closeSettings}>
-          <span class="glyph" aria-hidden="true"></span>
-        </button>
-        <span class="chip">m&gt;<span class="caret"></span></span>
-        <div class="badge-text">
-          <span class="pref-label">Preferences</span>
-          <span class="version">v{version}</span>
-        </div>
-      </div>
-      <div
-        class="tablist"
-        role="tablist"
-        aria-orientation="vertical"
-        tabindex="-1"
-        onkeydown={onTablistKeydown}
-      >
-        {#each TABS as tab, i (tab.id)}
-          <button
-            bind:this={tabRefs[i]}
-            role="tab"
-            id="tab-{tab.id}"
-            aria-selected={activeTab === tab.id}
-            aria-controls="panel-{tab.id}"
-            tabindex={activeTab === tab.id ? 0 : -1}
-            data-autofocus={activeTab === tab.id ? true : undefined}
-            class="tab-row"
-            class:active={activeTab === tab.id}
-            onclick={() => selectTab(tab.id)}
-          >
-            <Icon name={tab.icon} size={16} />
-            <span>{tab.label}</span>
-          </button>
-        {/each}
-      </div>
-    </aside>
+    <div class="titlebar">
+      <!-- macOS-style close control (window traffic-light convention): red
+           dot, glyph revealed on hover/focus. Replaces the old top-right
+           x-circle button per the prefs-close redesign. Lives on its own
+           titlebar band now (native-window convention) rather than inline
+           in the sidebar. It is still the first focusable element in DOM
+           order, so the active tab below carries data-autofocus to keep
+           initial keyboard focus on the tablist (focusTrap.ts) instead of
+           this tiny control. -->
+      <button class="traffic-close" aria-label="Close settings" onclick={closeSettings}>
+        <span class="glyph" aria-hidden="true"></span>
+      </button>
+    </div>
 
-    <div class="content">
-      <div class="content-header">
-        <h2 id="settings-title">Preferences</h2>
-      </div>
+    <div class="dialog-body">
+      <aside class="sidebar">
+        <div class="badge-row">
+          <span class="chip">m&gt;<span class="caret"></span></span>
+          <div class="badge-text">
+            <span class="pref-label">Preferences</span>
+            <span class="version">v{version}</span>
+          </div>
+        </div>
+        <div
+          class="tablist"
+          role="tablist"
+          aria-orientation="vertical"
+          tabindex="-1"
+          onkeydown={onTablistKeydown}
+        >
+          {#each TABS as tab, i (tab.id)}
+            <button
+              bind:this={tabRefs[i]}
+              role="tab"
+              id="tab-{tab.id}"
+              aria-selected={activeTab === tab.id}
+              aria-controls="panel-{tab.id}"
+              tabindex={activeTab === tab.id ? 0 : -1}
+              data-autofocus={activeTab === tab.id ? true : undefined}
+              class="tab-row"
+              class:active={activeTab === tab.id}
+              onclick={() => selectTab(tab.id)}
+            >
+              <Icon name={tab.icon} size={16} />
+              <span>{tab.label}</span>
+            </button>
+          {/each}
+        </div>
+      </aside>
+
+      <div class="content">
+        <div class="content-header">
+          <h2 id="settings-title">Preferences</h2>
+        </div>
 
       {#if activeTab === 'editor'}
         <div id="panel-editor" role="tabpanel" aria-labelledby="tab-editor" class="panel">
@@ -284,6 +290,7 @@
           </section>
         </div>
       {/if}
+      </div>
     </div>
   </div>
 </div>
@@ -300,6 +307,7 @@
   }
   .dialog {
     display: flex;
+    flex-direction: column;
     width: 820px;
     height: 520px;
     max-width: calc(100vw - 40px);
@@ -308,6 +316,26 @@
     background: var(--bg);
     border: 1px solid var(--border);
     overflow: hidden;
+  }
+
+  /* Native-titlebar band spanning the full modal width, above the
+     sidebar/content split. Holds only the traffic-light close control,
+     matching the sidebar's background so the band reads as a continuous
+     strip across both columns. */
+  .titlebar {
+    height: 36px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    padding-left: 14px;
+    background: var(--surface-sunken);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .dialog-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
   }
 
   .sidebar {
