@@ -4,6 +4,9 @@ import { doc, retargetPath, detachToUntitled } from './doc'
 import { reportError, reportNotice } from './errors'
 import { workspace, refreshWorkspace, type WorkspaceDir } from './workspace'
 import { openList, retargetOpen, removeOpenSubtree } from './openList'
+import { isSelfOrDescendant } from './paths'
+
+export { isSelfOrDescendant }
 
 /**
  * Sidebar file-operations state and the app-internal file clipboard, plus the
@@ -128,11 +131,6 @@ export function pasteTargetDir(
   if (folderSet.has(focusedPath)) return focusedPath
   const parent = focusedPath.split('/').slice(0, -1).join('/')
   return parent || root
-}
-
-/** True when `child` is `ancestor` itself or nested beneath it (segment-safe). */
-export function isSelfOrDescendant(child: string, ancestor: string): boolean {
-  return child === ancestor || child.startsWith(ancestor + '/')
 }
 
 // -- command wrappers ---------------------------------------------------------

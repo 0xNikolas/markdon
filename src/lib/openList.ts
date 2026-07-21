@@ -1,4 +1,5 @@
 import { writable, type Writable } from 'svelte/store'
+import { isSelfOrDescendant, rewritePrefix } from './paths'
 
 /**
  * The sidebar's "Open Files" list (task 21, MODE A / Stage 1): an ordered,
@@ -38,15 +39,9 @@ export function removeOpen(list: string[], path: string): string[] {
 export function retargetOpen(list: string[], oldPrefix: string, newPrefix: string): string[] {
   let changed = false
   const rewritten = list.map((p) => {
-    if (p === oldPrefix) {
-      changed = true
-      return newPrefix
-    }
-    if (p.startsWith(oldPrefix + '/')) {
-      changed = true
-      return newPrefix + p.slice(oldPrefix.length)
-    }
-    return p
+    const r = rewritePrefix(p, oldPrefix, newPrefix)
+    if (r !== p) changed = true
+    return r
   })
   if (!changed) return list
   const seen = new Set<string>()
@@ -66,7 +61,7 @@ export function retargetOpen(list: string[], oldPrefix: string, newPrefix: strin
  * no-op (same reference) when nothing in the list is affected.
  */
 export function removeOpenSubtree(list: string[], path: string): string[] {
-  const filtered = list.filter((p) => p !== path && !p.startsWith(path + '/'))
+  const filtered = list.filter((p) => !isSelfOrDescendant(p, path))
   return filtered.length === list.length ? list : filtered
 }
 

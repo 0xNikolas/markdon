@@ -1,4 +1,5 @@
 import { writable, type Writable } from 'svelte/store'
+import { rewritePrefix } from './paths'
 
 export interface DocState {
   path: string | null
@@ -168,23 +169,16 @@ export function retargetPath(oldPrefix: string, newPrefix: string): void {
   // Move readonly memory alongside the file (exact match or subtree). Iterates
   // the whole set, but it only holds currently-locked docs — a handful at most.
   for (const p of [...readonlyPaths]) {
-    if (p === oldPrefix) {
+    const rewritten = rewritePrefix(p, oldPrefix, newPrefix)
+    if (rewritten !== p) {
       readonlyPaths.delete(p)
-      readonlyPaths.add(newPrefix)
-    } else if (p.startsWith(oldPrefix + '/')) {
-      readonlyPaths.delete(p)
-      readonlyPaths.add(newPrefix + p.slice(oldPrefix.length))
+      readonlyPaths.add(rewritten)
     }
   }
   doc.update((s) => {
     if (s.path === null) return s
-    if (s.path === oldPrefix) return { ...s, path: newPrefix }
-    // Ancestor-folder move: rewrite the matching path prefix. The trailing
-    // slash makes this segment-safe, so `/ws/proj` never matches `/ws/proj2`.
-    if (s.path.startsWith(oldPrefix + '/')) {
-      return { ...s, path: newPrefix + s.path.slice(oldPrefix.length) }
-    }
-    return s
+    const rewritten = rewritePrefix(s.path, oldPrefix, newPrefix)
+    return rewritten === s.path ? s : { ...s, path: rewritten }
   })
 }
 
