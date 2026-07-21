@@ -23,6 +23,7 @@ const {
   closeSettings,
   exportTick,
   requestExport,
+  fileBreadcrumb,
 } = await import('./ui')
 
 describe('formatInt', () => {
@@ -93,6 +94,53 @@ describe('settingsOpen', () => {
     expect(get(settingsOpen)).toBe(true)
     closeSettings()
     expect(get(settingsOpen)).toBe(false)
+  })
+})
+
+describe('fileBreadcrumb', () => {
+  it('is just "Untitled" with no crumbs for a null path', () => {
+    expect(fileBreadcrumb(null, null, null)).toEqual({ crumbs: [], filename: 'Untitled' })
+    expect(fileBreadcrumb(null, '/ws/project', 'project')).toEqual({ crumbs: [], filename: 'Untitled' })
+  })
+
+  it('splits a workspace file into root name + intermediate folders + filename', () => {
+    expect(fileBreadcrumb('/ws/project/sub/folders/filename.md', '/ws/project', 'project')).toEqual({
+      crumbs: ['project', 'sub', 'folders'],
+      filename: 'filename.md',
+    })
+  })
+
+  it('has no intermediate crumbs for a file exactly at the workspace root', () => {
+    expect(fileBreadcrumb('/ws/project/filename.md', '/ws/project', 'project')).toEqual({
+      crumbs: ['project'],
+      filename: 'filename.md',
+    })
+  })
+
+  it('falls back to parent-folder + filename when there is no open workspace', () => {
+    expect(fileBreadcrumb('/Users/nicu/notes/todo.md', null, null)).toEqual({
+      crumbs: ['notes'],
+      filename: 'todo.md',
+    })
+  })
+
+  it('falls back to parent-folder + filename for a path outside the open workspace', () => {
+    expect(fileBreadcrumb('/Users/nicu/other/todo.md', '/ws/project', 'project')).toEqual({
+      crumbs: ['other'],
+      filename: 'todo.md',
+    })
+  })
+
+  it('does not treat a sibling directory sharing a name prefix as inside the workspace', () => {
+    // /ws/proj is NOT an ancestor of /ws/project2 even though the string is a prefix.
+    expect(fileBreadcrumb('/ws/project2/file.md', '/ws/proj', 'proj')).toEqual({
+      crumbs: ['project2'],
+      filename: 'file.md',
+    })
+  })
+
+  it('has no crumbs for a top-level file with no parent folder in its path', () => {
+    expect(fileBreadcrumb('todo.md', null, null)).toEqual({ crumbs: [], filename: 'todo.md' })
   })
 })
 

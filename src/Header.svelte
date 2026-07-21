@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from './Icon.svelte'
-  import { workspaceName, split, toggleSplit, requestExport, openSettings } from './lib/ui'
+  import { workspaceName, fileBreadcrumb, split, toggleSplit, requestExport, openSettings } from './lib/ui'
+  import { workspace } from './lib/workspace'
 
   interface Props {
     path: string | null
@@ -8,7 +9,7 @@
   }
   let { path, dirty }: Props = $props()
 
-  const filename = $derived(path ? path.split('/').pop() : 'Untitled')
+  const breadcrumb = $derived(fileBreadcrumb(path, $workspace.root, $workspaceName))
 </script>
 
 <!-- data-tauri-drag-region="deep": the whole bar drags the window and
@@ -24,8 +25,10 @@
     </span>
   </div>
   <div class="center">
-    {#if $workspaceName}<span class="crumb">{$workspaceName} /</span>{/if}
-    <span class="filename">{filename}</span>
+    {#if breadcrumb.crumbs.length}
+      <span class="crumb">{breadcrumb.crumbs.join(' / ')} /</span>
+    {/if}
+    <span class="filename">{breadcrumb.filename}</span>
     {#if dirty}
       <span class="badge edited">Edited</span>
     {:else if path}
@@ -50,7 +53,9 @@
 <style>
   .header {
     display: grid;
-    grid-template-columns: 1fr auto 1fr; /* true centering regardless of side widths */
+    /* minmax(0, auto): true centering, but the middle column can still shrink
+       below its content size instead of pushing the side buttons off-screen. */
+    grid-template-columns: 1fr minmax(0, auto) 1fr;
     align-items: center;
     padding: 14px 20px;
     background: var(--bg);
@@ -102,6 +107,11 @@
     font: 400 13px var(--font-mono);
     color: var(--fg-muted);
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+    max-width: 240px; /* deeply nested workspace paths truncate instead of pushing the buttons */
+    flex-shrink: 1;
   }
   .filename {
     font: 600 13px var(--font-ui);
@@ -109,6 +119,8 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    min-width: 0;
+    flex-shrink: 1;
   }
   .badge {
     padding: 2px 6px;

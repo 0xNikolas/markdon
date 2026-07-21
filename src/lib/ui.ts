@@ -71,6 +71,48 @@ export function requestExport(): void {
 /** Open workspace folder basename for the Header breadcrumb; set by workspace. */
 export const workspaceName: Writable<string | null> = writable(null)
 
+/** Header breadcrumb: muted segments before the filename, plus the filename itself. */
+export interface FileBreadcrumb {
+  crumbs: string[]
+  filename: string
+}
+
+/**
+ * Header breadcrumb segments for the open document.
+ *
+ * - No path (untitled doc): no crumbs, filename "Untitled".
+ * - Path inside the open workspace: crumbs are the workspace root name plus
+ *   every intermediate folder between the root and the file (path relative to
+ *   `workspaceRoot`), so nested files show their full in-workspace ancestry.
+ * - Anything else — no workspace open, or a path outside the workspace root
+ *   (matched segment-by-segment, not by string prefix, so a sibling folder
+ *   like `/ws/project2` isn't mistaken for a child of `/ws/proj`) — falls
+ *   back to just the immediate parent folder, so the header never leaks a
+ *   long absolute path.
+ */
+export function fileBreadcrumb(
+  path: string | null,
+  workspaceRoot: string | null,
+  workspaceName: string | null,
+): FileBreadcrumb {
+  if (path === null) return { crumbs: [], filename: 'Untitled' }
+
+  const segments = path.split('/').filter(Boolean)
+  const filename = segments[segments.length - 1] ?? path
+
+  if (workspaceRoot !== null && workspaceName !== null) {
+    const rootSegments = workspaceRoot.split('/').filter(Boolean)
+    const inWorkspace = rootSegments.every((seg, i) => segments[i] === seg)
+    if (inWorkspace) {
+      const dirs = segments.slice(rootSegments.length, -1)
+      return { crumbs: [workspaceName, ...dirs], filename }
+    }
+  }
+
+  const parent = segments[segments.length - 2]
+  return { crumbs: parent ? [parent] : [], filename }
+}
+
 // -- pure status-bar helpers --------------------------------------------------
 
 // Hoisted: formatInt runs per keystroke (words/chars) — don't allocate a
