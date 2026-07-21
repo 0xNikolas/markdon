@@ -8,6 +8,7 @@
   import { open, save, saveAs, openPath } from './lib/files'
   import { conflict, reloadFromDisk, dismissConflict, initFileSync } from './lib/fileSync'
   import Editor from './Editor.svelte'
+  import SplitView from './SplitView.svelte'
   import Header from './Header.svelte'
   import StatusBar from './StatusBar.svelte'
   import Banner from './Banner.svelte'
@@ -15,7 +16,8 @@
   import SettingsModal from './SettingsModal.svelte'
   import Sidebar from './Sidebar.svelte'
   import { searchUi, openFind, closeFind } from './lib/searchPlugin'
-  import { settingsOpen, openSettings } from './lib/ui'
+  import { openSourceSearch } from './lib/sourceEditor'
+  import { settingsOpen, openSettings, split } from './lib/ui'
   import { workspace, openWorkspace, initWorkspace } from './lib/workspace'
 
   // Action to run if the user chooses to discard unsaved changes. When set, the
@@ -47,7 +49,7 @@
       listen('menu:open', () => guarded(() => open())),
       listen('menu:save', () => save()),
       listen('menu:save_as', () => saveAs()),
-      listen('menu:find', () => openFind()),
+      listen('menu:find', () => routeFind()),
       listen('menu:settings', () => openSettings()),
       listen('menu:open_folder', () => openWorkspace()),
       listen('window:close-requested', () => guarded(() => getCurrentWindow().destroy())),
@@ -63,18 +65,28 @@
     }
   })
 
+  // Route Cmd+F by view mode: split -> CodeMirror's native search panel;
+  // WYSIWYG -> the Milkdown FindBar. openSourceSearch() no-ops (returns false)
+  // when no source pane is mounted, but $split already gates that.
+  function routeFind() {
+    if (get(split)) openSourceSearch()
+    else openFind()
+  }
+
   // Esc closes the find bar even when focus is inside the editor (FindBar's
   // own onkeydown only sees Esc while its input is focused). Also a
   // Cmd/Ctrl+F fallback for platforms where the native menu accelerator
   // (src-tauri/src/menu.rs) doesn't reach the webview -- a no-op if the
-  // menu already handled it, since openFind() is idempotent while open.
+  // menu already handled it, since the find command is idempotent while open.
+  // In split mode CodeMirror owns its panel's Esc, so we only close the
+  // FindBar here (WYSIWYG).
   function handleWindowKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape' && $searchUi.open && pendingAction === null) {
       e.preventDefault()
       closeFind()
     } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
       e.preventDefault()
-      openFind()
+      routeFind()
     }
   }
 
@@ -131,7 +143,16 @@
         <FindBar />
       {/if}
       {#key $doc.loadId}
-        <Editor initialContent={$doc.content} readonly={$doc.readonly} onChange={edit} />
+        {#if $split}
+          <SplitView
+            initialContent={$doc.content}
+            content={$doc.content}
+            readonly={$doc.readonly}
+            onChange={edit}
+          />
+        {:else}
+          <Editor initialContent={$doc.content} readonly={$doc.readonly} onChange={edit} />
+        {/if}
       {/key}
     </div>
   </div>

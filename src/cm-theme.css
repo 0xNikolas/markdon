@@ -1,0 +1,84 @@
+/*
+ * CodeMirror 6 source-pane theme. Plain CSS keyed entirely off the semantic
+ * theme tokens (app.css) and the settings typography contract
+ * (--editor-font-family / --editor-font-size / --editor-line-height, stamped
+ * on <html> by src/lib/settings.ts) -- no hardcoded fonts, so the Editor tab
+ * of Settings drives the source pane exactly as it drives Crepe. One rule set
+ * serves both themes because every value is a var().
+ *
+ * The source pane is monospace per the design (Figma 11:195); the settings
+ * font-size / line-height still apply, family is pinned to --font-mono.
+ */
+.cm-editor {
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: var(--editor-font-size);
+  line-height: var(--editor-line-height);
+}
+.cm-editor.cm-focused {
+  outline: none;
+}
+.cm-scroller {
+  font-family: inherit;
+  line-height: inherit;
+}
+.cm-content {
+  padding: 32px; /* Figma 11:195 */
+  caret-color: var(--accent);
+  color: var(--fg);
+}
+.cm-line {
+  padding: 0;
+}
+
+/* Selection: accent tint in both themes. CM6 paints selection on
+   .cm-selectionBackground (and the native ::selection when unfocused). */
+.cm-editor .cm-selectionBackground,
+.cm-editor .cm-content ::selection {
+  background: var(--accent-tint);
+}
+.cm-cursor,
+.cm-dropCursor {
+  border-left-color: var(--accent);
+}
+
+/* Native search panel, restyled onto the semantic tokens so it coheres with
+   the Milkdown FindBar even though the widget is CodeMirror's own. */
+.cm-panels {
+  background: var(--surface);
+  color: var(--fg);
+  border-color: var(--border);
+}
+.cm-panels.cm-panels-top {
+  border-bottom: 1px solid var(--border);
+}
+.cm-panel.cm-search {
+  padding: 8px 12px;
+}
+.cm-panel.cm-search input,
+.cm-panel.cm-search button,
+.cm-panel.cm-search label {
+  font: 12px var(--font-mono);
+  color: var(--fg);
+}
+.cm-panel.cm-search input,
+.cm-panel.cm-search button {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+.cm-panel.cm-search button {
+  cursor: pointer;
+}
+.cm-panel.cm-search .cm-button {
+  background-image: none;
+}
+.cm-searchMatch {
+  background: var(--find-match-bg);
+}
+.cm-searchMatch-selected {
+  background: var(--find-active-bg);
+}
