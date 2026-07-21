@@ -16,13 +16,17 @@
   import { tick } from 'svelte'
   import { selection, clipboard } from './lib/fileops'
   import { workspace } from './lib/workspace'
+  import { clampMenuPosition } from './lib/sidebarMenu'
 
   interface Props {
     hasRows: boolean
     onAction: (action: FileOpAction) => void
     onClose: () => void
+    /** Cursor position for context-menu use: fixed-position + viewport-clamped.
+        Null → the original anchored-dropdown rendering, unchanged. */
+    at?: { x: number; y: number } | null
   }
-  let { hasRows, onAction, onClose }: Props = $props()
+  let { hasRows, onAction, onClose, at = null }: Props = $props()
 
   // Enablement derived honestly from selection + clipboard + workspace state.
   let count = $derived($selection.size)
@@ -53,6 +57,22 @@
 
   let menuEl: HTMLDivElement
   let buttons: HTMLButtonElement[] = $state([])
+
+  // Cursor mode: measure the real rendered size, then clamp to the viewport.
+  // Starts at the raw cursor point (pre-measure paint is one frame at most).
+  let fixedPos = $state<{ x: number; y: number } | null>(null)
+  $effect(() => {
+    if (!at) {
+      fixedPos = null
+      return
+    }
+    const w = menuEl?.offsetWidth ?? 190
+    const h = menuEl?.offsetHeight ?? 340
+    fixedPos = clampMenuPosition(at.x, at.y, { w, h }, {
+      w: window.innerWidth,
+      h: window.innerHeight,
+    })
+  })
 
   function enabledIndices(): number[] {
     return items.map((it, i) => (it.enabled ? i : -1)).filter((i) => i >= 0)
@@ -119,8 +139,8 @@
   // the trigger button and this menu, so pressing the button counts as "inside"
   // — its own onclick then handles the toggle-closed without a double-fire.
   function onWindowPointerDown(e: PointerEvent) {
-    const anchor = menuEl?.parentElement ?? menuEl
-    if (anchor && !anchor.contains(e.target as Node)) onClose()
+    const root = at ? menuEl : (menuEl?.parentElement ?? menuEl)
+    if (root && !root.contains(e.target as Node)) onClose()
   }
 </script>
 
@@ -129,6 +149,8 @@
 <div
   bind:this={menuEl}
   class="menu"
+  class:cursor={at !== null}
+  style={fixedPos ? `left: ${fixedPos.x}px; top: ${fixedPos.y}px;` : undefined}
   role="menu"
   tabindex="-1"
   aria-label="File operations"
@@ -167,6 +189,12 @@
     border: 1px solid var(--border);
     border-radius: 6px;
     box-shadow: var(--shadow-popover);
+  }
+  .menu.cursor {
+    position: fixed;
+    top: auto;
+    right: auto;
+    z-index: 30; /* above sidebar chrome; below modals (z 100) */
   }
   .item {
     display: block;
