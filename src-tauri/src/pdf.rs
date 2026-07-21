@@ -17,6 +17,16 @@
 //! `afterprint` event. Printing the helper -- not the main window -- keeps app
 //! chrome (header, sidebar, split panes, dark theme) out of the PDF, so the
 //! artifact matches the HTML export exactly.
+//!
+//! Default save-as filename: it is UNVERIFIED (no GUI run permitted per house
+//! rules) whether the native print sheet's default "Save As" filename is
+//! seeded from the WKWebView document's `<title>` or from the helper window's
+//! own NSWindow title -- these can disagree. Rather than assert a winner, the
+//! frontend passes the document title through as `title` and
+//! `resolve_window_title` sets the helper window's title to that same value,
+//! so the default filename is correct regardless of which one macOS actually
+//! uses. This is a defense-in-depth choice, not a confirmed fix; a human
+//! visual check of the actual "Save as PDF" sheet is still needed.
 
 use std::sync::Mutex;
 
@@ -45,11 +55,26 @@ addEventListener('keydown',function(e){if(e.key==='Escape')close();});\
 try{window.print();}catch(e){close();}\
 });";
 
+/// Resolves the helper print window's title from the exported document's
+/// title, falling back to a generic label when blank. Kept in sync with the
+/// HTML `<title>` (see module docs) so the print sheet's default filename is
+/// right whichever of the two titles macOS actually reads from -- that is
+/// unverified, so both are set identically instead of picking one. Pure and
+/// unit-tested; the non-pure `export_pdf` command below just calls it.
+pub fn resolve_window_title(doc_title: &str) -> String {
+    let trimmed = doc_title.trim();
+    if trimmed.is_empty() {
+        "Exporting to PDF…".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// Stash the export HTML and open the helper print window over the main window.
 /// Returns immediately: the native print panel is presented as a sheet and the
 /// helper tears itself down from JS (see `PRINT_BOOTSTRAP` / `close_pdf_export`).
 #[tauri::command]
-pub async fn export_pdf(app: AppHandle, html: String) -> Result<(), String> {
+pub async fn export_pdf(app: AppHandle, html: String, title: String) -> Result<(), String> {
     *app.state::<PendingPrintHtml>().0.lock().unwrap() = Some(html);
 
     // A prior export that was never dismissed could still have a helper around.
@@ -62,7 +87,7 @@ pub async fn export_pdf(app: AppHandle, html: String) -> Result<(), String> {
         .map_err(|_| "invalid pdfprint url".to_string())?;
     let mut builder =
         WebviewWindowBuilder::new(&app, PRINT_WINDOW_LABEL, WebviewUrl::CustomProtocol(url))
-            .title("Exporting to PDF…")
+            .title(resolve_window_title(&title))
             .decorations(false)
             .visible(true)
             .initialization_script(PRINT_BOOTSTRAP);
@@ -134,5 +159,21 @@ mod tests {
         // teardown clears it
         *state.0.lock().unwrap() = None;
         assert!(pending_print_body(&state).is_empty());
+    }
+
+    #[test]
+    fn resolve_window_title_uses_the_doc_title() {
+        assert_eq!(resolve_window_title("notes"), "notes");
+    }
+
+    #[test]
+    fn resolve_window_title_trims_whitespace() {
+        assert_eq!(resolve_window_title("  notes  "), "notes");
+    }
+
+    #[test]
+    fn resolve_window_title_falls_back_when_blank() {
+        assert_eq!(resolve_window_title(""), "Exporting to PDF…");
+        assert_eq!(resolve_window_title("   "), "Exporting to PDF…");
     }
 }

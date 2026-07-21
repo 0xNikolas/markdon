@@ -159,10 +159,16 @@ describe('exportDocument orchestration', () => {
 
     expect(invoke).toHaveBeenCalledWith('export_pdf', {
       html: expect.stringContaining('<h1>Hi</h1>'),
+      title: 'notes',
     })
-    // The HTML carries the doc <title> that drives the Save-as-PDF default name.
+    // Which title actually seeds the print sheet's default save filename (the
+    // HTML <title> or the helper window's own title, set from this same
+    // `title` arg in pdf.rs) is unverified -- no GUI run per house rules. We
+    // send the doc title both ways so it is right regardless; this only
+    // checks that both carry the same value, not which one macOS honors.
     expect(invoke).toHaveBeenCalledWith('export_pdf', {
       html: expect.stringContaining('<title>notes</title>'),
+      title: 'notes',
     })
     expect(invoke).not.toHaveBeenCalledWith('save_file_dialog', expect.anything())
     expect(invoke).not.toHaveBeenCalledWith('write_file', expect.anything())
