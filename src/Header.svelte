@@ -157,11 +157,14 @@
   }
   /* Split Preview, pressed (aria-pressed="true"): accent border + accent-tint
      bg + accent icon/text, in both themes. Hover/active deepen the tint so the
-     pressed control still shows a clear affordance on top of pressed state. */
+     pressed control still shows a clear affordance on top of pressed state.
+     Text/icon color uses --accent-tint-fg (not bare --accent): in light theme
+     --accent composited on the tint is only ~2.9:1, below the WCAG 3:1 floor
+     for UI text/icons -- --accent-tint-fg is a darker shade that clears 4.5:1. */
   .btn.primary[aria-pressed='true'] {
     background: var(--accent-tint);
     border-color: var(--accent);
-    color: var(--accent);
+    color: var(--accent-tint-fg);
   }
   .btn.primary[aria-pressed='true']:hover,
   .btn.primary[aria-pressed='true']:active {

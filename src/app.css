@@ -29,9 +29,20 @@
   --accent: #e5682b;         /* ember accent */
   --accent-tint: rgba(229, 104, 43, 0.08);
   --accent-tint-strong: rgba(229, 104, 43, 0.16); /* pressed control + hover/active */
+  --accent-tint-fg: #a54619; /* icon/text on --accent-tint bg (a11y fix: --accent itself
+                                 is only ~2.9:1 on the composited light tint, below the
+                                 3:1 UI floor; this darker shade clears 4.5:1 at both the
+                                 8% rest tint and the 16% hover/active tint) */
   --accent-hover: #d95f28;   /* filled-accent button hover (Save/CTA) */
   --accent-active: #c2551f;  /* filled-accent button active/pressed */
   --on-accent: #ffffff;      /* text/icon color on filled-accent buttons */
+  --accent-solid: #bc521e;        /* solid-fill button bg (a11y fix: bare --accent is only
+                                      3.31:1 with white text, below WCAG AA 4.5:1; this
+                                      shade clears 4.5:1+ in both themes) */
+  --accent-solid-hover: #ad4a1a;  /* darkens further on hover (white text stays >=4.5:1;
+                                      also fixes the dark-theme hover regression where the
+                                      old lighter --accent-hover dropped to 2.79:1) */
+  --accent-solid-active: #9e4318; /* darkens further on press, same rationale */
   --status-live: #22c55e;    /* watch dot (decision: design dot has no fill) */
   --surface-sunken: #f1f5f9; /* SettingsModal sidebar (design gap, decided) */
   --surface-hover: #cbd5e1;  /* hover bg for surface-resting controls (button-states) */
@@ -73,6 +84,8 @@
   --accent: #e5682b;
   --accent-tint: rgba(229, 104, 43, 0.15);
   --accent-tint-strong: rgba(229, 104, 43, 0.22);
+  --accent-tint-fg: var(--accent); /* dark tint bg is dark enough that bare --accent
+                                       already clears 4.5:1 (~4.9:1 rest, ~4.4:1 hover) */
   --accent-hover: #ef7a43;
   --accent-active: #d96a30;
   --status-live: #22c55e;

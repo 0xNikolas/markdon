@@ -259,14 +259,17 @@
   }
   .danger:not(:disabled):hover { background: var(--danger-tint); }
   .danger:not(:disabled):active { background: var(--danger-tint-strong); }
+  /* Solid-fill bg uses --accent-solid, not bare --accent: white (--on-accent)
+     text on --accent is only 3.31:1, below WCAG AA 4.5:1 for normal text;
+     --accent-solid and its hover/active shades clear 4.5:1+ in both themes. */
   .primary {
-    background: var(--accent);
+    background: var(--accent-solid);
     border-color: transparent;
     color: var(--on-accent);
     font-weight: 600;
   }
-  .primary:not(:disabled):hover { background: var(--accent-hover); }
-  .primary:not(:disabled):active { background: var(--accent-active); }
+  .primary:not(:disabled):hover { background: var(--accent-solid-hover); }
+  .primary:not(:disabled):active { background: var(--accent-solid-active); }
 
   .reload-bar {
     display: flex;
@@ -292,13 +295,14 @@
   }
   .reload-bar button:hover { background: var(--surface-hover); }
   .reload-bar button:active { background: var(--surface-active); }
+  /* --accent-solid, not bare --accent: see .primary comment above. */
   .reload-bar .reload {
     font-weight: 600;
-    background: var(--accent);
+    background: var(--accent-solid);
     color: var(--on-accent);
   }
-  .reload-bar .reload:hover { background: var(--accent-hover); }
-  .reload-bar .reload:active { background: var(--accent-active); }
+  .reload-bar .reload:hover { background: var(--accent-solid-hover); }
+  .reload-bar .reload:active { background: var(--accent-solid-active); }
 
   .readonly-bar {
     display: flex;
@@ -311,6 +315,7 @@
     font: 13px var(--font-ui);
     border-bottom: 1px solid var(--info-border);
   }
+  /* --accent-solid, not bare --accent: see .primary comment above. */
   .readonly-bar button {
     font: inherit;
     cursor: pointer;
@@ -318,10 +323,10 @@
     border-radius: 6px;
     border: 1px solid transparent;
     font-weight: 600;
-    background: var(--accent);
+    background: var(--accent-solid);
     color: var(--on-accent);
     transition: background-color 0.1s ease;
   }
-  .readonly-bar button:hover { background: var(--accent-hover); }
-  .readonly-bar button:active { background: var(--accent-active); }
+  .readonly-bar button:hover { background: var(--accent-solid-hover); }
+  .readonly-bar button:active { background: var(--accent-solid-active); }
 </style>
