@@ -143,10 +143,29 @@
     color: var(--fg-secondary);
     cursor: pointer;
     white-space: nowrap;
+    transition: background-color 0.1s ease, border-color 0.1s ease, color 0.1s ease;
+  }
+  .btn:hover {
+    background: var(--surface-hover);
+  }
+  .btn:active {
+    background: var(--surface-active);
   }
   .btn.primary {
     color: var(--fg-strong);
     border-color: var(--surface-border);
+  }
+  /* Split Preview, pressed (aria-pressed="true"): accent border + accent-tint
+     bg + accent icon/text, in both themes. Hover/active deepen the tint so the
+     pressed control still shows a clear affordance on top of pressed state. */
+  .btn.primary[aria-pressed='true'] {
+    background: var(--accent-tint);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .btn.primary[aria-pressed='true']:hover,
+  .btn.primary[aria-pressed='true']:active {
+    background: var(--accent-tint-strong);
   }
   .btn.icon-only {
     width: 30px;

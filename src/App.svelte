@@ -167,7 +167,7 @@
       {#if $doc.readonly}
         <div class="readonly-bar" role="status">
           <span>🔒 Opened read-only</span>
-          <button class="primary" onclick={enableEditing}>Enable editing</button>
+          <button onclick={enableEditing}>Enable editing</button>
         </div>
       {/if}
       {#if $conflict !== null}
@@ -239,8 +239,34 @@
     font: 14px var(--font-ui); max-width: 320px;
   }
   .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
-  .danger { color: var(--danger); }
-  .primary { font-weight: 600; }
+  .actions button {
+    padding: 6px 14px;
+    border-radius: 6px;
+    background: var(--surface);
+    border: 1px solid transparent;
+    color: var(--fg-secondary);
+    font: inherit;
+    cursor: pointer;
+    transition: background-color 0.1s ease, border-color 0.1s ease, color 0.1s ease;
+  }
+  .actions button:not(:disabled):hover { background: var(--surface-hover); }
+  .actions button:not(:disabled):active { background: var(--surface-active); }
+  .actions button:disabled { opacity: 0.5; cursor: default; }
+  .danger {
+    background: transparent;
+    border-color: var(--danger);
+    color: var(--danger);
+  }
+  .danger:not(:disabled):hover { background: var(--danger-tint); }
+  .danger:not(:disabled):active { background: var(--danger-tint-strong); }
+  .primary {
+    background: var(--accent);
+    border-color: transparent;
+    color: var(--on-accent);
+    font-weight: 600;
+  }
+  .primary:not(:disabled):hover { background: var(--accent-hover); }
+  .primary:not(:disabled):active { background: var(--accent-active); }
 
   .reload-bar {
     display: flex;
@@ -254,8 +280,25 @@
     border-bottom: 1px solid var(--warn-border);
   }
   .reload-actions { display: flex; gap: 8px; flex-shrink: 0; }
-  .reload-bar button { font: inherit; cursor: pointer; }
-  .reload-bar .reload { font-weight: 600; }
+  .reload-bar button {
+    font: inherit;
+    cursor: pointer;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background: var(--surface);
+    color: var(--fg-secondary);
+    transition: background-color 0.1s ease;
+  }
+  .reload-bar button:hover { background: var(--surface-hover); }
+  .reload-bar button:active { background: var(--surface-active); }
+  .reload-bar .reload {
+    font-weight: 600;
+    background: var(--accent);
+    color: var(--on-accent);
+  }
+  .reload-bar .reload:hover { background: var(--accent-hover); }
+  .reload-bar .reload:active { background: var(--accent-active); }
 
   .readonly-bar {
     display: flex;
@@ -268,5 +311,17 @@
     font: 13px var(--font-ui);
     border-bottom: 1px solid var(--info-border);
   }
-  .readonly-bar button { font: inherit; cursor: pointer; }
+  .readonly-bar button {
+    font: inherit;
+    cursor: pointer;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    font-weight: 600;
+    background: var(--accent);
+    color: var(--on-accent);
+    transition: background-color 0.1s ease;
+  }
+  .readonly-bar button:hover { background: var(--accent-hover); }
+  .readonly-bar button:active { background: var(--accent-active); }
 </style>

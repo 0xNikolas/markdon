@@ -77,9 +77,17 @@
     color: inherit;
     background: transparent;
     border: none;
-    padding: 0 2px;
+    border-radius: 4px;
+    padding: 2px 4px;
     cursor: pointer;
     line-height: 1;
+    transition: background-color 0.1s ease;
+  }
+  button:not(:disabled):hover {
+    background: var(--surface-hover);
+  }
+  button:not(:disabled):active {
+    background: var(--surface-active);
   }
   button:disabled {
     opacity: 0.4;

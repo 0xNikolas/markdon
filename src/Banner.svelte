@@ -19,5 +19,21 @@
     color: var(--error-fg);
     font: 13px var(--font-ui);
   }
-  button { border: none; background: none; font-size: 16px; cursor: pointer; }
+  button {
+    border: none;
+    background: none;
+    font-size: 16px;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    color: inherit;
+    transition: background-color 0.1s ease;
+  }
+  button:hover {
+    background: var(--surface-hover);
+  }
+  button:active {
+    background: var(--surface-active);
+  }
 </style>

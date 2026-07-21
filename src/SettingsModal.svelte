@@ -363,10 +363,24 @@
     font: 600 13px var(--font-ui);
     text-align: left;
     cursor: pointer;
+    transition: background-color 0.1s ease, color 0.1s ease;
+  }
+  .tab-row:hover {
+    background: var(--surface-hover);
+    color: var(--fg-strong);
+  }
+  .tab-row:active {
+    background: var(--surface-active);
   }
   .tab-row.active {
     background: var(--surface);
     color: var(--fg-strong);
+  }
+  .tab-row.active:hover {
+    background: var(--surface-hover);
+  }
+  .tab-row.active:active {
+    background: var(--surface-active);
   }
 
   .content {
@@ -400,6 +414,14 @@
     align-items: center;
     justify-content: center;
     cursor: pointer;
+    transition: background-color 0.1s ease, color 0.1s ease;
+  }
+  .close:hover {
+    background: var(--surface-hover);
+    color: var(--fg-strong);
+  }
+  .close:active {
+    background: var(--surface-active);
   }
 
   .panel {
@@ -451,6 +473,13 @@
     font: 600 12px var(--font-ui);
     color: var(--fg-strong);
     cursor: pointer;
+    transition: background-color 0.1s ease;
+  }
+  .selector select:hover {
+    background: var(--surface-hover);
+  }
+  .selector select:active {
+    background: var(--surface-active);
   }
   .selector .chev {
     position: absolute;
@@ -470,10 +499,23 @@
     padding: 0;
     cursor: pointer;
     flex-shrink: 0;
+    transition: background-color 0.1s ease, border-color 0.1s ease;
+  }
+  .toggle:hover {
+    background: var(--surface-hover);
+  }
+  .toggle:active {
+    background: var(--surface-active);
   }
   .toggle[aria-checked='true'] {
     background: var(--accent);
     border-color: transparent;
+  }
+  .toggle[aria-checked='true']:hover {
+    background: var(--accent-hover);
+  }
+  .toggle[aria-checked='true']:active {
+    background: var(--accent-active);
   }
   .toggle .thumb {
     position: absolute;

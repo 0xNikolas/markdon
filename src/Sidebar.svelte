@@ -98,14 +98,20 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 0;
+    padding: 4px;
     border: 0;
+    border-radius: 4px;
     background: none;
     color: var(--fg-faint);
     cursor: pointer;
+    transition: background-color 0.1s ease, color 0.1s ease;
   }
   .new-file:hover {
+    background: var(--surface-hover);
     color: var(--fg-secondary);
+  }
+  .new-file:active {
+    background: var(--surface-active);
   }
 
   .tree {
@@ -127,11 +133,19 @@
     width: 100%;
     padding: 6px 12px 6px 8px;
     border: 0;
+    border-radius: 6px;
     background: none;
     color: var(--fg-secondary);
     font: 500 13px var(--font-ui);
     cursor: pointer;
     text-align: left;
+    transition: background-color 0.1s ease;
+  }
+  .folder-row:hover {
+    background: var(--surface-hover);
+  }
+  .folder-row:active {
+    background: var(--surface-active);
   }
   .chevron {
     display: inline-flex;
@@ -155,11 +169,25 @@
     font: 400 13px var(--font-ui);
     cursor: pointer;
     text-align: left;
+    transition: background-color 0.1s ease, color 0.1s ease;
+  }
+  /* .disabled rows are a plain <div> (non-markdown files, not openable here) --
+     excluded from hover/active so they never look interactive. */
+  .file-row:not(.active):not(.disabled):hover {
+    background: var(--surface-hover);
+    color: var(--fg-secondary);
+  }
+  .file-row:not(.active):not(.disabled):active {
+    background: var(--surface-active);
   }
   .file-row.active {
     background: var(--accent-tint);
     color: var(--fg-strong);
     font-weight: 600;
+  }
+  .file-row.active:hover,
+  .file-row.active:active {
+    background: var(--accent-tint-strong);
   }
   .file-row.disabled {
     cursor: default;
