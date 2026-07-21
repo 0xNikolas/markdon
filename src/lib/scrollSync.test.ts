@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 import {
   proportionalTarget,
@@ -7,6 +7,7 @@ import {
   recordWrite,
   onPreviewScrolled,
   onSourceScrollIntent,
+  createScrollSync,
   type ScrollMetrics,
 } from './scrollSync'
 
@@ -116,5 +117,99 @@ describe('scroll-sync yield state machine', () => {
   it('is a no-op to re-apply scroll intent when already un-yielded', () => {
     const state = onSourceScrollIntent(initialScrollSyncState)
     expect(state).toEqual(initialScrollSyncState)
+  })
+})
+
+describe('createScrollSync controller (rAF write timing)', () => {
+  interface FakeScrollElement {
+    scrollTop: number
+    scrollHeight: number
+    clientHeight: number
+    addEventListener: (type: string, handler: () => void) => void
+    removeEventListener: (type: string, handler: () => void) => void
+    dispatch: (type: string) => void
+  }
+
+  // Plain fake element -- no DOM/jsdom involved (vitest env here is 'node').
+  // Only exposes what createScrollSync actually touches, plus a `dispatch`
+  // helper the tests use to simulate a `scroll` event firing.
+  function fakeElement(scrollTop: number, scrollHeight: number, clientHeight: number): FakeScrollElement {
+    const listeners = new Map<string, Array<() => void>>()
+    return {
+      scrollTop,
+      scrollHeight,
+      clientHeight,
+      addEventListener(type, handler) {
+        listeners.set(type, [...(listeners.get(type) ?? []), handler])
+      },
+      removeEventListener(type, handler) {
+        listeners.set(
+          type,
+          (listeners.get(type) ?? []).filter((h) => h !== handler),
+        )
+      },
+      dispatch(type) {
+        for (const handler of listeners.get(type) ?? []) handler()
+      },
+    }
+  }
+
+  // Fake rAF queue: requestAnimationFrame just enqueues, nothing runs until
+  // the test explicitly flushes -- this is what lets us land a manual
+  // preview scroll "between" scheduling and the frame actually executing.
+  let rafQueue: Array<() => void>
+  let nextRafId: number
+
+  beforeEach(() => {
+    rafQueue = []
+    nextRafId = 0
+    vi.stubGlobal('requestAnimationFrame', (cb: () => void) => {
+      nextRafId += 1
+      rafQueue.push(cb)
+      return nextRafId
+    })
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function flushRaf(): void {
+    const queue = rafQueue
+    rafQueue = []
+    for (const cb of queue) cb()
+  }
+
+  it('does not overwrite a manual preview scroll landing between rAF schedule and rAF run (one-frame race)', () => {
+    const source = fakeElement(500, 2000, 500) // range 1500, fraction 1/3
+    const preview = fakeElement(0, 1600, 400) // range 1200 -> synced target would be 400
+
+    createScrollSync(source as unknown as HTMLElement, preview as unknown as HTMLElement)
+
+    source.dispatch('scroll') // schedules the write for the next frame
+    expect(rafQueue).toHaveLength(1)
+
+    // Before that frame runs, the user grabs the preview and scrolls it by
+    // hand -- this must flip yield state in time for the pending write to
+    // see it.
+    preview.scrollTop = 999
+    preview.dispatch('scroll')
+
+    flushRaf()
+
+    expect(preview.scrollTop).toBe(999)
+  })
+
+  it('does write the synced position when no yield occurred before the frame runs', () => {
+    const source = fakeElement(500, 2000, 500) // range 1500, fraction 1/3
+    const preview = fakeElement(0, 1600, 400) // range 1200
+
+    createScrollSync(source as unknown as HTMLElement, preview as unknown as HTMLElement)
+
+    source.dispatch('scroll')
+    flushRaf()
+
+    expect(preview.scrollTop).toBe(400) // 1/3 of 1200
   })
 })

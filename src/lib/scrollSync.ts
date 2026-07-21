@@ -116,6 +116,13 @@ export function createScrollSync(sourceScrollEl: HTMLElement, previewEl: HTMLEle
     if (frame) return
     frame = requestAnimationFrame(() => {
       frame = 0
+      // Re-check shouldSync here, not just at schedule time: a manual preview
+      // scroll can flip yield state during the wait between scheduling this
+      // frame and it actually running, and we must not clobber that scroll
+      // with a stale write. Metrics are also re-read fresh (rather than
+      // reusing whatever was captured at schedule time) so the target
+      // reflects the panes' current position, not a stale one.
+      if (!shouldSync(state)) return
       const target = proportionalTarget(sourceScrollEl, previewEl)
       state = recordWrite(state, target)
       previewEl.scrollTop = target
