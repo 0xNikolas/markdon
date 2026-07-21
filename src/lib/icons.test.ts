@@ -48,6 +48,16 @@ describe('icon assets', () => {
       expect(svg).not.toMatch(/stroke="(?!currentColor")/)
       // no leftover lucide class attribute
       expect(svg).not.toContain('class=')
+      // Every fillable child shape (open <path>s especially — Crepe's toolbar
+      // CSS overrides the root <svg>'s `fill="none"` with a solid color for
+      // its own icon slots, and an open path's implicit-fill-closure would
+      // otherwise render as a filled blob instead of a hollow glyph) must
+      // declare fill="none" on itself rather than relying on inheritance from
+      // the root <svg> element.
+      const shapeTags = svg.match(/<(path|circle|rect|polygon|polyline|ellipse|line)\b[^>]*>/g) ?? []
+      for (const tag of shapeTags) {
+        expect(tag).toContain('fill="none"')
+      }
     })
   }
 })

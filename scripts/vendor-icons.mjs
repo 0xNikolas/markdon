@@ -13,6 +13,19 @@
 // currentColor recoloring: lucide sets stroke="currentColor" + fill="none" on
 // the svg element, so every child inherits it and CSS `color` on any ancestor
 // recolors the glyph per theme.
+//
+// fill="none" is also stamped onto every child shape explicitly (not just the
+// root <svg>), rather than relying on inheritance. A consumer's own CSS can
+// target the <svg> element and set `fill` there (e.g. Crepe's toolbar.css
+// sets `.toolbar-item svg { fill: var(--crepe-color-outline) }` for its own
+// built-in icons, which our raw-SVG toolbar overrides also match) — that
+// beats the `fill="none"` presentation attribute on the same <svg> element,
+// and the resolved color then inherits into every child. For an open
+// (unclosed) <path> that's meant to render as a hollow stroke glyph, SVG's
+// implicit-fill-closure rule fills the enclosed area with that inherited
+// color, turning the icon into a solid blob. Declaring fill="none" on each
+// child directly gives it its own specified value, which wins over
+// inheritance from the ancestor regardless of what CSS does to the <svg>.
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -56,7 +69,13 @@ function normalize(raw) {
     .trim()
   const children = inner
     .split('\n')
-    .map((l) => `  ${l.trim()}`)
+    .map((l) => {
+      const trimmed = l.trim()
+      if (!trimmed) return trimmed
+      // Stamp fill="none" onto the shape itself — see the fill="none" comment
+      // above for why this can't be left to inherit from the <svg> element.
+      return `  ${trimmed.replace(/^<(\w+)/, '<$1 fill="none"')}`
+    })
     .join('\n')
   return `${OPEN}\n${children}\n</svg>\n`
 }
