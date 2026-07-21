@@ -7,6 +7,8 @@
 export interface Shortcut {
   label: string
   keys: string[]
+  /** Optional one-liner clarifying what the action does (shown muted). */
+  note?: string
 }
 
 export const APP_SHORTCUTS: Shortcut[] = [
@@ -14,7 +16,11 @@ export const APP_SHORTCUTS: Shortcut[] = [
   { label: 'Open…', keys: ['Cmd', 'O'] },
   { label: 'Save', keys: ['Cmd', 'S'] },
   { label: 'Save As…', keys: ['Cmd', 'Shift', 'S'] },
-  { label: 'Export…', keys: ['Cmd', 'Shift', 'E'] },
+  {
+    label: 'Export…',
+    keys: ['Cmd', 'Shift', 'E'],
+    note: 'Exports the current format; PDF opens the macOS print dialog (Save as PDF).',
+  },
   { label: 'Find', keys: ['Cmd', 'F'] },
   { label: 'Settings', keys: ['Cmd', ','] },
   { label: 'Undo', keys: ['Cmd', 'Z'] },

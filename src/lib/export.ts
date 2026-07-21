@@ -11,6 +11,13 @@ import { reportError } from './errors'
  * exportTick), the File menu item, and its accelerator -- all three funnel
  * into exportDocument() (App.svelte).
  *
+ * The 'pdf' format is the exception: there is no honest silent direct-to-file
+ * PDF API on macOS (wry surfaces only the native print panel), so PDF reuses
+ * the SAME clean HTML the html export produces and hands it to the Rust
+ * `export_pdf` command, which prints it through the macOS "Save as PDF"
+ * dialog. That OS dialog owns file naming/location, so the pdf path calls
+ * neither save_file_dialog nor write_file.
+ *
  * Deviation from spec-export.json: this repo's settings.ts (landed by the
  * settings feature) already owns exportFormat as the literal union
  * 'html' | 'md' under key 'markdon.settings.v1', not this spec's own
@@ -29,7 +36,7 @@ export type ExportFormat = Settings['exportFormat']
  * (dotfile, e.g. '.notes') has none.
  */
 export function deriveExportFilename(path: string | null, format: ExportFormat): string {
-  const ext = format === 'html' ? 'html' : 'md'
+  const ext = format === 'html' ? 'html' : format === 'pdf' ? 'pdf' : 'md'
   if (path === null) return `untitled.${ext}`
   const cut = path.lastIndexOf('/') + 1
   const dir = path.slice(0, cut)
@@ -37,6 +44,16 @@ export function deriveExportFilename(path: string | null, format: ExportFormat):
   const dot = name.lastIndexOf('.')
   const stem = dot > 0 ? name.slice(0, dot) : name
   return `${dir}${stem}.${ext}`
+}
+
+/**
+ * Whether the OS owns the save step for this format. PDF routes through the
+ * macOS print dialog ("Save as PDF"), which handles file naming/location, so
+ * the app shows no save_file_dialog and writes no file; html/md use the
+ * save_file_dialog + write_file pipeline.
+ */
+export function exportUsesSystemDialog(format: ExportFormat): boolean {
+  return format === 'pdf'
 }
 
 /** Filename stem used as the exported <title>; 'Untitled' with no path. */
@@ -166,7 +183,7 @@ export async function exportDocument(): Promise<void> {
 
   try {
     let contents: string
-    if (format === 'html') {
+    if (format === 'html' || format === 'pdf') {
       const source = htmlSource ?? (await waitForHtmlSource())
       if (source === null) {
         reportError('Export failed: editor is not ready')
@@ -175,6 +192,14 @@ export async function exportDocument(): Promise<void> {
       contents = buildExportHtml(docTitle(state.path), source())
     } else {
       contents = state.content // markdown path: buffer as-is, byte-for-byte
+    }
+
+    if (format === 'pdf') {
+      // The macOS print dialog ("Save as PDF") owns saving; no save_file_dialog
+      // or write_file here. The default filename derives from the document
+      // <title> = docTitle(state.path) baked into the HTML by buildExportHtml.
+      await invoke('export_pdf', { html: contents })
+      return
     }
 
     const selected = await invoke<string | null>('save_file_dialog', {

@@ -65,6 +65,7 @@
   const EXPORT_FORMATS: { value: Settings['exportFormat']; label: string }[] = [
     { value: 'html', label: 'HTML' },
     { value: 'md', label: 'Markdown' },
+    { value: 'pdf', label: 'PDF' },
   ]
 </script>
 
@@ -258,6 +259,9 @@
                 <span class="chev"><Icon name="chevron-down" size={10} /></span>
               </div>
             </div>
+            {#if $settings.exportFormat === 'pdf'}
+              <p class="hint">PDF opens the macOS print dialog — choose “Save as PDF” to write the file.</p>
+            {/if}
           </section>
         </div>
       {:else}
@@ -266,7 +270,10 @@
             <h3>Keyboard Shortcuts</h3>
             {#each APP_SHORTCUTS as s (s.label)}
               <div class="shortcut-row">
-                <span class="label">{s.label}</span>
+                <span class="label">
+                  {s.label}
+                  {#if s.note}<span class="note">{s.note}</span>{/if}
+                </span>
                 <span class="keys">
                   {#each s.keys as key (key)}
                     <kbd>{key}</kbd>
@@ -494,6 +501,11 @@
     font: 500 13px var(--font-ui);
     color: var(--fg);
   }
+  .hint {
+    margin: 0;
+    font: 400 12px/1.5 var(--font-ui);
+    color: var(--fg-muted);
+  }
 
   .selector {
     position: relative;
@@ -576,8 +588,15 @@
     border-bottom: 1px solid var(--border);
   }
   .shortcut-row .label {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
     font: 400 13px var(--font-ui);
     color: var(--fg);
+  }
+  .shortcut-row .label .note {
+    font: 400 11px/1.4 var(--font-ui);
+    color: var(--fg-muted);
   }
   .shortcut-row .keys {
     display: flex;

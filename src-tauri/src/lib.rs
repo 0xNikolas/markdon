@@ -2,6 +2,7 @@ mod allowlist;
 mod commands;
 mod dialogs;
 mod menu;
+mod pdf;
 mod watcher;
 mod workspace;
 
@@ -54,7 +55,19 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .manage(OpenedFiles::default())
         .manage(watcher::FileWatcher::default())
-        .manage(allowlist::AllowedPaths::default());
+        .manage(allowlist::AllowedPaths::default())
+        .manage(pdf::PendingPrintHtml::default())
+        // Serves the pending PDF-export HTML to the ephemeral print window.
+        // WebviewUrl has no raw-HTML variant and wry rejects data: URLs for
+        // navigation, so the export HTML is delivered through this scheme.
+        .register_uri_scheme_protocol("pdfprint", |ctx, _req| {
+            let body =
+                pdf::pending_print_body(ctx.app_handle().state::<pdf::PendingPrintHtml>().inner());
+            tauri::http::Response::builder()
+                .header(tauri::http::header::CONTENT_TYPE, "text/html")
+                .body(body)
+                .unwrap()
+        });
 
     // Must be registered on the builder (before config windows are created):
     // the plugin restores state only in its window-created hook, and "main"
@@ -106,7 +119,9 @@ pub fn run() {
             dialogs::save_file_dialog,
             dialogs::open_workspace_dialog,
             workspace::list_workspace,
-            workspace::restore_workspace
+            workspace::restore_workspace,
+            pdf::export_pdf,
+            pdf::close_pdf_export
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

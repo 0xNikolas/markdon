@@ -12,6 +12,7 @@ import {
   docTitle,
   escapeHtml,
   buildExportHtml,
+  exportUsesSystemDialog,
   registerHtmlSource,
   unregisterHtmlSource,
   exportDocument,
@@ -41,6 +42,19 @@ describe('deriveExportFilename', () => {
 
   it('is identity for a markdown export of a .md path', () => {
     expect(deriveExportFilename('/a/b/notes.md', 'md')).toBe('/a/b/notes.md')
+  })
+
+  it('maps pdf to a .pdf name, preserving dir/stem', () => {
+    expect(deriveExportFilename('/a/b/notes.md', 'pdf')).toBe('/a/b/notes.pdf')
+    expect(deriveExportFilename(null, 'pdf')).toBe('untitled.pdf')
+  })
+})
+
+describe('exportUsesSystemDialog', () => {
+  it('is true only for pdf (the OS print dialog owns saving)', () => {
+    expect(exportUsesSystemDialog('pdf')).toBe(true)
+    expect(exportUsesSystemDialog('html')).toBe(false)
+    expect(exportUsesSystemDialog('md')).toBe(false)
   })
 })
 
@@ -132,6 +146,45 @@ describe('exportDocument orchestration', () => {
       filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }],
     })
     expect(invoke).toHaveBeenCalledWith('write_file', { path: '/a/b/notes.md', contents: '# Hi' })
+  })
+
+  it('pdf format: invokes export_pdf with the wrapped HTML and never touches the save dialog or write_file', async () => {
+    openDoc('/a/b/notes.md', '# Hi')
+    settings.set({ ...DEFAULTS, exportFormat: 'pdf' })
+    const source = () => '<h1>Hi</h1>'
+    registerHtmlSource(source)
+    invoke.mockResolvedValue(undefined)
+
+    await exportDocument()
+
+    expect(invoke).toHaveBeenCalledWith('export_pdf', {
+      html: expect.stringContaining('<h1>Hi</h1>'),
+    })
+    // The HTML carries the doc <title> that drives the Save-as-PDF default name.
+    expect(invoke).toHaveBeenCalledWith('export_pdf', {
+      html: expect.stringContaining('<title>notes</title>'),
+    })
+    expect(invoke).not.toHaveBeenCalledWith('save_file_dialog', expect.anything())
+    expect(invoke).not.toHaveBeenCalledWith('write_file', expect.anything())
+    expect(invoke).toHaveBeenCalledTimes(1)
+    unregisterHtmlSource(source)
+  })
+
+  it('pdf format with no registered source retries, then reports an error and never invokes', async () => {
+    vi.useFakeTimers()
+    try {
+      openDoc('/a/b/notes.md', '# Hi')
+      settings.set({ ...DEFAULTS, exportFormat: 'pdf' })
+
+      const promise = exportDocument()
+      await vi.advanceTimersByTimeAsync(2000)
+      await promise
+
+      expect(get(errorMessage)).toContain('Export failed')
+      expect(invoke).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('does nothing when the dialog is cancelled', async () => {

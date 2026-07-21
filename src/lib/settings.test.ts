@@ -51,11 +51,15 @@ describe('parseSettings', () => {
   })
 
   it('defaults bad theme/fontFamily/exportFormat strings', () => {
-    const raw = JSON.stringify({ version: 1, theme: 'purple', fontFamily: 'comic-sans', exportFormat: 'pdf' })
+    const raw = JSON.stringify({ version: 1, theme: 'purple', fontFamily: 'comic-sans', exportFormat: 'docx' })
     const parsed = parseSettings(raw)
     expect(parsed.theme).toBe(DEFAULTS.theme)
     expect(parsed.fontFamily).toBe(DEFAULTS.fontFamily)
     expect(parsed.exportFormat).toBe(DEFAULTS.exportFormat)
+  })
+
+  it('accepts pdf as a valid exportFormat (round-trips)', () => {
+    expect(parseSettings(JSON.stringify({ version: 1, exportFormat: 'pdf' })).exportFormat).toBe('pdf')
   })
 
   it('falls back to defaults when version is not 1 (migration stub)', () => {

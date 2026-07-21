@@ -22,7 +22,7 @@ export interface Settings {
   softWrap: boolean
   tabWidth: 2 | 4
   autoCloseBrackets: boolean
-  exportFormat: 'html' | 'md'
+  exportFormat: 'html' | 'md' | 'pdf'
 }
 
 export type SettingKey = keyof Omit<Settings, 'version'>
@@ -75,7 +75,7 @@ export function parseSettings(raw: string | null): Settings {
     softWrap: typeof o.softWrap === 'boolean' ? o.softWrap : DEFAULTS.softWrap,
     tabWidth: pick(o.tabWidth, [2, 4] as const, DEFAULTS.tabWidth),
     autoCloseBrackets: typeof o.autoCloseBrackets === 'boolean' ? o.autoCloseBrackets : DEFAULTS.autoCloseBrackets,
-    exportFormat: pick(o.exportFormat, ['html', 'md'] as const, DEFAULTS.exportFormat),
+    exportFormat: pick(o.exportFormat, ['html', 'md', 'pdf'] as const, DEFAULTS.exportFormat),
   }
 }
 
