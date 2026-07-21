@@ -1,5 +1,6 @@
 import { writable, type Writable } from 'svelte/store'
 import { rewritePrefix } from './paths'
+import { readonlyMemory } from './readonlyMemory'
 
 export interface DocState {
   path: string | null
@@ -33,20 +34,18 @@ const initial: DocState = {
 export const doc: Writable<DocState> = writable(initial)
 
 /**
- * Paths whose documents are currently read-only. Readonly is a property of the
- * DOCUMENT, not of the open-call: a Finder-opened (or manually locked) file
- * must stay readonly when the user switches away via the sidebar and back —
- * call sites like handleOpenFile re-open with no flag and previously dropped
- * it, silently unlocking the buffer (and letting the editor's normalization
- * pass dirty an untouched file). Cleared by the same actions that lift
- * readonly on the live doc: enableEditing, a completed write (markSaved),
- * revertBuffer; moved by retargetPath alongside the file.
+ * Per-path readonly memory lives in ./readonlyMemory (an explicit interface
+ * shared with fileops.ts). Readonly is a property of the DOCUMENT, not of the
+ * open-call: a Finder-opened (or manually locked) file must stay readonly when
+ * the user switches away via the sidebar and back. doc.ts locks on a readonly
+ * open / enterReadonly and unlocks on the actions that lift readonly on the
+ * live doc — enableEditing, a completed write (markSaved), revertBuffer — and
+ * moves the mark with retargetPath alongside the file.
  */
-const readonlyPaths = new Set<string>()
 
 /** Test support: forget all remembered readonly paths. */
 export function resetReadonlyMemory(): void {
-  readonlyPaths.clear()
+  readonlyMemory.reset()
 }
 
 /**
@@ -61,8 +60,8 @@ export function isDirty(
 }
 
 export function openDoc(path: string, content: string, readonly = false): void {
-  if (readonly) readonlyPaths.add(path)
-  const effective = readonly || readonlyPaths.has(path)
+  if (readonly) readonlyMemory.lock(path)
+  const effective = readonly || readonlyMemory.has(path)
   doc.update((s) => ({
     path,
     content,
@@ -109,7 +108,7 @@ export function adoptNormalization(content: string): void {
  * ordinary save path, where readonly is already false).
  */
 export function markSaved(path: string, savedContent: string): void {
-  readonlyPaths.delete(path)
+  readonlyMemory.unlock(path)
   // The baseline is void once a write lands: keeping it would let an undo back
   // to the pre-save serialization read as clean while differing from disk.
   doc.update((s) => ({ ...s, path, savedContent, normalized: null, readonly: false }))
@@ -117,7 +116,7 @@ export function markSaved(path: string, savedContent: string): void {
 
 export function enableEditing(): void {
   doc.update((s) => {
-    if (s.path !== null) readonlyPaths.delete(s.path)
+    if (s.path !== null) readonlyMemory.unlock(s.path)
     return { ...s, readonly: false }
   })
 }
@@ -134,7 +133,7 @@ export function enableEditing(): void {
 export function enterReadonly(): void {
   doc.update((s) => {
     if (isDirty(s)) return s
-    if (s.path !== null) readonlyPaths.add(s.path)
+    if (s.path !== null) readonlyMemory.lock(s.path)
     return { ...s, readonly: true }
   })
 }
@@ -149,7 +148,7 @@ export function enterReadonly(): void {
  */
 export function revertBuffer(content: string): void {
   doc.update((s) => {
-    if (s.path !== null) readonlyPaths.delete(s.path) // a revert makes the doc editable
+    if (s.path !== null) readonlyMemory.unlock(s.path) // a revert makes the doc editable
     // Drop the baseline: a revert is a deliberate unsaved change and must read
     // dirty even if it happens to land on the old normalization.
     return { ...s, content, normalized: null, readonly: false, loadId: s.loadId + 1 }
@@ -166,15 +165,7 @@ export function revertBuffer(content: string): void {
  * workspace both react to it). A no-op when the open doc isn't affected.
  */
 export function retargetPath(oldPrefix: string, newPrefix: string): void {
-  // Move readonly memory alongside the file (exact match or subtree). Iterates
-  // the whole set, but it only holds currently-locked docs — a handful at most.
-  for (const p of [...readonlyPaths]) {
-    const rewritten = rewritePrefix(p, oldPrefix, newPrefix)
-    if (rewritten !== p) {
-      readonlyPaths.delete(p)
-      readonlyPaths.add(rewritten)
-    }
-  }
+  readonlyMemory.retarget(oldPrefix, newPrefix) // move the mark alongside the file
   doc.update((s) => {
     if (s.path === null) return s
     const rewritten = rewritePrefix(s.path, oldPrefix, newPrefix)
@@ -191,7 +182,7 @@ export function retargetPath(oldPrefix: string, newPrefix: string): void {
  */
 export function detachToUntitled(): void {
   doc.update((s) => {
-    if (s.path !== null) readonlyPaths.delete(s.path) // the path no longer exists on disk
+    if (s.path !== null) readonlyMemory.unlock(s.path) // the path no longer exists on disk
     return { ...s, path: null, savedContent: '' }
   })
 }
