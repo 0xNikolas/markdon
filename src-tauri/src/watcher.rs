@@ -66,11 +66,23 @@ pub fn watch_file(
             );
         }
     })
-    .map_err(|e| e.to_string())?;
+    // notify's error Display can echo the watched path; never surface that
+    // to the webview/IPC. Log the real error server-side, return a fixed
+    // message instead (mirrors fileops::delete_entries_impl's trash mapping).
+    .map_err(|e| {
+        log::warn!("could not create file watcher for {path}: {e}");
+        "could not watch file for external changes".to_string()
+    })?;
 
     watcher
         .watch(&dir, RecursiveMode::NonRecursive)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            log::warn!(
+                "could not watch {} for external changes: {e}",
+                dir.display()
+            );
+            "could not watch file for external changes".to_string()
+        })?;
 
     // Replaces only this window's slot; other windows' watchers are untouched.
     state.0.lock().unwrap().insert(label, watcher);

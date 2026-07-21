@@ -242,7 +242,13 @@ pub(crate) fn delete_entries_impl(allowed: &AllowedPaths, paths: &[String]) -> R
     ensure_all(allowed, paths)?;
     for p in paths {
         // Trash, never a permanent unlink: recoverable from the macOS Trash.
-        trash::delete(p).map_err(|e| e.to_string())?;
+        // trash::Error's Display prints its Debug form, which embeds the
+        // absolute PathBuf — never surface that to the webview/IPC. Log the
+        // real error server-side and return a fixed message instead.
+        trash::delete(p).map_err(|e| {
+            log::warn!("could not move {p} to Trash: {e}");
+            "could not move item to Trash".to_string()
+        })?;
     }
     Ok(())
 }
@@ -596,6 +602,32 @@ mod tests {
         fs::write(&f, "x").unwrap();
         assert!(delete_entries_impl(&a, &[f.to_str().unwrap().to_string()]).is_err());
         assert!(f.exists());
+    }
+
+    /// A `trash::delete` failure must map to a fixed IPC-safe message: the
+    /// crate's `Error` prints its `Debug` form (embedding an absolute
+    /// `PathBuf`) from `Display`, so `.to_string()`-ing it straight into the
+    /// command's `Result<_, String>` would leak the user's filesystem layout
+    /// to the webview. Forces a real trash failure (delete the file out from
+    /// under an exact, existence-independent grant) rather than mocking.
+    #[test]
+    fn delete_error_never_leaks_the_absolute_path() {
+        let dir = tempdir().unwrap();
+        let a = AllowedPaths::default();
+        // Never created on disk, so trash::delete is guaranteed to fail.
+        // Exact-string grant: unlike allow_root's `ensure`, this does not
+        // require the path to exist, so ensure_all still passes and the
+        // failure is isolated to trash::delete itself.
+        let f = dir.path().join("ghost.md");
+        let p = f.to_str().unwrap().to_string();
+        a.allow(&p);
+
+        let err = delete_entries_impl(&a, &[p]).unwrap_err();
+        assert_eq!(err, "could not move item to Trash");
+        assert!(
+            !err.contains('/') && !err.contains('\\'),
+            "mapped error must not leak the absolute path: {err}"
+        );
     }
 
     /// Delete must be reachable ONLY through the Trash. Assert the module never
