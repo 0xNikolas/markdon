@@ -88,8 +88,17 @@
     const first = enabledIndices()[0]
     if (first !== undefined) focusAt(first)
   }
-  // Focus the first enabled item when the menu mounts (keyboard entry point).
+  // Focus the first enabled item when the menu mounts (keyboard entry point),
+  // AND re-focus whenever the menu is re-targeted to a new cursor position.
+  // Right-clicking row A then row B without an intervening close keeps this same
+  // instance mounted — `at` just swaps to a new object — so without a reactive
+  // dependency the mount-only effect never re-runs. If the new selection
+  // disables the currently-focused item (e.g. Rename when count > 1), the
+  // browser auto-blurs it to <body>, and the menu's onkeydown (bound to a
+  // descendant) then never sees Escape. Reading `at` here re-establishes roving
+  // focus on every re-target and keeps the menu keyboard-operable.
   $effect(() => {
+    void at
     focusFirst()
   })
 
