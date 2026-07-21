@@ -15,10 +15,11 @@
   import Banner from './Banner.svelte'
   import FindBar from './FindBar.svelte'
   import SettingsModal from './SettingsModal.svelte'
+  import GoToLineBar from './GoToLineBar.svelte'
   import Sidebar from './Sidebar.svelte'
   import { searchUi, openFind, closeFind, shouldForceCloseFind } from './lib/searchPlugin'
-  import { openSourceSearch } from './lib/sourceEditor'
-  import { settingsOpen, openSettings, split, exportTick } from './lib/ui'
+  import { openSourceSearch, clearPendingLine } from './lib/sourceEditor'
+  import { settingsOpen, openSettings, gotoOpen, openGoto, closeGoto, split, exportTick } from './lib/ui'
   import { openWorkspace, initWorkspace } from './lib/workspace'
   import { exportDocument } from './lib/export'
   import { focusTrap } from './lib/focusTrap'
@@ -80,6 +81,7 @@
       listen('menu:save', () => save()),
       listen('menu:save_as', () => saveAs()),
       listen('menu:find', () => routeFind()),
+      listen('menu:goto_line', () => openGoto()),
       listen('menu:settings', () => openSettings()),
       listen('menu:open_folder', () => openWorkspace()),
       listen('menu:export', () => exportDocument()),
@@ -136,13 +138,29 @@
   // menu already handled it, since the find command is idempotent while open.
   // In split mode CodeMirror owns its panel's Esc, so we only close the
   // FindBar here (WYSIWYG).
+  //
+  // Cmd+L is a metaKey-ONLY fallback for the same reason (native accelerator
+  // not reaching the webview) -- NEVER ctrlKey too: @codemirror/commands
+  // binds mac:'Ctrl-l' to selectLine, so treating Ctrl+L as Go to Line in
+  // split mode would fight CM's own binding. Unlike the ungated Cmd+F
+  // fallback above, this one explicitly skips while another modal/overlay
+  // is already up (pendingAction, Settings, or the popover itself) so it
+  // can't double-open or steal focus from a higher-priority surface.
   function handleWindowKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape' && $searchUi.open && pendingAction === null) {
       e.preventDefault()
       closeFind()
+    } else if (e.key === 'Escape' && $gotoOpen) {
+      e.preventDefault()
+      clearPendingLine()
+      closeGoto()
     } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
       e.preventDefault()
       routeFind()
+    } else if (e.metaKey && !e.ctrlKey && e.key.toLowerCase() === 'l') {
+      if (pendingAction !== null || $settingsOpen || $gotoOpen) return
+      e.preventDefault()
+      openGoto()
     }
   }
 
@@ -253,6 +271,10 @@
 
 {#if $settingsOpen}
   <SettingsModal />
+{/if}
+
+{#if $gotoOpen}
+  <GoToLineBar />
 {/if}
 
 <style>

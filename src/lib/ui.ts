@@ -62,6 +62,15 @@ export function closeSettings(): void {
   settingsOpen.set(false)
 }
 
+/** Go to Line popover visibility. Mirrors settingsOpen/openSettings/closeSettings. */
+export const gotoOpen: Writable<boolean> = writable(false)
+export function openGoto(): void {
+  gotoOpen.set(true)
+}
+export function closeGoto(): void {
+  gotoOpen.set(false)
+}
+
 /** Export request counter; the export feature subscribes and acts on ticks. */
 export const exportTick: Writable<number> = writable(0)
 export function requestExport(): void {

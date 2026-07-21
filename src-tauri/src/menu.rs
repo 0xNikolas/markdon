@@ -23,6 +23,9 @@ pub fn build(app: &App) -> tauri::Result<Menu<Wry>> {
     let find = MenuItemBuilder::with_id("menu:find", "Find…")
         .accelerator("CmdOrCtrl+F")
         .build(app)?;
+    let goto_line = MenuItemBuilder::with_id("menu:goto_line", "Go to Line…")
+        .accelerator("CmdOrCtrl+L")
+        .build(app)?;
     let settings = MenuItemBuilder::with_id("menu:settings", "Settings…")
         .accelerator("CmdOrCtrl+,")
         .build(app)?;
@@ -55,6 +58,8 @@ pub fn build(app: &App) -> tauri::Result<Menu<Wry>> {
         .item(&PredefinedMenuItem::select_all(app, None)?)
         .separator()
         .item(&find)
+        .separator()
+        .item(&goto_line)
         .build()?;
 
     Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu])
@@ -86,6 +91,7 @@ mod tests {
             "CmdOrCtrl+Shift+S",
             "CmdOrCtrl+Shift+E",
             "CmdOrCtrl+F",
+            "CmdOrCtrl+L",
             "CmdOrCtrl+,",
         ] {
             let accel = muda::accelerator::Accelerator::from_str(s);

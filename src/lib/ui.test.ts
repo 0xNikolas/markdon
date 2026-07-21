@@ -21,6 +21,9 @@ const {
   settingsOpen,
   openSettings,
   closeSettings,
+  gotoOpen,
+  openGoto,
+  closeGoto,
   exportTick,
   requestExport,
   fileBreadcrumb,
@@ -95,6 +98,16 @@ describe('settingsOpen', () => {
     expect(get(settingsOpen)).toBe(true)
     closeSettings()
     expect(get(settingsOpen)).toBe(false)
+  })
+})
+
+describe('gotoOpen', () => {
+  it('openGoto/closeGoto set and clear the flag', () => {
+    expect(get(gotoOpen)).toBe(false)
+    openGoto()
+    expect(get(gotoOpen)).toBe(true)
+    closeGoto()
+    expect(get(gotoOpen)).toBe(false)
   })
 })
 

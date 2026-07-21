@@ -22,6 +22,11 @@ export const APP_SHORTCUTS: Shortcut[] = [
     note: 'Exports the current format; PDF opens the macOS print dialog (Save as PDF).',
   },
   { label: 'Find', keys: ['Cmd', 'F'] },
+  {
+    label: 'Go to Line…',
+    keys: ['Cmd', 'L'],
+    note: 'Accepts a line, or line:col (col is 0-based, matching the status bar).',
+  },
   { label: 'Settings', keys: ['Cmd', ','] },
   { label: 'Undo', keys: ['Cmd', 'Z'] },
   { label: 'Redo', keys: ['Cmd', 'Shift', 'Z'] },

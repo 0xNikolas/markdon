@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { EditorState } from '@codemirror/state'
-import { cursorAt, tabExt, readonlyExt } from './sourceEditor'
+import { cursorAt, tabExt, readonlyExt, gotoPos } from './sourceEditor'
 
 /** Build a state with the caret at `head` so we can assert the Ln/Col mapping. */
 function stateAt(doc: string, head: number): EditorState {
@@ -52,5 +52,36 @@ describe('readonlyExt', () => {
   it('leaves the state editable otherwise', () => {
     const state = EditorState.create({ doc: 'x', extensions: readonlyExt(false) })
     expect(state.readOnly).toBe(false)
+  })
+})
+
+describe('gotoPos', () => {
+  const doc = 'ab\ncde\nf' // offsets: a0 b1 \n2 | c3 d4 e5 \n6 | f7
+
+  it('resolves line 1 col 0 to the start of the document', () => {
+    expect(gotoPos(EditorState.create({ doc }), 1, 0)).toBe(0)
+  })
+
+  it('resolves a mid-line column on a later line', () => {
+    // line 2 ("cde") starts at offset 3; col 2 -> offset 5
+    expect(gotoPos(EditorState.create({ doc }), 2, 2)).toBe(5)
+  })
+
+  it('clamps a line above doc.lines to the last line', () => {
+    // last line ("f") starts at offset 7
+    expect(gotoPos(EditorState.create({ doc }), 99, 0)).toBe(7)
+  })
+
+  it('clamps a column past the line length to the end of the line', () => {
+    // line 2 ("cde") has length 3, so col 99 clamps to its end (offset 6)
+    expect(gotoPos(EditorState.create({ doc }), 2, 99)).toBe(6)
+  })
+
+  it('clamps a negative column to the start of the line', () => {
+    expect(gotoPos(EditorState.create({ doc }), 2, -5)).toBe(3)
+  })
+
+  it('clamps a line below 1 up to line 1', () => {
+    expect(gotoPos(EditorState.create({ doc }), 0, 0)).toBe(0)
   })
 })

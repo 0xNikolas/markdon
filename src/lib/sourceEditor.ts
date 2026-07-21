@@ -6,7 +6,7 @@
 // Imports ONLY from @codemirror/* and @lezer/highlight -- never prosemirror-*.
 // All eight packages ship with @milkdown/crepe (single-instance, verified in
 // bun.lock) and are promoted to direct dependencies in package.json.
-import { Compartment, EditorState, type Extension } from '@codemirror/state'
+import { Compartment, EditorSelection, EditorState, type Extension } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { markdown, markdownKeymap, markdownLanguage } from '@codemirror/lang-markdown'
@@ -103,8 +103,38 @@ export function sourceExtensions(
 // pane is ever mounted (split mode).
 let sourceView: EditorView | null = null
 
+// A Go to Line jump requested from WYSIWYG mode arrives BEFORE the source
+// pane exists (entering split remounts SourcePane async) -- stash it here
+// and flush it the moment registerSourceView sees the new view.
+let pendingLine: { line: number; col: number } | null = null
+
+/** Clamp a 1-based line + 0-based col to the doc and return the absolute
+ * caret position. Pure over the state -- mirrors @codemirror/search's own
+ * gotoLine clamp idiom (line clamped to [1, doc.lines], col clamped to
+ * [0, line.length]). Exported for sourceEditor.test.ts's bare-EditorState
+ * coverage. */
+export function gotoPos(state: EditorState, line: number, col: number): number {
+  const n = Math.max(1, Math.min(state.doc.lines, line))
+  const l = state.doc.line(n)
+  return l.from + Math.max(0, Math.min(col, l.length))
+}
+
+function applyGoToLine(view: EditorView, line: number, col: number): void {
+  const pos = gotoPos(view.state, line, col)
+  view.dispatch({
+    selection: EditorSelection.cursor(pos),
+    effects: EditorView.scrollIntoView(pos, { y: 'center' }),
+  })
+  view.focus()
+}
+
 export function registerSourceView(v: EditorView | null): void {
   sourceView = v
+  if (v && pendingLine) {
+    const t = pendingLine
+    pendingLine = null
+    applyGoToLine(v, t.line, t.col)
+  }
 }
 
 /** Open the CodeMirror search panel. Returns false (no-op) when no source
@@ -112,4 +142,26 @@ export function registerSourceView(v: EditorView | null): void {
 export function openSourceSearch(): boolean {
   if (!sourceView) return false
   return openSearchPanel(sourceView)
+}
+
+/**
+ * Jump the source pane's caret to `line`/`col`, centered. Returns true if
+ * the jump ran immediately (split mode already mounted); false if it was
+ * queued to flush on the next registerSourceView (the caller just switched
+ * into split mode and SourcePane hasn't mounted yet).
+ */
+export function goToSourceLine(line: number, col = 0): boolean {
+  if (!sourceView) {
+    pendingLine = { line, col }
+    return false
+  }
+  applyGoToLine(sourceView, line, col)
+  return true
+}
+
+/** Drop a queued-but-not-yet-flushed jump (e.g. the Go to Line popover was
+ * closed, or split was toggled back off, before the source pane mounted) so
+ * a later, unrelated source-pane mount can't fire a stale jump. */
+export function clearPendingLine(): void {
+  pendingLine = null
 }
