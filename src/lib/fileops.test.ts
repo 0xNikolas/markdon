@@ -23,10 +23,12 @@ import {
   paste,
   performDelete,
   performRename,
+  performMove,
 } from './fileops'
 import { type WorkspaceDir, workspace } from './workspace'
 import { doc, openDoc, newDoc, isDirty } from './doc'
 import { notice, errorMessage } from './errors'
+import { openList } from './openList'
 
 const dir = (name: string, path: string, dirs: WorkspaceDir[] = [], files = []): WorkspaceDir => ({
   name,
@@ -62,6 +64,7 @@ beforeEach(() => {
   newDoc()
   notice.set(null)
   errorMessage.set(null)
+  openList.set([])
 })
 
 describe('visibleRowPaths', () => {
@@ -228,6 +231,48 @@ describe('performRename follows the open document', () => {
   })
 })
 
+describe('performRename keeps the Open Files strip in sync', () => {
+  it('retargets the active entry so its row keeps the active highlight', async () => {
+    openDoc('/ws/readme.md', '# hi')
+    openList.set(['/ws/readme.md', '/ws/docs/note.md'])
+    invoke.mockResolvedValueOnce('/ws/guide.md').mockResolvedValueOnce({ root: '/ws', tree })
+    await performRename('/ws/readme.md', 'guide.md')
+    expect(get(openList)).toEqual(['/ws/guide.md', '/ws/docs/note.md'])
+  })
+
+  it('retargets a background (non-active) entry', async () => {
+    openDoc('/ws/docs/note.md', '# note')
+    openList.set(['/ws/docs/note.md', '/ws/readme.md'])
+    invoke.mockResolvedValueOnce('/ws/guide.md').mockResolvedValueOnce({ root: '/ws', tree })
+    await performRename('/ws/readme.md', 'guide.md')
+    expect(get(openList)).toEqual(['/ws/docs/note.md', '/ws/guide.md'])
+  })
+})
+
+describe('performMove keeps the Open Files strip in sync', () => {
+  it('retargets a moved entry to its destination path', async () => {
+    openDoc('/ws/readme.md', '# hi')
+    openList.set(['/ws/readme.md'])
+    invoke.mockResolvedValueOnce('/ws/docs/readme.md').mockResolvedValueOnce({ root: '/ws', tree })
+    await performMove(['/ws/readme.md'], '/ws/docs')
+    expect(get(openList)).toEqual(['/ws/docs/readme.md'])
+    expect(get(doc).path).toBe('/ws/docs/readme.md')
+  })
+})
+
+describe('cut-paste keeps the Open Files strip in sync', () => {
+  it('retargets the moved entry', async () => {
+    openDoc('/ws/docs/note.md', '# note')
+    openList.set(['/ws/docs/note.md'])
+    focusRow('/ws/docs/note.md')
+    cutSelection()
+    invoke.mockResolvedValueOnce('/ws/note.md').mockResolvedValueOnce({ root: '/ws', tree })
+    focused.set('/ws')
+    await paste()
+    expect(get(openList)).toEqual(['/ws/note.md'])
+  })
+})
+
 describe('performDelete', () => {
   it('detaches the open doc to Untitled and posts a notice when its file is trashed', async () => {
     openDoc('/ws/readme.md', '# content')
@@ -255,5 +300,29 @@ describe('performDelete', () => {
     await performDelete(['/ws/readme.md'])
     expect(get(doc).path).toBe('/ws/readme.md') // untouched
     expect(get(errorMessage)).toContain('delete')
+  })
+
+  it('drops the trashed active entry from the Open Files strip', async () => {
+    openDoc('/ws/readme.md', '# content')
+    openList.set(['/ws/readme.md', '/ws/docs/note.md'])
+    invoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce({ root: '/ws', tree })
+    await performDelete(['/ws/readme.md'])
+    expect(get(openList)).toEqual(['/ws/docs/note.md'])
+  })
+
+  it('drops a trashed background entry and every entry nested under a trashed folder', async () => {
+    openDoc('/ws/readme.md', '# keep open')
+    openList.set(['/ws/readme.md', '/ws/docs/note.md', '/ws/img/logo.svg'])
+    invoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce({ root: '/ws', tree })
+    await performDelete(['/ws/docs'])
+    expect(get(openList)).toEqual(['/ws/readme.md', '/ws/img/logo.svg'])
+  })
+
+  it('leaves the Open Files strip untouched when the backend rejects', async () => {
+    openDoc('/ws/other.md', '# other')
+    openList.set(['/ws/readme.md'])
+    invoke.mockRejectedValueOnce('denied').mockResolvedValueOnce({ root: '/ws', tree })
+    await performDelete(['/ws/readme.md'])
+    expect(get(openList)).toEqual(['/ws/readme.md'])
   })
 })

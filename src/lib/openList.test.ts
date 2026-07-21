@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { addOpen, removeOpen, neighbourAfterClose } from './openList'
+import { addOpen, removeOpen, neighbourAfterClose, retargetOpen, removeOpenSubtree } from './openList'
 
 describe('addOpen', () => {
   it('appends a new path to an empty list', () => {
@@ -58,5 +58,61 @@ describe('neighbourAfterClose', () => {
 
   it('closing set has no active path (already untitled): returns null unchanged', () => {
     expect(neighbourAfterClose(['/a.md', '/b.md'], '/a.md', null)).toBeNull()
+  })
+})
+
+describe('retargetOpen', () => {
+  it('rewrites an exact file match', () => {
+    expect(retargetOpen(['/a.md', '/b.md'], '/a.md', '/renamed.md')).toEqual([
+      '/renamed.md',
+      '/b.md',
+    ])
+  })
+
+  it('preserves position when rewriting', () => {
+    expect(retargetOpen(['/a.md', '/b.md', '/c.md'], '/b.md', '/z.md')).toEqual([
+      '/a.md',
+      '/z.md',
+      '/c.md',
+    ])
+  })
+
+  it('rewrites every entry nested under a moved ancestor folder, segment-safely', () => {
+    expect(
+      retargetOpen(
+        ['/ws/docs/a.md', '/ws/docs/sub/b.md', '/ws/docs2/c.md', '/ws/other.md'],
+        '/ws/docs',
+        '/ws/renamed',
+      ),
+    ).toEqual(['/ws/renamed/a.md', '/ws/renamed/sub/b.md', '/ws/docs2/c.md', '/ws/other.md'])
+  })
+
+  it('dedups when a rewrite lands on a path already open, keeping the first position', () => {
+    expect(retargetOpen(['/a.md', '/b.md'], '/a.md', '/b.md')).toEqual(['/b.md'])
+  })
+
+  it('is a referential no-op when nothing in the list is affected', () => {
+    const list = ['/a.md', '/b.md']
+    expect(retargetOpen(list, '/z.md', '/y.md')).toBe(list)
+  })
+})
+
+describe('removeOpenSubtree', () => {
+  it('removes the exact path', () => {
+    expect(removeOpenSubtree(['/a.md', '/b.md'], '/a.md')).toEqual(['/b.md'])
+  })
+
+  it('removes every entry nested under a trashed folder, segment-safely', () => {
+    expect(
+      removeOpenSubtree(
+        ['/ws/docs/a.md', '/ws/docs/sub/b.md', '/ws/docs2/c.md', '/ws/other.md'],
+        '/ws/docs',
+      ),
+    ).toEqual(['/ws/docs2/c.md', '/ws/other.md'])
+  })
+
+  it('is a referential no-op when nothing in the list is affected', () => {
+    const list = ['/a.md', '/b.md']
+    expect(removeOpenSubtree(list, '/z.md')).toBe(list)
   })
 })

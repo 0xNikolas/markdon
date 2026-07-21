@@ -26,6 +26,51 @@ export function removeOpen(list: string[], path: string): string[] {
 }
 
 /**
+ * Follow a rename/move of any entry (file or an ANCESTOR folder) into
+ * openList — mirrors doc.ts's `retargetPath`. Rewrites an exact match, or
+ * every entry nested under a moved folder (segment-safe prefix rewrite),
+ * keeping each entry's original position. A rewrite that lands on a path
+ * already present in the list (e.g. moving a file onto a path a background
+ * tab already occupies) is deduped, keeping the first occurrence's position.
+ * A no-op (same reference) when nothing in the list is affected — so callers
+ * can wire it into every fileops.ts mutation unconditionally.
+ */
+export function retargetOpen(list: string[], oldPrefix: string, newPrefix: string): string[] {
+  let changed = false
+  const rewritten = list.map((p) => {
+    if (p === oldPrefix) {
+      changed = true
+      return newPrefix
+    }
+    if (p.startsWith(oldPrefix + '/')) {
+      changed = true
+      return newPrefix + p.slice(oldPrefix.length)
+    }
+    return p
+  })
+  if (!changed) return list
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const p of rewritten) {
+    if (seen.has(p)) continue
+    seen.add(p)
+    out.push(p)
+  }
+  return out
+}
+
+/**
+ * Drop every entry that is `path` itself or nested beneath it (segment-safe)
+ * — used when an entry is sent to Trash, since a deleted file/folder can no
+ * longer be reopened and would otherwise leave a permanently dead row. A
+ * no-op (same reference) when nothing in the list is affected.
+ */
+export function removeOpenSubtree(list: string[], path: string): string[] {
+  const filtered = list.filter((p) => p !== path && !p.startsWith(path + '/'))
+  return filtered.length === list.length ? list : filtered
+}
+
+/**
  * Which path should become active after `closing` is removed from `list`.
  * Closing a background (non-active) entry leaves `active` untouched. Closing
  * the active entry switches to the previous entry, else the next, else

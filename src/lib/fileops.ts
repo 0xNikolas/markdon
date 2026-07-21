@@ -3,6 +3,7 @@ import { get, writable, type Writable } from 'svelte/store'
 import { doc, retargetPath, detachToUntitled } from './doc'
 import { reportError, reportNotice } from './errors'
 import { workspace, refreshWorkspace, type WorkspaceDir } from './workspace'
+import { openList, retargetOpen, removeOpenSubtree } from './openList'
 
 /**
  * Sidebar file-operations state and the app-internal file clipboard, plus the
@@ -212,6 +213,7 @@ export async function performRename(path: string, newName: string): Promise<void
   try {
     const p = await renameEntry(path, newName)
     retargetPath(path, p) // follow the open doc if it (or an ancestor) moved
+    openList.update((l) => retargetOpen(l, path, p)) // keep the Open Files strip in sync
     await refreshWorkspace()
     afterMutation([p])
   } catch (e) {
@@ -229,13 +231,18 @@ export async function performDuplicate(path: string): Promise<void> {
   }
 }
 
-/** Move each path into `destDir`; follows the open doc for any moved entry. */
+/**
+ * Move each path into `destDir`; follows the open doc for any moved entry
+ * and keeps the Open Files strip's entries in sync (renamed path, or every
+ * entry nested under a moved folder).
+ */
 export async function performMove(paths: string[], destDir: string): Promise<void> {
   const moved: string[] = []
   try {
     for (const src of paths) {
       const p = await moveEntry(src, destDir)
       retargetPath(src, p)
+      openList.update((l) => retargetOpen(l, src, p))
       moved.push(p)
     }
   } catch (e) {
@@ -272,6 +279,7 @@ export async function paste(): Promise<void> {
       } else {
         const p = await moveEntry(src, dir)
         retargetPath(src, p)
+        openList.update((l) => retargetOpen(l, src, p))
         results.push(p)
         movedCount++
       }
@@ -291,8 +299,10 @@ export async function paste(): Promise<void> {
 /**
  * Move the given paths to the Trash. If the open document (or an ancestor
  * folder of it) is among them, detach it to an unsaved Untitled doc so nothing
- * on screen is lost, and surface an info notice. Clears any clipboard entry that
- * referenced a trashed path.
+ * on screen is lost, and surface an info notice. Also drops any Open Files
+ * strip entry that is one of the trashed paths or nested beneath one — a
+ * trashed file can't be reopened, so leaving its row behind would just be a
+ * dead link. Clears any clipboard entry that referenced a trashed path.
  */
 export async function performDelete(paths: string[]): Promise<void> {
   const openPath = get(doc).path
@@ -307,6 +317,7 @@ export async function performDelete(paths: string[]): Promise<void> {
     detachToUntitled()
     reportNotice('This file was moved to Trash — it is now an unsaved document.')
   }
+  openList.update((l) => paths.reduce((acc, p) => removeOpenSubtree(acc, p), l))
   // Drop a clipboard that pointed at anything just trashed.
   const cb = get(clipboard)
   if (cb !== null && cb.paths.some((cp) => paths.some((p) => isSelfOrDescendant(cp, p)))) {
