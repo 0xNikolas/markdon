@@ -46,6 +46,19 @@ export function enableEditing(): void {
 }
 
 /**
+ * Manually enter read-only mode (task 25's File-menu toggle). Sets readonly=true
+ * but ONLY on a clean buffer: the readonly⇒clean invariant every other path
+ * relies on — edit() no-ops while readonly, save() short-circuits,
+ * classifyExternalChange's rule order — must never be broken by stranding unsaved
+ * edits behind the flag. The UI layer guarantees cleanliness first (routing a
+ * dirty buffer through the discard guard before calling this); the store stays
+ * defensive and no-ops if handed a dirty buffer anyway.
+ */
+export function enterReadonly(): void {
+  doc.update((s) => (isDirty(s) ? s : { ...s, readonly: true }))
+}
+
+/**
  * Load a File History version into the buffer as UNSAVED changes (task 24).
  * `savedContent` and `path` are left untouched — disk truth is unchanged — so
  * the doc reads as dirty and the user confirms with Cmd+S. `readonly` is cleared

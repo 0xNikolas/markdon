@@ -1,7 +1,14 @@
-use tauri::menu::{Menu, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
+use tauri::menu::{
+    CheckMenuItem, CheckMenuItemBuilder, Menu, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder,
+};
 use tauri::{App, Wry};
 
-pub fn build(app: &App) -> tauri::Result<Menu<Wry>> {
+/// Builds the app menu and returns it alongside the "Read Only" CheckMenuItem
+/// handle (task 25). `Menu::get` only walks top-level submenus, not nested
+/// items, so the readonly item can't be looked up by id after the fact — the
+/// caller stores this handle in managed state and drives its checked state from
+/// the doc store (the single source of truth) via `set_readonly_menu_state`.
+pub fn build(app: &App) -> tauri::Result<(Menu<Wry>, CheckMenuItem<Wry>)> {
     let new = MenuItemBuilder::with_id("menu:new", "New")
         .accelerator("CmdOrCtrl+N")
         .build(app)?;
@@ -16,6 +23,16 @@ pub fn build(app: &App) -> tauri::Result<Menu<Wry>> {
         .build(app)?;
     let save_as = MenuItemBuilder::with_id("menu:save_as", "Save As…")
         .accelerator("CmdOrCtrl+Shift+S")
+        .build(app)?;
+    // No accelerator: this is a mode toggle reached from the menu (and the
+    // banner's "Enable editing" button), not a hot-path keystroke, and every
+    // trivial Cmd+<letter> is already taken or collides with a
+    // PredefinedMenuItem default — so it is deliberately menu-only and gets no
+    // Shortcuts-tab entry. `checked(false)` overrides the builder's default of
+    // `true`; the real state is pushed from the doc store on mount and on every
+    // readonly change.
+    let readonly = CheckMenuItemBuilder::with_id("menu:toggle_readonly", "Read Only")
+        .checked(false)
         .build(app)?;
     // NOT CmdOrCtrl+Y: muda's PredefinedMenuItem::redo (below) defaults to
     // CmdOrCtrl+Y on every platform except macOS (macOS gets Cmd+Shift+Z), so
@@ -55,6 +72,7 @@ pub fn build(app: &App) -> tauri::Result<Menu<Wry>> {
         .separator()
         .item(&save)
         .item(&save_as)
+        .item(&readonly)
         .separator()
         .item(&history)
         .separator()
@@ -77,7 +95,8 @@ pub fn build(app: &App) -> tauri::Result<Menu<Wry>> {
         .item(&goto_line)
         .build()?;
 
-    Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu])
+    let menu = Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu])?;
+    Ok((menu, readonly))
 }
 
 #[cfg(test)]

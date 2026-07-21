@@ -19,9 +19,13 @@
   // the discard guard); disk truth is untouched until the user saves.
   interface Props {
     path: string | null
+    // Read-only docs (task 25): revert implies edit intent, so the Revert
+    // button is disabled while the buffer is locked (App.svelte drives this
+    // from $doc.readonly). Viewing history stays allowed.
+    readonly?: boolean
     onRevert: (content: string) => void
   }
-  let { path, onRevert }: Props = $props()
+  let { path, readonly = false, onRevert }: Props = $props()
 
   let entries = $state<HistoryEntry[]>([])
   let selectedId = $state<string | null>(null)
@@ -66,7 +70,7 @@
   }
 
   function revert() {
-    if (selectedId === null) return
+    if (selectedId === null || readonly) return // button is disabled while readonly; guard anyway
     onRevert(selectedContent) // App.svelte: guarded() -> recordRevert -> revertBuffer -> close
   }
 
@@ -161,7 +165,12 @@
         </p>
         <div class="footer-actions">
           <button class="secondary" onclick={closeHistory}>Close</button>
-          <button class="primary" disabled={selectedId === null} onclick={revert}>
+          <button
+            class="primary"
+            disabled={selectedId === null || readonly}
+            title={readonly ? 'Enable editing first' : undefined}
+            onclick={revert}
+          >
             Revert to this version
           </button>
         </div>

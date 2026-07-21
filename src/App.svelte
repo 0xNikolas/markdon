@@ -4,7 +4,7 @@
   import { getCurrentWindow } from '@tauri-apps/api/window'
   import { listenScoped, currentLabel } from './lib/windowing'
   import { get } from 'svelte/store'
-  import { doc, edit, newDoc, isDirty, enableEditing, revertBuffer } from './lib/doc'
+  import { doc, edit, newDoc, isDirty, enableEditing, enterReadonly, revertBuffer } from './lib/doc'
   import { recordRevert } from './lib/history'
   import { open, save, saveAs, openPath, openInPreferredTarget } from './lib/files'
   import { openList, removeOpen, neighbourAfterClose } from './lib/openList'
@@ -53,6 +53,46 @@
   function guarded(action: () => void) {
     if (isDirty(get(doc))) pendingAction = action
     else action()
+  }
+
+  // Push the read-only flag to the native File-menu "Read Only" check mark
+  // (task 25). The doc store is the single source of truth: Finder read-only
+  // opens, the banner's "Enable editing" button, and the manual toggle all
+  // change $doc.readonly, and the onMount subscription funnels every change
+  // through here. Also called directly when a toggle is refused/cancelled, to
+  // undo muda's optimistic on-click flip (macOS flips the check before the
+  // event reaches us; if the store didn't actually change, the subscription
+  // won't fire, so we re-assert the real value). Menu-sync failure is
+  // non-fatal — the check mark is cosmetic — so errors are swallowed.
+  function syncReadonlyMenu(checked: boolean): void {
+    void invoke('set_readonly_menu_state', { checked }).catch(() => {})
+  }
+
+  // File-menu "Read Only" toggle handler (task 25). Three cases off the store:
+  //   - already read-only  -> lift it (identical to the banner's Enable editing)
+  //   - editable + clean   -> enter read-only immediately
+  //   - editable + dirty   -> route through the discard guard, entering
+  //     read-only only once the buffer resolves clean (Save writes then locks;
+  //     Don't Save drops the unsaved edits back to disk truth first, preserving
+  //     the readonly⇒clean invariant; Cancel aborts — see cancel()).
+  // enterReadonly() is itself defensive (no-ops on a dirty buffer), so the
+  // guarded action restores savedContent before locking on the discard path.
+  function toggleReadonly() {
+    const s = get(doc)
+    if (s.readonly) {
+      enableEditing()
+    } else if (!isDirty(s)) {
+      enterReadonly()
+    } else {
+      guarded(() => {
+        const cur = get(doc)
+        // Save path already cleared dirty; Don't-Save reaches here still dirty,
+        // so discard the edits (revert to disk truth, remounting the editor)
+        // before locking, keeping readonly⇒clean intact.
+        if (isDirty(cur)) revertBuffer(cur.savedContent)
+        enterReadonly()
+      })
+    }
   }
 
   // Single entry point for opening a path from the sidebar (Open Files strip
@@ -128,6 +168,20 @@
         if (pendingAction !== null || get(settingsOpen) || get(gotoOpen) || get(historyOpen)) return
         openHistory()
       }),
+      listenScoped('menu:toggle_readonly', () => {
+        // The native menu item is always clickable, and muda optimistically
+        // flips its check on click before this fires. Don't clobber an in-flight
+        // discard guard, and don't stack the guard modal (opened by the dirty
+        // path) behind another overlay — same modal-precedence gating as the
+        // goto/history branches above. When blocked, re-sync the check to the
+        // store's real value to undo muda's optimistic flip (the store didn't
+        // change, so the subscription won't).
+        if (pendingAction !== null || get(settingsOpen) || get(gotoOpen) || get(historyOpen)) {
+          syncReadonlyMenu(get(doc).readonly)
+          return
+        }
+        toggleReadonly()
+      }),
       listenScoped('menu:settings', () => openSettings()),
       listenScoped('menu:open_folder', () => openWorkspace()),
       listenScoped('menu:export', () => exportDocument()),
@@ -150,11 +204,22 @@
       }
       exportDocument()
     })
+    // Mirror $doc.readonly onto the native "Read Only" check mark (task 25).
+    // Fires on mount (seeding the check to the current state) and on every
+    // readonly transition; gated on the flag actually changing so ordinary
+    // keystroke-driven store updates don't spam the IPC bridge.
+    let lastReadonly: boolean | null = null
+    const unsubReadonlyMenu = doc.subscribe((s) => {
+      if (s.readonly === lastReadonly) return
+      lastReadonly = s.readonly
+      syncReadonlyMenu(s.readonly)
+    })
     return () => {
       unsub.then((fns) => fns.forEach((f) => f()))
       teardownSync.then((fn) => fn())
       teardownWorkspace.then((fn) => fn())
       unsubExportTick()
+      unsubReadonlyMenu()
     }
   })
 
@@ -265,7 +330,14 @@
     pendingAction = null
     action?.()
   }
-  function cancel() { pendingAction = null }
+  function cancel() {
+    pendingAction = null
+    // A cancelled Read-Only toggle left $doc.readonly untouched, so the store
+    // subscription won't fire — re-assert the check mark to undo muda's
+    // optimistic on-click flip (task 25). Idempotent/harmless for New/Open/
+    // close-cancel, where readonly didn't change either.
+    syncReadonlyMenu(get(doc).readonly)
+  }
 
   // Esc cancels the guard modal, same as clicking Cancel -- but stays inert
   // while a save is in flight (the buttons are disabled(saving) too).
@@ -374,7 +446,7 @@
 {/if}
 
 {#if $historyOpen}
-  <HistoryModal path={$doc.path} onRevert={applyRevert} />
+  <HistoryModal path={$doc.path} readonly={$doc.readonly} onRevert={applyRevert} />
 {/if}
 
 <style>

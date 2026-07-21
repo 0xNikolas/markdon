@@ -36,6 +36,15 @@ pub struct FocusedWindow(pub Mutex<Option<String>>);
 #[derive(Default)]
 pub struct PendingWindowFile(pub Mutex<HashMap<String, String>>);
 
+/// Handle to the File-menu "Read Only" CheckMenuItem (task 25). The app menu is
+/// app-global (one menu bar for all windows), and `Menu::get` doesn't reach
+/// nested items, so the item is stashed here at menu-build time. The frontend
+/// pushes the checked state from the doc store — the single source of truth —
+/// via `set_readonly_menu_state`. The inner `CheckMenuItem` is Arc-backed and
+/// tauri marks it Send+Sync; `set_checked` dispatches to the main thread itself,
+/// so no extra lock is needed.
+pub struct ReadonlyMenuItem(pub tauri::menu::CheckMenuItem<tauri::Wry>);
+
 /// Monotonic counter for spawned-window labels (`doc-1`, `doc-2`, …). The
 /// `doc-*` prefix is load-bearing: capabilities/default.json grants the default
 /// permission set to `doc-*`, so any future spawned window MUST keep this prefix
@@ -104,6 +113,18 @@ fn take_opened_files(state: State<'_, OpenedFiles>) -> Vec<String> {
 #[tauri::command]
 fn take_window_file(label: String, pending: State<'_, PendingWindowFile>) -> Option<String> {
     pending.0.lock().unwrap().remove(&label)
+}
+
+/// Sync the File-menu "Read Only" check mark to the doc store (task 25). The
+/// frontend calls this on mount and whenever `$doc.readonly` changes, so the
+/// store stays the single source of truth: Finder read-only opens, the banner's
+/// "Enable editing", and the manual toggle all flow through the same store
+/// subscription. Also corrects muda's optimistic on-click toggle when a dirty
+/// manual toggle is cancelled (the store never changed, so pushing its actual
+/// value un-checks the item).
+#[tauri::command]
+fn set_readonly_menu_state(checked: bool, item: State<'_, ReadonlyMenuItem>) -> Result<(), String> {
+    item.0.set_checked(checked).map_err(|e| e.to_string())
 }
 
 /// Spawn a second window of the SAME app to host `path` (MODE B). The path must
@@ -207,8 +228,11 @@ pub fn run() {
                 )?;
             }
 
-            let menu = menu::build(app)?;
+            let (menu, readonly_item) = menu::build(app)?;
             app.set_menu(menu)?;
+            // Stash the "Read Only" CheckMenuItem so set_readonly_menu_state can
+            // drive its checked state from the doc store (task 25).
+            app.manage(ReadonlyMenuItem(readonly_item));
             app.on_menu_event(|app_handle, event| {
                 // Menu item ids ARE the event names (e.g. "menu:open"). An app-
                 // global macOS menu bar carries no window identity, so route the
@@ -241,6 +265,7 @@ pub fn run() {
             commands::write_file,
             take_opened_files,
             take_window_file,
+            set_readonly_menu_state,
             open_document_window,
             watcher::watch_file,
             watcher::unwatch,

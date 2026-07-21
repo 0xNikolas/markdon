@@ -8,6 +8,7 @@ import {
   markSaved,
   isDirty,
   enableEditing,
+  enterReadonly,
   retargetPath,
   detachToUntitled,
   revertBuffer,
@@ -100,6 +101,35 @@ describe('doc store', () => {
     openDoc('/tmp/a.md', '# A', true)
     newDoc()
     expect(get(doc).readonly).toBe(false)
+  })
+
+  it('enterReadonly sets the flag on a clean buffer', () => {
+    openDoc('/tmp/a.md', '# A')
+    enterReadonly()
+    const s = get(doc)
+    expect(s.readonly).toBe(true)
+    expect(s.content).toBe('# A')
+    expect(isDirty(s)).toBe(false)
+  })
+
+  it('enterReadonly no-ops on a dirty buffer, preserving the readonly⇒clean invariant', () => {
+    openDoc('/tmp/a.md', '# A')
+    edit('# A edited') // dirty
+    enterReadonly()
+    const s = get(doc)
+    expect(s.readonly).toBe(false) // refused: would strand unsaved edits behind readonly
+    expect(isDirty(s)).toBe(true)
+  })
+
+  it('enterReadonly then enableEditing round-trips, preserving content and savedContent', () => {
+    openDoc('/tmp/a.md', '# A')
+    enterReadonly()
+    enableEditing()
+    const s = get(doc)
+    expect(s.readonly).toBe(false)
+    expect(s.content).toBe('# A')
+    expect(s.savedContent).toBe('# A')
+    expect(isDirty(s)).toBe(false)
   })
 })
 
