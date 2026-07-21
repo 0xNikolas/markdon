@@ -9,6 +9,7 @@
     type WorkspaceDir,
     type WorkspaceFile,
   } from './lib/workspace'
+  import { isInsideRoot } from './lib/ui'
 
   interface Props {
     activePath: string | null
@@ -20,6 +21,16 @@
   // Collapse state keyed by dir path. Absent/false = expanded (matches the
   // design's open folders); toggled per folder, local to this component.
   let collapsed = $state<Record<string, boolean>>({})
+
+  // A file opened without (or outside) a workspace grant still has an open
+  // doc but no tree row to show it in -- surface it as its own "Open File"
+  // section (VS Code Open Editors-style) instead of leaving the sidebar
+  // silent about what's on screen. Never expands the filesystem allowlist:
+  // this only reads $workspace.root, already granted by openWorkspace().
+  let showOpenFile = $derived(
+    activePath !== null && ($workspace.root === null || !isInsideRoot(activePath, $workspace.root)),
+  )
+  let openFileName = $derived(activePath?.split('/').filter(Boolean).pop() ?? activePath ?? '')
 </script>
 
 {#snippet fileRow(f: WorkspaceFile)}
@@ -64,6 +75,18 @@
 {/snippet}
 
 <nav class="sidebar" aria-label="Workspace">
+  {#if showOpenFile}
+    <div class="header">
+      <span class="label">Open File</span>
+    </div>
+    <div class="tree">
+      <div class="file-row active static" aria-current="true">
+        <span class="active-bar"></span>
+        <Icon name={fileIcon(openFileName)} size={16} />
+        <span class="name">{openFileName}</span>
+      </div>
+    </div>
+  {/if}
   <div class="header">
     <span class="label">Workspace</span>
     <button class="new-file" aria-label="New file" onclick={onNewFile}>
@@ -212,6 +235,11 @@
     background: var(--accent-tint-strong);
   }
   .file-row.disabled {
+    cursor: default;
+  }
+  /* The "Open File" row is not a button -- it's already the open doc, so
+     clicking it is a no-op. Same active styling, but no pointer affordance. */
+  .file-row.static {
     cursor: default;
   }
   .active-bar {

@@ -24,6 +24,7 @@ const {
   exportTick,
   requestExport,
   fileBreadcrumb,
+  isInsideRoot,
 } = await import('./ui')
 
 describe('formatInt', () => {
@@ -154,6 +155,27 @@ describe('fileBreadcrumb', () => {
       crumbs: ['notes'],
       filename: 'secret.md',
     })
+  })
+})
+
+describe('isInsideRoot', () => {
+  it('is true for a file at or nested under the root', () => {
+    expect(isInsideRoot('/ws/project/file.md', '/ws/project')).toBe(true)
+    expect(isInsideRoot('/ws/project/sub/folders/file.md', '/ws/project')).toBe(true)
+  })
+
+  it('is false for a path outside the root', () => {
+    expect(isInsideRoot('/Users/nicu/other/todo.md', '/ws/project')).toBe(false)
+  })
+
+  it('does not treat a sibling directory sharing a name prefix as inside the root', () => {
+    // /ws/proj is NOT an ancestor of /ws/project2 even though the string is a prefix.
+    expect(isInsideRoot('/ws/project2/file.md', '/ws/proj')).toBe(false)
+  })
+
+  it('is false for a segment-less root (would otherwise vacuously match everything)', () => {
+    expect(isInsideRoot('/Users/nicu/notes/secret.md', '/')).toBe(false)
+    expect(isInsideRoot('/Users/nicu/notes/secret.md', '')).toBe(false)
   })
 })
 

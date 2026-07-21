@@ -78,6 +78,19 @@ export interface FileBreadcrumb {
 }
 
 /**
+ * True when `path` is `root` or nested under it, matched segment-by-segment
+ * (not by string prefix, so a sibling folder like `/ws/project2` isn't
+ * mistaken for a child of `/ws/proj`). A segment-less root ('/' or '') would
+ * make the check vacuously true for every path, so it always returns false
+ * instead — an empty/root root never counts as containing anything.
+ */
+export function isInsideRoot(path: string, root: string): boolean {
+  const pathSegments = path.split('/').filter(Boolean)
+  const rootSegments = root.split('/').filter(Boolean)
+  return rootSegments.length > 0 && rootSegments.every((seg, i) => pathSegments[i] === seg)
+}
+
+/**
  * Header breadcrumb segments for the open document.
  *
  * - No path (untitled doc): no crumbs, filename "Untitled".
@@ -85,10 +98,8 @@ export interface FileBreadcrumb {
  *   every intermediate folder between the root and the file (path relative to
  *   `workspaceRoot`), so nested files show their full in-workspace ancestry.
  * - Anything else — no workspace open, or a path outside the workspace root
- *   (matched segment-by-segment, not by string prefix, so a sibling folder
- *   like `/ws/project2` isn't mistaken for a child of `/ws/proj`) — falls
- *   back to just the immediate parent folder, so the header never leaks a
- *   long absolute path.
+ *   (see `isInsideRoot`) — falls back to just the immediate parent folder, so
+ *   the header never leaks a long absolute path.
  */
 export function fileBreadcrumb(
   path: string | null,
@@ -100,16 +111,10 @@ export function fileBreadcrumb(
   const segments = path.split('/').filter(Boolean)
   const filename = segments[segments.length - 1] ?? path
 
-  if (workspaceRoot !== null && workspaceName !== null) {
+  if (workspaceRoot !== null && workspaceName !== null && isInsideRoot(path, workspaceRoot)) {
     const rootSegments = workspaceRoot.split('/').filter(Boolean)
-    // A segment-less root ('/' or '') would make every() vacuously true and
-    // leak the file's full ancestry into the header — fall through instead.
-    const inWorkspace =
-      rootSegments.length > 0 && rootSegments.every((seg, i) => segments[i] === seg)
-    if (inWorkspace) {
-      const dirs = segments.slice(rootSegments.length, -1)
-      return { crumbs: [workspaceName, ...dirs], filename }
-    }
+    const dirs = segments.slice(rootSegments.length, -1)
+    return { crumbs: [workspaceName, ...dirs], filename }
   }
 
   const parent = segments[segments.length - 2]
