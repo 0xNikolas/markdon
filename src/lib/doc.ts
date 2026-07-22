@@ -48,6 +48,13 @@ export function resetReadonlyMemory(): void {
   readonlyMemory.reset()
 }
 
+/** Test support: build a DocState for direct doc.set() in tests, overriding
+ * only the fields a test cares about — the rest come from the same `initial`
+ * production code starts from. */
+export function docWith(overrides: Partial<DocState> = {}): DocState {
+  return { ...initial, ...overrides }
+}
+
 /**
  * Derived, never stored: the buffer differs from what we last synced to disk
  * AND from the editor's normalization baseline (see DocState.normalized) — a
