@@ -27,7 +27,7 @@ import {
   performMove,
 } from './fileops'
 import { type WorkspaceDir, workspace } from './workspace'
-import { doc, openDoc, newDoc, isDirty } from './doc'
+import { doc, openDoc, newDoc, isDirty, resetReadonlyMemory } from './doc'
 import { notice, errorMessage } from './errors'
 import { openList } from './openList'
 
@@ -325,6 +325,29 @@ describe('performDelete', () => {
     invoke.mockRejectedValueOnce('denied').mockResolvedValueOnce({ root: '/ws', tree })
     await performDelete(['/ws/readme.md'])
     expect(get(openList)).toEqual(['/ws/readme.md'])
+  })
+
+  it('prunes readonly memory for a deleted file that is NOT the open doc (DEFECT A3)', async () => {
+    resetReadonlyMemory()
+    // A file was locked read-only, then the user switched to a different doc.
+    openDoc('/ws/locked.md', '# locked', true)
+    openDoc('/ws/keep.md', '# keep') // different doc now open
+    invoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce({ root: '/ws', tree })
+    await performDelete(['/ws/locked.md'])
+    // Re-creating a file at the same path and opening it fresh must not
+    // resurrect the stale readonly mark.
+    openDoc('/ws/locked.md', '# recreated')
+    expect(get(doc).readonly).toBe(false)
+  })
+
+  it('prunes readonly memory for descendants of a deleted folder (DEFECT A3)', async () => {
+    resetReadonlyMemory()
+    openDoc('/ws/docs/note.md', '# note', true)
+    openDoc('/ws/keep.md', '# keep')
+    invoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce({ root: '/ws', tree })
+    await performDelete(['/ws/docs'])
+    openDoc('/ws/docs/note.md', '# recreated')
+    expect(get(doc).readonly).toBe(false)
   })
 })
 

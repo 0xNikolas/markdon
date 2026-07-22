@@ -4,6 +4,7 @@ import { doc, retargetPath, detachToUntitled } from './doc'
 import { reportError, reportNotice } from './errors'
 import { workspace, refreshWorkspace, type WorkspaceDir } from './workspace'
 import { openList, retargetOpen, removeOpenSubtree } from './openList'
+import { readonlyMemory } from './readonlyMemory'
 import { isSelfOrDescendant } from './paths'
 
 export { isSelfOrDescendant }
@@ -321,6 +322,10 @@ export async function performDelete(paths: string[]): Promise<void> {
     detachToUntitled()
     reportNotice('This file was moved to Trash — it is now an unsaved document.')
   }
+  // Prune readonly memory for every trashed path unconditionally — detach only
+  // covers the open doc, so a locked-but-not-open deleted file would otherwise
+  // resurrect its stale readonly mark if re-created at the same path (DEFECT A3).
+  readonlyMemory.forget(paths)
   openList.update((l) => paths.reduce((acc, p) => removeOpenSubtree(acc, p), l))
   // Drop a clipboard that pointed at anything just trashed.
   const cb = get(clipboard)
