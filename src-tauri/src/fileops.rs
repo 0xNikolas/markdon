@@ -96,6 +96,24 @@ fn path_to_string(p: &Path) -> Result<String, String> {
         .ok_or_else(|| "non-UTF-8 path".to_string())
 }
 
+/// Shared tail of every impl that produces a brand-new path: stringify it and
+/// grant it so the follow-up open/read/write passes `ensure` immediately (a
+/// brand-new path can't canonicalize-into-root until it exists, exactly like
+/// the save dialog granting its exact pick).
+fn grant(allowed: &AllowedPaths, target: &Path) -> Result<String, String> {
+    let p = path_to_string(target)?;
+    allowed.allow(&p);
+    Ok(p)
+}
+
+/// Shared no-clobber gate: reject when `target` already exists.
+fn reject_if_exists(target: &Path) -> Result<(), String> {
+    if target.exists() {
+        return Err("a file or folder with that name already exists".into());
+    }
+    Ok(())
+}
+
 // -- impl functions (take &AllowedPaths so they are unit-testable) ------------
 
 pub(crate) fn create_file_impl(
@@ -106,16 +124,9 @@ pub(crate) fn create_file_impl(
     let container = allowed.ensure_container(dir)?;
     valid_leaf_name(name)?;
     let target = container.join(name);
-    if target.exists() {
-        return Err("a file or folder with that name already exists".into());
-    }
+    reject_if_exists(&target)?;
     fs::File::create(&target).map_err(|e| e.to_string())?;
-    let p = path_to_string(&target)?;
-    // Grant so the follow-up open/read/write passes `ensure` immediately (a
-    // brand-new path can't canonicalize-into-root until it exists, exactly like
-    // the save dialog granting its exact pick).
-    allowed.allow(&p);
-    Ok(p)
+    grant(allowed, &target)
 }
 
 pub(crate) fn create_folder_impl(
@@ -126,13 +137,9 @@ pub(crate) fn create_folder_impl(
     let container = allowed.ensure_container(dir)?;
     valid_leaf_name(name)?;
     let target = container.join(name);
-    if target.exists() {
-        return Err("a file or folder with that name already exists".into());
-    }
+    reject_if_exists(&target)?;
     fs::create_dir(&target).map_err(|e| e.to_string())?;
-    let p = path_to_string(&target)?;
-    allowed.allow(&p);
-    Ok(p)
+    grant(allowed, &target)
 }
 
 pub(crate) fn rename_entry_impl(
@@ -144,13 +151,9 @@ pub(crate) fn rename_entry_impl(
     valid_leaf_name(new_name)?;
     let src = Path::new(path);
     let dest = src.parent().ok_or("no parent")?.join(new_name);
-    if dest.exists() {
-        return Err("a file or folder with that name already exists".into());
-    }
+    reject_if_exists(&dest)?;
     fs::rename(src, &dest).map_err(|e| e.to_string())?;
-    let p = path_to_string(&dest)?;
-    allowed.allow(&p);
-    Ok(p)
+    grant(allowed, &dest)
 }
 
 pub(crate) fn move_entry_impl(
@@ -168,13 +171,9 @@ pub(crate) fn move_entry_impl(
         return Err("cannot move a folder into itself".into());
     }
     let dest = dest_dir.join(base);
-    if dest.exists() {
-        return Err("a file or folder with that name already exists".into());
-    }
+    reject_if_exists(&dest)?;
     fs::rename(src_path, &dest).map_err(|e| e.to_string())?;
-    let p = path_to_string(&dest)?;
-    allowed.allow(&p);
-    Ok(p)
+    grant(allowed, &dest)
 }
 
 pub(crate) fn copy_entry_impl(
@@ -199,13 +198,9 @@ pub(crate) fn copy_entry_impl(
         return Err("cannot copy a folder into itself".into());
     }
     let dest = dest_dir.join(base);
-    if dest.exists() {
-        return Err("a file or folder with that name already exists".into());
-    }
+    reject_if_exists(&dest)?;
     copy_tree(src_path, &dest)?;
-    let p = path_to_string(&dest)?;
-    allowed.allow(&p);
-    Ok(p)
+    grant(allowed, &dest)
 }
 
 pub(crate) fn duplicate_entry_impl(allowed: &AllowedPaths, path: &str) -> Result<String, String> {
@@ -224,9 +219,7 @@ pub(crate) fn duplicate_entry_impl(allowed: &AllowedPaths, path: &str) -> Result
         .ok_or("non-UTF-8 name")?;
     let dest = parent.join(unique_dup_name(parent, name, file_type.is_dir()));
     copy_tree(src, &dest)?;
-    let p = path_to_string(&dest)?;
-    allowed.allow(&p);
-    Ok(p)
+    grant(allowed, &dest)
 }
 
 /// Validate EVERY path before trashing ANY, so one unauthorized path aborts the
