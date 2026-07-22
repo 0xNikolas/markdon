@@ -216,6 +216,13 @@
   // empty-state panel (nothing open anywhere).
   let docOpen = $derived(activePath !== null)
 
+  // Whether the workspace tree has any rows at all -- shared by both
+  // FileOpsMenu instances (header dropdown + row context menu) to decide
+  // whether Select All has anything to select.
+  let hasRows = $derived(
+    ($workspace.tree?.dirs.length ?? 0) + ($workspace.tree?.files.length ?? 0) > 0,
+  )
+
   function basename(path: string): string {
     return path.split('/').filter(Boolean).pop() ?? path
   }
@@ -318,7 +325,7 @@
         </button>
         {#if menuOpen}
           <FileOpsMenu
-            hasRows={($workspace.tree?.dirs.length ?? 0) + ($workspace.tree?.files.length ?? 0) > 0}
+            {hasRows}
             onAction={handleAction}
             onClose={() => (menuOpen = false)}
           />
@@ -328,7 +335,7 @@
   </div>
   {#if ctxMenu}
     <FileOpsMenu
-      hasRows={($workspace.tree?.dirs.length ?? 0) + ($workspace.tree?.files.length ?? 0) > 0}
+      {hasRows}
       at={ctxMenu}
       onAction={handleAction}
       onClose={() => (ctxMenu = null)}
