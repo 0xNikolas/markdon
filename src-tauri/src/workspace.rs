@@ -176,7 +176,7 @@ pub fn restore_workspace(
     };
     match allowed.allow_root(Path::new(&root)) {
         Ok(canon) => {
-            crate::allow_asset_dir(&app, &canon);
+            crate::allow_asset_dir(&app, &canon, true);
             Ok(Some(build_workspace(&canon)?))
         }
         Err(_) => {
@@ -252,7 +252,7 @@ pub fn take_startup_workspace(
     let workspace = match startup.take() {
         Some(dir) => match allowed.allow_root(&dir) {
             Ok(canon) => {
-                crate::allow_asset_dir(&app, &canon);
+                crate::allow_asset_dir(&app, &canon, true);
                 Some(build_workspace(&canon)?)
             }
             Err(_) => None,

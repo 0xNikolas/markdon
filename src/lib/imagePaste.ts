@@ -8,9 +8,12 @@
 // KNOWN LIMITATION (deliberate, not fixed here): images pasted into an
 // untitled doc have no directory to land in, so they stay blob:-backed for the
 // session and die on reload. Relatively-linked images render for any doc
-// inside a granted directory — the backend issues a recursive asset-protocol
-// grant (display-only, runtime-only) for every opened workspace root and every
-// opened/saved file's parent dir, plus a per-file grant for each pasted image.
+// inside a granted directory — the backend issues an asset-protocol grant
+// (display-only, runtime-only) recursively for every opened workspace root but
+// NON-recursively for a single opened/saved file's parent dir (so opening
+// ~/note.md never exposes the whole home tree to the display channel), plus a
+// per-file grant for each pasted image and for each subdirectory image ref
+// resolved through resolve_image_asset.
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import { get } from 'svelte/store'
 import { doc } from './doc'
@@ -68,22 +71,38 @@ export async function uploadPastedImage(file: File): Promise<string> {
  * Crepe ImageBlock `proxyDomURL`: map a markdown image src to what the <img>
  * tag should actually load. A scheme'd URL (http://, data:, blob:, asset:,
  * ...) passes through verbatim; an absolute path goes through convertFileSrc
- * (verbatim it would be origin-relative in the webview and never render);
- * a relative src resolves against the document's parent directory, normalized
- * by joinRelative, then through convertFileSrc so the webview loads it via
- * the asset protocol. Pure over its inputs.
+ * (verbatim it would be origin-relative in the webview and never render).
  *
- * A resolved path whose file is missing (or a `../` escaping every granted
- * root) fails the asset scope/read silently: the <img> errors and Crepe shows
- * its broken-image state — no banner, no retry; the image appears only once
- * the node re-renders after the file exists. Fail closed, by design.
+ * Relative srcs split on where they resolve to (proxyDomURL accepts both a
+ * string and a Promise<string>, so the split can stay per-src):
+ * - SAME directory as the doc (after joinRelative normalization): synchronous
+ *   convertFileSrc — the doc's parent dir always carries at least a
+ *   non-recursive asset grant, so this renders for every open route.
+ * - a subdirectory (or `../`): async via the resolve_image_asset command,
+ *   which canonicalizes, verifies the target stays inside the doc's
+ *   directory, grants display access to THAT FILE only, and returns the
+ *   absolute path for convertFileSrc. This is what lets a single-file open
+ *   get by WITHOUT a recursive grant over its parent tree. On rejection
+ *   (`../` escape, missing file) fall back to the plain convertFileSrc URL:
+ *   inside a workspace the recursive root grant still renders it; anywhere
+ *   else the asset protocol fails closed exactly as before.
+ *
+ * A resolved path whose file is missing (or ungranted) fails the asset
+ * scope/read silently: the <img> errors and Crepe shows its broken-image
+ * state — no banner, no retry; the image appears only once the node
+ * re-renders after the file exists. Fail closed, by design.
  */
-export function resolveImageSrc(src: string, docPath: string | null): string {
+export function resolveImageSrc(src: string, docPath: string | null): string | Promise<string> {
   if (src === '' || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(src)) return src
   if (src.startsWith('/')) return convertFileSrc(src)
   // No doc path (untitled) -> nothing to resolve against; return unchanged
   // (the link is broken either way, but never fabricate a path).
   if (docPath === null) return src
   const dir = docPath.slice(0, docPath.lastIndexOf('/'))
-  return convertFileSrc(joinRelative(dir, src))
+  const joined = joinRelative(dir, src)
+  if (joined.slice(0, joined.lastIndexOf('/')) === dir) return convertFileSrc(joined)
+  return invoke<string>('resolve_image_asset', { docPath, rel: src }).then(
+    (resolved) => convertFileSrc(resolved),
+    () => convertFileSrc(joined),
+  )
 }

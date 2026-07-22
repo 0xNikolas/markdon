@@ -109,29 +109,57 @@ describe('resolveImageSrc', () => {
     expect(convertFileSrc).toHaveBeenCalledWith('/abs/path/x.png')
   })
 
-  it('resolves a bare relative name against the doc parent dir via convertFileSrc', () => {
+  it('resolves a bare relative name synchronously via convertFileSrc (no backend round-trip)', () => {
+    // Same-dir refs are covered by the doc parent's non-recursive asset grant,
+    // so they must stay a plain synchronous string — never a Promise.
     expect(resolveImageSrc('note-pasted-1.png', '/ws/notes/note.md')).toBe(
       'asset://localhost//ws/notes/note-pasted-1.png',
     )
     expect(convertFileSrc).toHaveBeenCalledWith('/ws/notes/note-pasted-1.png')
+    expect(invoke).not.toHaveBeenCalled()
   })
 
-  it('resolves a relative subdirectory link too', () => {
-    expect(resolveImageSrc('img/x.png', '/ws/note.md')).toBe('asset://localhost//ws/img/x.png')
-  })
-
-  it('normalizes ./ prefixes instead of emitting dir/./x.png', () => {
+  it('normalizes ./ prefixes and keeps a same-dir ref on the synchronous path', () => {
     expect(resolveImageSrc('./diagram.png', '/ws/notes/note.md')).toBe(
       'asset://localhost//ws/notes/diagram.png',
     )
     expect(convertFileSrc).toHaveBeenCalledWith('/ws/notes/diagram.png')
+    expect(invoke).not.toHaveBeenCalled()
   })
 
-  it('resolves ../ links against the doc parent dir deterministically', () => {
-    expect(resolveImageSrc('../img/x.png', '/ws/notes/note.md')).toBe(
+  it('routes a subdirectory link through resolve_image_asset (per-file grant)', async () => {
+    invoke.mockResolvedValue('/ws/img/x.png')
+    await expect(resolveImageSrc('img/x.png', '/ws/note.md')).resolves.toBe(
       'asset://localhost//ws/img/x.png',
     )
+    expect(invoke).toHaveBeenCalledWith('resolve_image_asset', {
+      docPath: '/ws/note.md',
+      rel: 'img/x.png',
+    })
     expect(convertFileSrc).toHaveBeenCalledWith('/ws/img/x.png')
+  })
+
+  it('falls back to the joined convertFileSrc URL when the backend rejects (../ escape)', async () => {
+    // The command rejects out-of-dir refs; inside a workspace the recursive
+    // root grant still renders the fallback URL, elsewhere it fails closed at
+    // the asset protocol — either way the fallback is the joined path.
+    invoke.mockRejectedValue('image path does not resolve inside the document directory')
+    await expect(resolveImageSrc('../img/x.png', '/ws/notes/note.md')).resolves.toBe(
+      'asset://localhost//ws/img/x.png',
+    )
+    expect(invoke).toHaveBeenCalledWith('resolve_image_asset', {
+      docPath: '/ws/notes/note.md',
+      rel: '../img/x.png',
+    })
+    expect(convertFileSrc).toHaveBeenCalledWith('/ws/img/x.png')
+  })
+
+  it('keeps a subdir/updir ref that normalizes back to the doc dir synchronous', () => {
+    // joinRelative collapses img/../x.png to a same-dir ref, so no round-trip.
+    expect(resolveImageSrc('img/../x.png', '/ws/notes/note.md')).toBe(
+      'asset://localhost//ws/notes/x.png',
+    )
+    expect(invoke).not.toHaveBeenCalled()
   })
 
   it('returns a relative name unchanged when the doc is untitled', () => {

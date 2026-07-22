@@ -203,6 +203,24 @@
       for (const p of args.paths) removeSubtree(p)
       return null
     },
+    // Mirrors commands::resolve_image_asset: resolve a doc-relative image ref
+    // against the doc's parent dir (string normalization stands in for
+    // canonicalize) and reject anything escaping that dir with a bare string,
+    // like the Rust command. Returns the resolved absolute path.
+    resolve_image_asset: (args) => {
+      const dir = parentDir(args.docPath)
+      const segs = dir.split('/').filter((s) => s !== '')
+      for (const seg of args.rel.split('/')) {
+        if (seg === '' || seg === '.') continue
+        if (seg === '..') segs.pop()
+        else segs.push(seg)
+      }
+      const resolved = '/' + segs.join('/')
+      if (!resolved.startsWith(dir + '/') || resolved === dir) {
+        throw "image path does not resolve inside the document's directory"
+      }
+      return resolved
+    },
     // Mirrors fileops::save_pasted_image's contract: writes
     // `<doc stem>-pasted-<n>.<ext>` next to the doc and returns the BARE
     // relative name (always -1 here; the stub never persists anything).

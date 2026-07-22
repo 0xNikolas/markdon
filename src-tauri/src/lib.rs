@@ -60,14 +60,20 @@ impl OpenedFiles {
     }
 }
 
-/// Best-effort recursive asset-protocol grant for `dir`, so convertFileSrc
-/// URLs beneath it render in the webview. Display-channel only: `asset:`
-/// appears solely in the CSP's img-src, while read/write IPC still enforces
-/// exact grants via `AllowedPaths::ensure` — the allowlist trust boundary is
-/// unchanged. Mirrors save_pasted_image's posture: a failed grant merely
-/// degrades image display, so it must never fail the operation that granted.
-pub(crate) fn allow_asset_dir(app: &tauri::AppHandle, dir: &std::path::Path) {
-    if let Err(e) = app.asset_protocol_scope().allow_directory(dir, true) {
+/// Best-effort asset-protocol grant for `dir`, so convertFileSrc URLs in it
+/// render in the webview. `recursive: true` is reserved for explicitly picked
+/// workspace roots; a single-file open/save grants its parent NON-recursively
+/// (same-directory image refs only) — a recursive grant on e.g. `~` would give
+/// the display channel the whole home tree for the process lifetime, since
+/// FsScope grants are irrevocable. Subdirectory/updir image refs are instead
+/// resolved per-file via `commands::resolve_image_asset`. Display-channel
+/// only: `asset:` appears solely in the CSP's img-src, while read/write IPC
+/// still enforces exact grants via `AllowedPaths::ensure` — the allowlist
+/// trust boundary is unchanged. Mirrors save_pasted_image's posture: a failed
+/// grant merely degrades image display, so it must never fail the operation
+/// that granted.
+pub(crate) fn allow_asset_dir(app: &tauri::AppHandle, dir: &std::path::Path, recursive: bool) {
+    if let Err(e) = app.asset_protocol_scope().allow_directory(dir, recursive) {
         log::warn!("could not add {dir:?} to asset scope: {e}");
     }
 }
@@ -86,17 +92,18 @@ pub struct ReadonlyMenuItem(pub tauri::menu::CheckMenuItem<tauri::Wry>);
 /// event fires (already-running app). Draining guarantees each entry is
 /// delivered exactly once regardless of ordering.
 ///
-/// Each drained entry's parent directory also gets a recursive asset-scope
-/// grant so the doc's relative image references render. Drain time is the
-/// earliest uniform point with an AppHandle for BOTH delivery routes (macOS
-/// `Opened` events and argv files granted in `run()` pre-Builder), and
-/// rendering always happens after the drain.
+/// Each drained entry's parent directory also gets a NON-recursive asset-scope
+/// grant so the doc's same-directory image references render (deeper relative
+/// refs go through resolve_image_asset). Drain time is the earliest uniform
+/// point with an AppHandle for BOTH delivery routes (macOS `Opened` events and
+/// argv files granted in `run()` pre-Builder), and rendering always happens
+/// after the drain.
 #[tauri::command]
 fn take_opened_files(app: tauri::AppHandle, state: State<'_, OpenedFiles>) -> Vec<OpenedEntry> {
     let entries = state.take_all();
     for e in &entries {
         if let Some(dir) = std::path::Path::new(&e.path).parent() {
-            allow_asset_dir(&app, dir);
+            allow_asset_dir(&app, dir, false);
         }
     }
     entries
@@ -300,6 +307,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::read_file,
             commands::write_file,
+            commands::resolve_image_asset,
             take_opened_files,
             windows::take_window_file,
             set_readonly_menu_state,

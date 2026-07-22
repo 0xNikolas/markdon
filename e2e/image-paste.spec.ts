@@ -48,6 +48,27 @@ test('pasting into a saved doc writes next to it and renders via the asset proto
   expect(saves[0].args.ext).toBe('png')
 })
 
+test('a subdirectory image ref resolves through resolve_image_asset (async proxyDomURL)', async ({
+  page,
+}) => {
+  await seedWorkspace(page)
+  // Extends the fixture FS (runs after seedWorkspace's init script): a doc
+  // whose image lives in a subdirectory, which resolveImageSrc must route
+  // through the backend command instead of a plain joined asset URL.
+  await page.addInitScript(() => {
+    ;(window.__TAURI_FS__ ||= {})['/ws/pics.md'] = '# Pics\n\n![shot](img/shot.png)\n'
+  })
+  await gotoApp(page)
+  await treeRow(page, 'pics.md').click()
+
+  await expect(image(page)).toHaveAttribute('src', 'asset://localhost//ws/img/shot.png', {
+    timeout: 10_000,
+  })
+  const resolves = await calls(page, 'resolve_image_asset')
+  expect(resolves.length).toBeGreaterThanOrEqual(1)
+  expect(resolves[0].args).toEqual({ docPath: '/ws/pics.md', rel: 'img/shot.png' })
+})
+
 test('pasting into an untitled doc stays a session blob: URL, no backend write', async ({
   page,
 }) => {
