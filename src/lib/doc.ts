@@ -33,6 +33,33 @@ const initial: DocState = {
 
 export const doc: Writable<DocState> = writable(initial)
 
+// Enabled under vitest (process.env.NODE_ENV === 'test') and any non-production
+// Vite build (import.meta.env.DEV) — both are statically replaced at build
+// time, so this stays dead code (and the check below tree-shaken away) in a
+// production Tauri build, and runs under `vitest run`'s node environment
+// where import.meta.env.DEV is also true, but process.env.NODE_ENV is the
+// more direct signal there.
+const ASSERT_INVARIANTS = Boolean(import.meta.env?.DEV) || process.env.NODE_ENV === 'test'
+
+/**
+ * Every mutation of `doc` routes through here (never doc.update directly) so
+ * the readonly=>clean invariant is checked in one place after every
+ * transition, not re-derived per call site. See enterReadonly's docstring for
+ * why the invariant matters; this is the enforcement backstop for it.
+ */
+function updateDoc(fn: (s: DocState) => DocState): void {
+  doc.update((s) => {
+    const next = fn(s)
+    if (ASSERT_INVARIANTS && next.readonly && isDirty(next)) {
+      throw new Error(
+        `doc invariant violated: readonly=true with a dirty buffer (path=${String(next.path)}). ` +
+          'Every transition that sets readonly must also guarantee a clean buffer.',
+      )
+    }
+    return next
+  })
+}
+
 /**
  * Per-path readonly memory lives in ./readonlyMemory (an explicit interface
  * shared with fileops.ts). Readonly is a property of the DOCUMENT, not of the
@@ -69,7 +96,7 @@ export function isDirty(
 export function openDoc(path: string, content: string, readonly = false): void {
   if (readonly) readonlyMemory.lock(path)
   const effective = readonly || readonlyMemory.has(path)
-  doc.update((s) => ({
+  updateDoc((s) => ({
     path,
     content,
     savedContent: content,
@@ -80,7 +107,7 @@ export function openDoc(path: string, content: string, readonly = false): void {
 }
 
 export function newDoc(): void {
-  doc.update((s) => ({
+  updateDoc((s) => ({
     path: null,
     content: '',
     savedContent: '',
@@ -92,7 +119,7 @@ export function newDoc(): void {
 
 export function edit(content: string): void {
   // A readonly buffer must stay clean even if the editor leaks an update event.
-  doc.update((s) => (s.readonly ? s : { ...s, content }))
+  updateDoc((s) => (s.readonly ? s : { ...s, content }))
 }
 
 /**
@@ -104,7 +131,7 @@ export function edit(content: string): void {
  * re-checks so a racing edit can't be silently blessed as "normalization").
  */
 export function adoptNormalization(content: string): void {
-  doc.update((s) =>
+  updateDoc((s) =>
     s.readonly || s.content !== s.savedContent ? s : { ...s, content, normalized: content },
   )
 }
@@ -118,11 +145,11 @@ export function markSaved(path: string, savedContent: string): void {
   readonlyMemory.unlock(path)
   // The baseline is void once a write lands: keeping it would let an undo back
   // to the pre-save serialization read as clean while differing from disk.
-  doc.update((s) => ({ ...s, path, savedContent, normalized: null, readonly: false }))
+  updateDoc((s) => ({ ...s, path, savedContent, normalized: null, readonly: false }))
 }
 
 export function enableEditing(): void {
-  doc.update((s) => {
+  updateDoc((s) => {
     if (s.path !== null) readonlyMemory.unlock(s.path)
     return { ...s, readonly: false }
   })
@@ -138,7 +165,7 @@ export function enableEditing(): void {
  * defensive and no-ops if handed a dirty buffer anyway.
  */
 export function enterReadonly(): void {
-  doc.update((s) => {
+  updateDoc((s) => {
     if (isDirty(s)) return s
     if (s.path !== null) readonlyMemory.lock(s.path)
     return { ...s, readonly: true }
@@ -154,7 +181,7 @@ export function enterReadonly(): void {
  * NEVER writes disk directly.
  */
 export function revertBuffer(content: string): void {
-  doc.update((s) => {
+  updateDoc((s) => {
     if (s.path !== null) readonlyMemory.unlock(s.path) // a revert makes the doc editable
     // Drop the baseline: a revert is a deliberate unsaved change and must read
     // dirty even if it happens to land on the old normalization.
@@ -173,7 +200,7 @@ export function revertBuffer(content: string): void {
  */
 export function retargetPath(oldPrefix: string, newPrefix: string): void {
   readonlyMemory.retarget(oldPrefix, newPrefix) // move the mark alongside the file
-  doc.update((s) => {
+  updateDoc((s) => {
     if (s.path === null) return s
     const rewritten = rewritePrefix(s.path, oldPrefix, newPrefix)
     return rewritten === s.path ? s : { ...s, path: rewritten }
@@ -183,24 +210,28 @@ export function retargetPath(oldPrefix: string, newPrefix: string): void {
 /**
  * Detach the open document to an unsaved Untitled doc — but ONLY if its file
  * (or an ancestor folder) is among `deletedPaths`. The self-or-descendant
- * decision runs INSIDE doc.update against the LIVE doc state, so a doc switch
+ * decision runs INSIDE updateDoc against the LIVE doc state, so a doc switch
  * that raced the delete's await cannot detach the wrong document (DEFECT A2):
  * the caller must not branch on a pre-await snapshot of the open path.
  *
  * When it does detach: keep the buffer on screen but drop `path` (content
  * preserved, nothing lost). `savedContent` is cleared so any non-empty buffer
  * reads as dirty; `loadId` is untouched so the editor keeps the live buffer
- * rather than remounting empty. Returns whether it detached, so the caller only
- * surfaces the "moved to Trash" notice when the open doc was actually affected.
+ * rather than remounting empty. `readonly` is cleared too — readonly locks a
+ * FILE, and a detached doc no longer has one; leaving it set would strand a
+ * (now provably dirty, since savedContent just went to '') buffer behind the
+ * flag, breaking the readonly=>clean invariant updateDoc asserts. Returns
+ * whether it detached, so the caller only surfaces the "moved to Trash"
+ * notice when the open doc was actually affected.
  */
 export function detachIfAffected(deletedPaths: string[]): boolean {
   let detached = false
-  doc.update((s) => {
+  updateDoc((s) => {
     if (s.path === null) return s
     if (!deletedPaths.some((p) => isSelfOrDescendant(s.path as string, p))) return s
     readonlyMemory.unlock(s.path) // the path no longer exists on disk
     detached = true
-    return { ...s, path: null, savedContent: '' }
+    return { ...s, path: null, savedContent: '', readonly: false }
   })
   return detached
 }

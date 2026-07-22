@@ -126,6 +126,14 @@ describe('doc store', () => {
     expect(isDirty(s)).toBe(true)
   })
 
+  it('never lands readonly+dirty via enterReadonly on a dirty buffer (the invariant updateDoc asserts)', () => {
+    openDoc('/tmp/a.md', '# A')
+    edit('# A edited') // dirty
+    expect(() => enterReadonly()).not.toThrow()
+    const s = get(doc)
+    expect(s.readonly && isDirty(s)).toBe(false)
+  })
+
   it('enterReadonly then enableEditing round-trips, preserving content and savedContent', () => {
     openDoc('/tmp/a.md', '# A')
     enterReadonly()
@@ -221,6 +229,18 @@ describe('detachIfAffected', () => {
     openDoc('/ws/docs/note.md', '# note')
     expect(detachIfAffected(['/ws/docs'])).toBe(true)
     expect(get(doc).path).toBeNull()
+  })
+
+  it('clears readonly on detach, preserving the readonly=>clean invariant', () => {
+    // A readonly-opened file that gets deleted: savedContent is cleared (so a
+    // non-empty buffer reads dirty) but readonly locks a FILE, and this doc no
+    // longer has one — leaving readonly=true would strand the buffer dirty
+    // behind the flag.
+    openDoc('/ws/gone.md', '# content', true)
+    detachIfAffected(['/ws/gone.md'])
+    const s = get(doc)
+    expect(s.readonly).toBe(false)
+    expect(isDirty(s)).toBe(true)
   })
 
   it('does not detach — nor touch — an unaffected open doc', () => {
