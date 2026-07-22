@@ -35,7 +35,8 @@
     "@codemirror/view": "6.43.6",
     "@lezer/highlight": "1.2.3",
     "@milkdown/crepe": "^7",
+    "@milkdown/kit": "^7",
     "@tauri-apps/api": "^2",
-    "@milkdown/kit": "^7"
+    "@tauri-apps/plugin-log": "^2"
   }
 }

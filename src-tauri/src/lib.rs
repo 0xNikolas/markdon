@@ -13,6 +13,7 @@ mod workspace;
 use std::sync::Mutex;
 
 use tauri::{Emitter, EventTarget, Manager, State};
+use tauri_plugin_log::{RotationStrategy, Target, TargetKind};
 
 use windows::{menu_target, wire_window, FocusedWindow, PendingWindowFile};
 
@@ -223,13 +224,23 @@ pub fn run() {
 
     builder
         .setup(|app| {
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-            }
+            // Release error sink: everything log:: (Rust) and the webview's
+            // forwarded console/errors (src/lib/logging.ts) land in
+            // <app-log-dir>/markdon.log, capped at ~1 MB with one rotation.
+            // Deliberately NO TargetKind::Webview (and no attachConsole in
+            // JS): the frontend forwards console.warn/error INTO this plugin,
+            // so echoing plugin output back to the webview console would loop.
+            app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .level(log::LevelFilter::Info)
+                    .targets([
+                        Target::new(TargetKind::Stdout),
+                        Target::new(TargetKind::LogDir { file_name: None }),
+                    ])
+                    .max_file_size(1_000_000)
+                    .rotation_strategy(RotationStrategy::KeepOne)
+                    .build(),
+            )?;
 
             let (menu, readonly_item) = menu::build(app)?;
             app.set_menu(menu)?;

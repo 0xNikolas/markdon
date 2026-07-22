@@ -3,6 +3,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { get, writable, type Writable } from 'svelte/store'
 import { doc } from './doc'
 import { reportError } from './errors'
+import { logWarn } from './logging'
 import { workspaceName } from './ui'
 
 /** A file leaf in the workspace tree (mirrors Rust `WorkspaceFile`). */
@@ -132,8 +133,9 @@ export async function restoreWorkspace(): Promise<void> {
     const ws = await invoke<Workspace | null>('restore_workspace')
     if (ws === null) return
     adopt(ws)
-  } catch {
+  } catch (e) {
     // No workspace to restore is not an error worth surfacing on launch.
+    logWarn('workspace restore failed', e)
   }
 }
 
@@ -158,7 +160,8 @@ export async function takeStartupWorkspace(): Promise<boolean> {
     )
     if (handoff.workspace !== null) adopt(handoff.workspace)
     return handoff.suppress_restore
-  } catch {
+  } catch (e) {
+    logWarn('startup workspace handoff failed', e)
     return false
   }
 }

@@ -4,6 +4,7 @@ import { doc, openDoc, isDirty } from './doc'
 import { reportError } from './errors'
 import { watchStatus } from './ui'
 import { recordExternal } from './history'
+import { logInfo, logWarn } from './logging'
 import { listenScoped } from './windowing'
 
 /**
@@ -87,7 +88,7 @@ export async function initFileSync(): Promise<() => void> {
           reportError(`Could not watch file for external changes: ${String(e)}`)
         },
       )
-    } else invoke('unwatch').catch(() => {})
+    } else invoke('unwatch').catch((e) => logWarn('unwatch failed', e))
   })
 
   const unlisten = await listenScoped('file:external-change', async () => {
@@ -97,7 +98,9 @@ export async function initFileSync(): Promise<() => void> {
     try {
       disk = await invoke<string>('read_file', { path: before.path })
     } catch {
-      return // file may be mid-write or removed; ignore this event
+      // Expected during atomic writes — the file may be mid-write or removed.
+      logInfo('external-change read skipped (file mid-write or removed)')
+      return
     }
     // Re-read state after the await: the user may have switched files or typed
     // while the read was in flight. Acting on the stale snapshot could apply this
@@ -120,6 +123,6 @@ export async function initFileSync(): Promise<() => void> {
     unsubDoc()
     unlisten()
     watchStatus.set('idle')
-    invoke('unwatch').catch(() => {})
+    invoke('unwatch').catch((e) => logWarn('unwatch failed', e))
   }
 }

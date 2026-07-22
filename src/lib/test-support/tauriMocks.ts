@@ -38,3 +38,21 @@ vi.mock('@tauri-apps/api/window', () => ({
     setTitle: () => Promise.resolve(),
   }),
 }))
+
+/**
+ * Spies for `@tauri-apps/plugin-log` (imported only by src/lib/logging.ts).
+ * Mocking the module here keeps plugin logging OFF the shared `invoke` spy:
+ * without it, every reportError under test would emit an extra
+ * `invoke('plugin:log|log', ...)` and break tests that assert invoke call
+ * counts. Exported so logging.test.ts can assert routing.
+ */
+export const logPluginMocks = {
+  trace: vi.fn(async (_msg: string) => {}),
+  debug: vi.fn(async (_msg: string) => {}),
+  info: vi.fn(async (_msg: string) => {}),
+  warn: vi.fn(async (_msg: string) => {}),
+  error: vi.fn(async (_msg: string) => {}),
+  attachConsole: vi.fn(async () => () => {}),
+}
+
+vi.mock('@tauri-apps/plugin-log', () => logPluginMocks)

@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { writable, type Writable } from 'svelte/store'
+import { logWarn } from './logging'
 
 /**
  * File History: the app-managed local version store lives in Rust
@@ -55,7 +56,7 @@ async function record(path: string, trigger: HistoryEntry['trigger']): Promise<v
   try {
     await invoke('record_history', { path, trigger })
   } catch (e) {
-    console.warn(`history: could not record ${trigger} snapshot`, e)
+    logWarn(`history: could not record ${trigger} snapshot`, e)
   }
 }
 

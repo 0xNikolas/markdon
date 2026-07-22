@@ -1,9 +1,11 @@
 import { writable, type Writable } from 'svelte/store'
+import { logError, logInfo } from './logging'
 
 export const errorMessage: Writable<string | null> = writable(null)
 
 export function reportError(msg: string): void {
   errorMessage.set(msg)
+  logError(msg) // every user-visible error also leaves a trace in markdon.log
 }
 
 export function clearError(): void {
@@ -20,6 +22,7 @@ export const notice: Writable<string | null> = writable(null)
 
 export function reportNotice(msg: string): void {
   notice.set(msg)
+  logInfo(msg)
 }
 
 export function clearNotice(): void {

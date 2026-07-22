@@ -34,6 +34,7 @@
   } from './lib/openList'
   import { conflict, reloadFromDisk, dismissConflict, initFileSync } from './lib/fileSync'
   import { reportError } from './lib/errors'
+  import { logWarn } from './lib/logging'
   import { allowsNativeContextMenu } from './lib/contextMenu'
   import Editor from './Editor.svelte'
   import SplitView from './SplitView.svelte'
@@ -116,7 +117,9 @@
   // won't fire, so we re-assert the real value). Menu-sync failure is
   // non-fatal — the check mark is cosmetic — so errors are swallowed.
   function syncReadonlyMenu(checked: boolean): void {
-    void invoke('set_readonly_menu_state', { checked }).catch(() => {})
+    void invoke('set_readonly_menu_state', { checked }).catch((e) =>
+      logWarn('readonly menu sync failed', e),
+    )
   }
 
   // File-menu "Read Only" toggle handler. Three cases off the store:
