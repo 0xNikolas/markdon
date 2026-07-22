@@ -121,6 +121,34 @@ pub async fn open_workspace_dialog(
     Ok(Some(crate::workspace::open_result(&app, &canon)?))
 }
 
+/// Show the folder picker and, on a pick, hand the folder to a brand-NEW app
+/// process (`current_exe --workspace <dir>`) instead of adopting it here. Used
+/// when this instance already has a workspace open — VS Code semantics: a
+/// second folder gets its own instance. Deliberately no grant / no persist /
+/// no walk in THIS process: the child's argv parsing + `take_startup_workspace`
+/// do all of that in its own allowlist, and skipping persistence keeps the two
+/// instances from clobbering each other's restore pointer. Returns whether a
+/// folder was actually picked (false = cancelled), so the frontend can skip
+/// any "opened" UI on cancel. The spawned Child handle is dropped immediately:
+/// dropping it detaches — it never kills or waits on the new instance.
+#[tauri::command]
+pub async fn pick_folder_new_instance(app: AppHandle) -> Result<bool, String> {
+    let picked =
+        tauri::async_runtime::spawn_blocking(move || app.dialog().file().blocking_pick_folder())
+            .await
+            .map_err(|e| e.to_string())?;
+    let Some(folder) = picked else {
+        return Ok(false);
+    };
+    let path = to_path_string(folder)?;
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    std::process::Command::new(exe)
+        .args(["--workspace", &path])
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

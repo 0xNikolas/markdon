@@ -58,6 +58,19 @@ pub fn build(app: &App) -> tauri::Result<(Menu<Wry>, CheckMenuItem<Wry>)> {
     let settings = MenuItemBuilder::with_id("menu:settings", "Settings…")
         .accelerator("CmdOrCtrl+,")
         .build(app)?;
+    // Close trio, VS Code order/keys: Cmd+W closes the active tab (or, with no
+    // file open, the window), Cmd+Shift+W closes the window. Neither collides
+    // with a PredefinedMenuItem default because this menu never builds muda's
+    // predefined close_window/hide items (whose macOS defaults would claim
+    // Cmd+W / Cmd+H). Close Folder is deliberately accelerator-less like the
+    // readonly toggle: a rare mode change, not a hot-path keystroke.
+    let close_tab = MenuItemBuilder::with_id("menu:close_tab", "Close Tab")
+        .accelerator("CmdOrCtrl+W")
+        .build(app)?;
+    let close_window = MenuItemBuilder::with_id("menu:close_window", "Close Window")
+        .accelerator("CmdOrCtrl+Shift+W")
+        .build(app)?;
+    let close_folder = MenuItemBuilder::with_id("menu:close_folder", "Close Folder").build(app)?;
 
     let app_menu = SubmenuBuilder::new(app, "Markdon")
         .item(&settings)
@@ -77,6 +90,10 @@ pub fn build(app: &App) -> tauri::Result<(Menu<Wry>, CheckMenuItem<Wry>)> {
         .item(&history)
         .separator()
         .item(&export)
+        .separator()
+        .item(&close_tab)
+        .item(&close_window)
+        .item(&close_folder)
         .build()?;
 
     // Native edit items so system shortcuts (copy/paste/undo/redo) work.
@@ -129,6 +146,8 @@ mod tests {
             "CmdOrCtrl+Alt+F",
             "CmdOrCtrl+L",
             "CmdOrCtrl+,",
+            "CmdOrCtrl+W",
+            "CmdOrCtrl+Shift+W",
         ] {
             let accel = muda::accelerator::Accelerator::from_str(s);
             assert!(accel.is_ok(), "{s} failed to parse: {accel:?}");
@@ -160,6 +179,8 @@ mod tests {
             "CmdOrCtrl+Alt+F",
             "CmdOrCtrl+L",
             "CmdOrCtrl+,",
+            "CmdOrCtrl+W",
+            "CmdOrCtrl+Shift+W",
         ];
         for (i, a) in custom.iter().enumerate() {
             for (j, b) in custom.iter().enumerate() {
@@ -203,6 +224,8 @@ mod tests {
             ("menu:goto_line", "CmdOrCtrl+L"),
             ("menu:find_replace", "CmdOrCtrl+Alt+F"),
             ("menu:settings", "CmdOrCtrl+,"),
+            ("menu:close_tab", "CmdOrCtrl+W"),
+            ("menu:close_window", "CmdOrCtrl+Shift+W"),
         ];
         for (id, accel) in custom {
             for predefined in predefined_non_macos {

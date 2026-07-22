@@ -10,6 +10,7 @@ vi.mock('@tauri-apps/api/window', () => ({
 }))
 
 import {
+  leafNameError,
   visibleRowPaths,
   folderPaths,
   folderRows,
@@ -29,7 +30,7 @@ import {
 import { type WorkspaceDir, workspace } from './workspace'
 import { doc, openDoc, newDoc, isDirty, resetReadonlyMemory } from './doc'
 import { notice, errorMessage } from './errors'
-import { openList } from './openList'
+import { openList, previewPath } from './openList'
 
 const dir = (name: string, path: string, dirs: WorkspaceDir[] = [], files = []): WorkspaceDir => ({
   name,
@@ -66,6 +67,28 @@ beforeEach(() => {
   notice.set(null)
   errorMessage.set(null)
   openList.set([])
+  previewPath.set(null)
+})
+
+describe('leafNameError', () => {
+  it.each(['note.md', 'README', '.hidden', '..twodots', 'a b c.markdown'])(
+    'accepts %s',
+    (name) => {
+      expect(leafNameError(name)).toBeNull()
+    },
+  )
+
+  it.each(['', '   ', '\t'])('rejects blank input %j', (name) => {
+    expect(leafNameError(name)).toContain('empty')
+  })
+
+  it.each(['.', '..'])('rejects the path special %s', (name) => {
+    expect(leafNameError(name)).toContain('not a valid name')
+  })
+
+  it.each(['a/b.md', '/abs.md', 'a\\b.md'])('rejects separator-bearing %s', (name) => {
+    expect(leafNameError(name)).toContain('cannot contain')
+  })
 })
 
 describe('visibleRowPaths', () => {
@@ -250,6 +273,30 @@ describe('performRename keeps the Open Files strip in sync', () => {
   })
 })
 
+describe('performRename keeps the preview row in sync', () => {
+  it('retargets a previewed file on a rename', async () => {
+    openDoc('/ws/readme.md', '# hi')
+    previewPath.set('/ws/readme.md')
+    invoke.mockResolvedValueOnce('/ws/guide.md').mockResolvedValueOnce({ root: '/ws', tree })
+    await performRename('/ws/readme.md', 'guide.md')
+    expect(get(previewPath)).toBe('/ws/guide.md')
+  })
+
+  it('follows a renamed ancestor folder of the preview', async () => {
+    previewPath.set('/ws/docs/note.md')
+    invoke.mockResolvedValueOnce('/ws/pages').mockResolvedValueOnce({ root: '/ws', tree })
+    await performRename('/ws/docs', 'pages')
+    expect(get(previewPath)).toBe('/ws/pages/note.md')
+  })
+
+  it('leaves an unrelated preview untouched', async () => {
+    previewPath.set('/ws/docs/note.md')
+    invoke.mockResolvedValueOnce('/ws/guide.md').mockResolvedValueOnce({ root: '/ws', tree })
+    await performRename('/ws/readme.md', 'guide.md')
+    expect(get(previewPath)).toBe('/ws/docs/note.md')
+  })
+})
+
 describe('performMove keeps the Open Files strip in sync', () => {
   it('retargets a moved entry to its destination path', async () => {
     openDoc('/ws/readme.md', '# hi')
@@ -258,6 +305,14 @@ describe('performMove keeps the Open Files strip in sync', () => {
     await performMove(['/ws/readme.md'], '/ws/docs')
     expect(get(openList)).toEqual(['/ws/docs/readme.md'])
     expect(get(doc).path).toBe('/ws/docs/readme.md')
+  })
+
+  it('retargets a moved previewed file too', async () => {
+    openDoc('/ws/readme.md', '# hi')
+    previewPath.set('/ws/readme.md')
+    invoke.mockResolvedValueOnce('/ws/docs/readme.md').mockResolvedValueOnce({ root: '/ws', tree })
+    await performMove(['/ws/readme.md'], '/ws/docs')
+    expect(get(previewPath)).toBe('/ws/docs/readme.md')
   })
 })
 
@@ -271,6 +326,17 @@ describe('cut-paste keeps the Open Files strip in sync', () => {
     focused.set('/ws')
     await paste()
     expect(get(openList)).toEqual(['/ws/note.md'])
+  })
+
+  it('retargets a cut-pasted previewed file', async () => {
+    openDoc('/ws/docs/note.md', '# note')
+    previewPath.set('/ws/docs/note.md')
+    focusRow('/ws/docs/note.md')
+    cutSelection()
+    invoke.mockResolvedValueOnce('/ws/note.md').mockResolvedValueOnce({ root: '/ws', tree })
+    focused.set('/ws')
+    await paste()
+    expect(get(previewPath)).toBe('/ws/note.md')
   })
 })
 
@@ -339,6 +405,34 @@ describe('performDelete', () => {
     invoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce({ root: '/ws', tree })
     await performDelete(['/ws/docs'])
     expect(get(openList)).toEqual(['/ws/readme.md', '/ws/img/logo.svg'])
+  })
+
+  it('clears the preview row when the previewed file is trashed directly', async () => {
+    previewPath.set('/ws/readme.md')
+    invoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce({ root: '/ws', tree })
+    await performDelete(['/ws/readme.md'])
+    expect(get(previewPath)).toBeNull()
+  })
+
+  it('clears the preview row when it falls inside a trashed subtree', async () => {
+    previewPath.set('/ws/docs/note.md')
+    invoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce({ root: '/ws', tree })
+    await performDelete(['/ws/docs'])
+    expect(get(previewPath)).toBeNull()
+  })
+
+  it('leaves an unrelated preview row alone (segment-safe: /ws/docs2 vs /ws/docs)', async () => {
+    previewPath.set('/ws/docs2/note.md')
+    invoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce({ root: '/ws', tree })
+    await performDelete(['/ws/docs'])
+    expect(get(previewPath)).toBe('/ws/docs2/note.md')
+  })
+
+  it('leaves the preview untouched when the backend rejects', async () => {
+    previewPath.set('/ws/readme.md')
+    invoke.mockRejectedValueOnce('denied').mockResolvedValueOnce({ root: '/ws', tree })
+    await performDelete(['/ws/readme.md'])
+    expect(get(previewPath)).toBe('/ws/readme.md')
   })
 
   it('leaves the Open Files strip untouched when the backend rejects', async () => {

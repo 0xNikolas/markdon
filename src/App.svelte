@@ -16,7 +16,14 @@
   } from './lib/doc'
   import { recordRevert } from './lib/history'
   import { open, save, saveAs, openPath, openInPreferredTarget } from './lib/files'
-  import { openList, removeOpen, neighbourAfterClose } from './lib/openList'
+  import {
+    openList,
+    previewPath,
+    pinOpen,
+    pinPreview,
+    removeOpen,
+    neighbourAfterClose,
+  } from './lib/openList'
   import { conflict, reloadFromDisk, dismissConflict, initFileSync } from './lib/fileSync'
   import { reportError } from './lib/errors'
   import { allowsNativeContextMenu } from './lib/contextMenu'
@@ -40,7 +47,7 @@
     isFindReplaceFallbackKey,
   } from './lib/ui'
   import { activeOverlay, openOverlay, closeOverlay, anyOverlayOpen } from './lib/overlay'
-  import { openWorkspace, initWorkspace } from './lib/workspace'
+  import { openWorkspace, closeWorkspace, initWorkspace } from './lib/workspace'
   import { exportDocument } from './lib/export'
   import { focusTrap, dialogDismissHandlers } from './lib/focusTrap'
 
@@ -119,29 +126,63 @@
       return
     }
     edit(md)
+    promotePreviewOnEdit()
+  }
+
+  // VS Code pins a preview tab the moment it's modified: the italic slot only
+  // ever holds an unmodified glance. Runs after both editors' change paths
+  // (the WYSIWYG handler above and the split-view CodeMirror wrapper in the
+  // template); onEditorChange's adoptNormalization early-return never reaches
+  // it, so mount-time re-serialization can't pin anything.
+  function promotePreviewOnEdit() {
+    const s = get(doc)
+    if (get(previewPath) === s.path && isDirty(s)) pinPreview()
   }
 
   // Single entry point for opening a path from the sidebar (Open Files strip
-  // or Workspace tree alike) -- routes through openInPreferredTarget (the
-  // tab/window choke-point) wrapping the existing guarded openPath. A click
-  // on the already-active row is a no-op.
-  function handleOpenFile(path: string) {
-    if (path === get(doc).path) return
+  // or Workspace tree alike). A single click asks for a PREVIEW: always
+  // in-place regardless of openMode (a glance must never spawn a window),
+  // parked in the italic preview slot by openPath. A pinned open routes
+  // through openInPreferredTarget (the tab/window choke-point) unless
+  // `inPlace` forces this window — that is what the explicit "Open in New
+  // Tab" action means even under openMode:'window'. Re-activating the
+  // already-active doc without `preview` pins it: that is exactly the
+  // dblclick arriving after its own first click already previewed the file.
+  function handleOpenFile(path: string, opts: { preview?: boolean; inPlace?: boolean } = {}) {
+    if (path === get(doc).path) {
+      if (!opts.preview) pinOpen(path)
+      return
+    }
+    if (opts.preview) {
+      guarded(() => openPath(path, { preview: true }))
+      return
+    }
+    if (opts.inPlace) {
+      guarded(() => openPath(path))
+      return
+    }
     openInPreferredTarget(path, (p) => guarded(() => openPath(p)))
   }
 
   // Sidebar Open Files close affordance. A non-active entry can never be
   // dirty (switching away from a file always resolves the dirty-guard
-  // first), so closing it is a bare list removal. Closing the active entry
-  // still runs the guard, then switches to the neighbour computed BEFORE
-  // removal (previous, else next, else null -> falls back to newDoc()).
+  // first), so closing it is a bare removal — from the pinned list, or by
+  // vacating the preview slot (the two are mutually exclusive by openPath's
+  // invariant). Closing the active entry (pinned or preview — a preview is a
+  // normal live doc) still runs the guard, then switches to the neighbour
+  // computed BEFORE removal (previous, else next, else null -> falls back to
+  // newDoc()). The preview path is never in openList, so the neighbour logic
+  // runs on the pinned list as-is; clearing state inside the guard keeps
+  // Cancel non-destructive.
   function onCloseFile(path: string) {
     if (path !== get(doc).path) {
-      openList.update((l) => removeOpen(l, path))
+      if (path === get(previewPath)) previewPath.set(null)
+      else openList.update((l) => removeOpen(l, path))
       return
     }
     guarded(() => {
       const next = neighbourAfterClose(get(openList), path, get(doc).path)
+      previewPath.update((pv) => (pv === path ? null : pv))
       openList.update((l) => removeOpen(l, path))
       if (next === null) newDoc()
       else openPath(next)
@@ -159,7 +200,7 @@
     // and MODE B carries it through the window hand-off (AssignedFile.readonly)
     // so the spawned window keeps the same Finder-open safety net.
     if (paths.length > 0)
-      openInPreferredTarget(paths[0], (p) => guarded(() => openPath(p, true)), true)
+      openInPreferredTarget(paths[0], (p) => guarded(() => openPath(p, { readonly: true })), true)
   }
 
   // A spawned document window (doc-N) drains the file it was created to host
@@ -176,7 +217,7 @@
     try {
       const assigned = await invoke<{ path: string; readonly: boolean } | null>('take_window_file')
       if (assigned) {
-        openPath(assigned.path, assigned.readonly)
+        openPath(assigned.path, { readonly: assigned.readonly })
         return true
       }
       return false
@@ -185,6 +226,12 @@
       return false
     }
   }
+
+  // One close-window action shared by the native close button (Rust
+  // intercepts CloseRequested and emits window:close-requested) and the
+  // File-menu Close Window item — both must resolve the dirty guard before
+  // the window is destroyed.
+  const closeThisWindow = () => guarded(() => getCurrentWindow().destroy())
 
   onMount(() => {
     const unsub = Promise.all([
@@ -224,8 +271,19 @@
       }),
       listenScoped('menu:settings', () => openOverlay({ kind: 'settings' })),
       listenScoped('menu:open_folder', () => openWorkspace()),
+      listenScoped('menu:close_folder', () => closeWorkspace()),
+      listenScoped('menu:close_tab', () => {
+        // Cmd+W closes the active entry (pinned or preview) through the same
+        // onCloseFile path as the strip's close button; with no file open
+        // (untitled doc) it falls through to closing the window — VS Code
+        // behavior.
+        const p = get(doc).path
+        if (p !== null) onCloseFile(p)
+        else closeThisWindow()
+      }),
+      listenScoped('menu:close_window', closeThisWindow),
       listenScoped('menu:export', () => exportDocument()),
-      listenScoped('window:close-requested', () => guarded(() => getCurrentWindow().destroy())),
+      listenScoped('window:close-requested', closeThisWindow),
       listenScoped('file:opened', () => drainOpenedFiles()),
     ])
     // A spawned doc-N window (MODE B) is created to host exactly one file,
@@ -439,6 +497,7 @@
     <Sidebar
       activePath={$doc.path}
       openFiles={$openList}
+      previewPath={$previewPath}
       onOpenFile={handleOpenFile}
       onCloseFile={onCloseFile}
       onNewFile={() => guarded(() => newDoc())}
@@ -464,11 +523,17 @@
       {/if}
       {#key $doc.loadId}
         {#if $split}
+          <!-- CodeMirror is byte-accurate (no adoptNormalization dance), but
+               its edits must promote a previewed doc just like the WYSIWYG
+               path's. -->
           <SplitView
             initialContent={$doc.content}
             content={$doc.content}
             readonly={$doc.readonly}
-            onChange={edit}
+            onChange={(md) => {
+              edit(md)
+              promotePreviewOnEdit()
+            }}
           />
         {:else}
           <Editor initialContent={$doc.content} readonly={$doc.readonly} onChange={onEditorChange} />

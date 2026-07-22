@@ -3,7 +3,14 @@ import { get, writable, type Writable } from 'svelte/store'
 import { retargetPath, detachIfAffected } from './doc'
 import { reportError, reportNotice } from './errors'
 import { workspace, refreshWorkspace, type WorkspaceDir } from './workspace'
-import { openList, retargetOpen, removeOpenSubtree } from './openList'
+import {
+  openList,
+  previewPath,
+  retargetOpen,
+  retargetPreview,
+  removeOpenSubtree,
+  clearPreviewInSubtree,
+} from './openList'
 import { readonlyMemory } from './readonlyMemory'
 import { isSelfOrDescendant } from './paths'
 
@@ -54,6 +61,19 @@ workspace.subscribe((s) => {
 })
 
 // -- pure helpers (unit-tested) ----------------------------------------------
+
+/**
+ * Validate a single path segment for New File / New Folder / inline rename —
+ * mirrors the backend's valid_leaf_name gate so the user gets immediate
+ * feedback rather than a round-trip error banner. Returns a user-facing
+ * message, or `null` when the name is acceptable.
+ */
+export function leafNameError(name: string): string | null {
+  if (name.trim() === '') return 'Name cannot be empty'
+  if (name === '.' || name === '..') return `"${name}" is not a valid name`
+  if (name.includes('/') || name.includes('\\')) return 'Name cannot contain "/" or "\\"'
+  return null
+}
 
 /**
  * Paths of every currently-visible row, in display order: a folder's children
@@ -217,6 +237,7 @@ export async function performRename(path: string, newName: string): Promise<void
     const p = await renameEntry(path, newName)
     retargetPath(path, p) // follow the open doc if it (or an ancestor) moved
     openList.update((l) => retargetOpen(l, path, p)) // keep the Open Files strip in sync
+    previewPath.update((pv) => retargetPreview(pv, path, p)) // …and its preview row
     await refreshWorkspace()
     afterMutation([p])
   } catch (e) {
@@ -246,6 +267,7 @@ export async function performMove(paths: string[], destDir: string): Promise<voi
       const p = await moveEntry(src, destDir)
       retargetPath(src, p)
       openList.update((l) => retargetOpen(l, src, p))
+      previewPath.update((pv) => retargetPreview(pv, src, p))
       moved.push(p)
     }
   } catch (e) {
@@ -283,6 +305,7 @@ export async function paste(): Promise<void> {
         const p = await moveEntry(src, dir)
         retargetPath(src, p)
         openList.update((l) => retargetOpen(l, src, p))
+        previewPath.update((pv) => retargetPreview(pv, src, p))
         results.push(p)
         movedCount++
       }
@@ -326,6 +349,8 @@ export async function performDelete(paths: string[]): Promise<void> {
   // resurrect its stale readonly mark if re-created at the same path (DEFECT A3).
   readonlyMemory.forget(paths)
   openList.update((l) => paths.reduce((acc, p) => removeOpenSubtree(acc, p), l))
+  // A previewed file inside any trashed subtree is just as dead as a pinned one.
+  previewPath.update((pv) => paths.reduce((acc, p) => clearPreviewInSubtree(acc, p), pv))
   // Drop a clipboard that pointed at anything just trashed.
   const cb = get(clipboard)
   if (cb !== null && cb.paths.some((cp) => paths.some((p) => isSelfOrDescendant(cp, p)))) {

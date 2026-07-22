@@ -1,4 +1,4 @@
-import { writable, type Writable } from 'svelte/store'
+import { get, writable, type Writable } from 'svelte/store'
 import { isSelfOrDescendant, rewritePrefix } from './paths'
 
 /**
@@ -15,6 +15,16 @@ import { isSelfOrDescendant, rewritePrefix } from './paths'
  * `onCloseFile`).
  */
 export const openList: Writable<string[]> = writable([])
+
+/**
+ * The single-click PREVIEW slot (VS Code semantics): a normal live doc in the
+ * `doc` store — editable, dirty-guarded — whose path is NOT in `openList`. It
+ * renders as one extra italic row after the pinned rows. A new preview simply
+ * replaces the old one (the previous previewed file vanishes from the strip),
+ * and pinning — double-click, explicit open, or editing the buffer — moves the
+ * path into `openList` and clears this slot. `null` means no preview row.
+ */
+export const previewPath: Writable<string | null> = writable(null)
 
 /** Append `path` if absent; keep its first position on a redundant re-open. */
 export function addOpen(list: string[], path: string): string[] {
@@ -63,6 +73,47 @@ export function retargetOpen(list: string[], oldPrefix: string, newPrefix: strin
 export function removeOpenSubtree(list: string[], path: string): string[] {
   const filtered = list.filter((p) => !isSelfOrDescendant(p, path))
   return filtered.length === list.length ? list : filtered
+}
+
+/**
+ * Follow a rename/move into the preview slot — the preview companion of
+ * `retargetOpen`. Rewrites an exact match or a preview nested under a moved
+ * folder (segment-safe, via the same `rewritePrefix`); `null` and unaffected
+ * previews pass through unchanged, so callers can wire it into every
+ * fileops.ts mutation unconditionally.
+ */
+export function retargetPreview(
+  preview: string | null,
+  oldPrefix: string,
+  newPrefix: string,
+): string | null {
+  return preview === null ? null : rewritePrefix(preview, oldPrefix, newPrefix)
+}
+
+/**
+ * Clear the preview slot when `path` (a trashed file or folder) is the preview
+ * itself or an ancestor of it — the preview companion of `removeOpenSubtree`:
+ * a deleted preview can't be reopened and would otherwise leave a dead italic
+ * row. Unrelated previews (and `null`) pass through unchanged.
+ */
+export function clearPreviewInSubtree(preview: string | null, path: string): string | null {
+  return preview !== null && isSelfOrDescendant(preview, path) ? null : preview
+}
+
+/**
+ * Pin `path`: append it to `openList` and, when it was the previewed file,
+ * vacate the preview slot — the single transition from "italic preview row"
+ * to "pinned row". Safe for paths that were never previewed (plain open).
+ */
+export function pinOpen(path: string): void {
+  openList.update((l) => addOpen(l, path))
+  previewPath.update((p) => (p === path ? null : p))
+}
+
+/** Pin the current preview, if any (dblclick on the row, or editing the buffer). */
+export function pinPreview(): void {
+  const p = get(previewPath)
+  if (p !== null) pinOpen(p)
 }
 
 /**

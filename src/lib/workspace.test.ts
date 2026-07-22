@@ -14,8 +14,11 @@ import {
   folderIcon,
   workspace,
   openWorkspace,
+  closeWorkspace,
   refreshWorkspace,
   restoreWorkspace,
+  takeStartupWorkspace,
+  initWorkspace,
   type WorkspaceDir,
 } from './workspace'
 import { workspaceName } from './ui'
@@ -96,6 +99,94 @@ describe('openWorkspace', () => {
     await openWorkspace()
     expect(get(errorMessage)).toContain('workspace')
     expect(get(workspace).root).toBeNull()
+  })
+
+  it('with a folder already open, routes to pick_folder_new_instance and adopts nothing', async () => {
+    workspace.set({ root: '/ws/notes', tree: tree('notes') })
+    workspaceName.set('notes')
+    invoke.mockResolvedValue(true) // user picked a dir; a new process now owns it
+    await openWorkspace()
+    expect(invoke).toHaveBeenCalledWith('pick_folder_new_instance')
+    expect(invoke).not.toHaveBeenCalledWith('open_workspace_dialog')
+    // The current instance keeps its own workspace untouched.
+    expect(get(workspace).root).toBe('/ws/notes')
+    expect(get(workspaceName)).toBe('notes')
+  })
+
+  it('reports an error when spawning the new instance fails', async () => {
+    workspace.set({ root: '/ws/notes', tree: tree('notes') })
+    invoke.mockRejectedValue('spawn failed')
+    await openWorkspace()
+    expect(get(errorMessage)).toContain('workspace')
+    expect(get(workspace).root).toBe('/ws/notes')
+  })
+})
+
+describe('closeWorkspace', () => {
+  it('deletes the restore pointer and resets the store + breadcrumb', async () => {
+    workspace.set({ root: '/ws/notes', tree: tree('notes') })
+    workspaceName.set('notes')
+    invoke.mockResolvedValue(undefined)
+    await closeWorkspace()
+    expect(invoke).toHaveBeenCalledWith('close_workspace')
+    expect(get(workspace)).toEqual({ root: null, tree: null })
+    expect(get(workspaceName)).toBeNull()
+  })
+
+  it('still closes locally (and reports) when deleting the pointer fails', async () => {
+    workspace.set({ root: '/ws/notes', tree: tree('notes') })
+    workspaceName.set('notes')
+    invoke.mockRejectedValue('io error')
+    await closeWorkspace()
+    expect(get(errorMessage)).toContain('close')
+    expect(get(workspace)).toEqual({ root: null, tree: null })
+    expect(get(workspaceName)).toBeNull()
+  })
+})
+
+describe('takeStartupWorkspace', () => {
+  it('adopts a CLI-provided workspace and reports it took one', async () => {
+    invoke.mockResolvedValue({ root: '/ws/cli', tree: tree('cli') })
+    await expect(takeStartupWorkspace()).resolves.toBe(true)
+    expect(invoke).toHaveBeenCalledWith('take_startup_workspace')
+    expect(get(workspace).root).toBe('/ws/cli')
+    expect(get(workspaceName)).toBe('cli')
+  })
+
+  it('reports false when no startup workspace is pending', async () => {
+    invoke.mockResolvedValue(null)
+    await expect(takeStartupWorkspace()).resolves.toBe(false)
+    expect(get(workspace).root).toBeNull()
+  })
+
+  it('swallows errors and reports false (caller falls back to restore)', async () => {
+    invoke.mockRejectedValue('nope')
+    await expect(takeStartupWorkspace()).resolves.toBe(false)
+    expect(get(workspace).root).toBeNull()
+    expect(get(errorMessage)).toBeNull()
+  })
+})
+
+describe('initWorkspace startup ordering', () => {
+  it('a startup workspace wins and SKIPS restore_workspace entirely', async () => {
+    invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === 'take_startup_workspace' ? { root: '/ws/cli', tree: tree('cli') } : null,
+    )
+    const teardown = await initWorkspace()
+    await vi.waitFor(() => expect(get(workspace).root).toBe('/ws/cli'))
+    expect(invoke).not.toHaveBeenCalledWith('restore_workspace')
+    teardown()
+  })
+
+  it('falls back to restore_workspace when no startup workspace is pending', async () => {
+    invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === 'restore_workspace' ? { root: '/ws/prev', tree: tree('prev') } : null,
+    )
+    const teardown = await initWorkspace()
+    await vi.waitFor(() => expect(get(workspace).root).toBe('/ws/prev'))
+    expect(invoke).toHaveBeenCalledWith('take_startup_workspace')
+    expect(invoke).toHaveBeenCalledWith('restore_workspace')
+    teardown()
   })
 })
 

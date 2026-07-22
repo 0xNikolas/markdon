@@ -54,8 +54,13 @@ describe('clampMenuPosition', () => {
 })
 
 describe('isSelectionClearingTarget', () => {
-  // Structural fakes: real Elements satisfy the shape via Element.closest.
-  const insideButton = { closest: (sel: string) => (sel === 'button' ? {} : null) }
+  // Structural fakes: real Elements satisfy the shape via Element.closest. The
+  // production selector is a group ('button, .rename-input'), so the fakes
+  // match on the term they represent appearing anywhere in the selector.
+  const insideButton = { closest: (sel: string) => (sel.includes('button') ? {} : null) }
+  const insideRenameInput = {
+    closest: (sel: string) => (sel.includes('.rename-input') ? {} : null),
+  }
   const outsideButton = { closest: (_sel: string) => null }
 
   it('clears on targets with no button ancestor (empty tree area, panel padding)', () => {
@@ -64,6 +69,10 @@ describe('isSelectionClearingTarget', () => {
 
   it('does NOT clear inside any button (rows, header controls, menu items)', () => {
     expect(isSelectionClearingTarget(insideButton)).toBe(false)
+  })
+
+  it('does NOT clear inside the inline-rename input (a caret click must not wipe the selection)', () => {
+    expect(isSelectionClearingTarget(insideRenameInput)).toBe(false)
   })
 
   it('does NOT clear for non-element targets (fail closed)', () => {

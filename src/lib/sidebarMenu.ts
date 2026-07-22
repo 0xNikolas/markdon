@@ -43,9 +43,13 @@ export interface ClearTarget {
  * only when it landed outside every button. Rows, header controls ("…", New
  * File, Open Folder), and menu items are all <button>s, so anything inside a
  * button either IS the selection or acts on it; bare panel/tree space is not.
- * Non-element targets fail closed (no clearing).
+ * The inline-rename input is the one interactive row element that is NOT a
+ * button (an input inside a button is invalid HTML, so the renaming row swaps
+ * to a div) — match it explicitly, or clicking to place the caret would wipe
+ * the selection under the rename. Non-element targets fail closed (no
+ * clearing).
  */
 export function isSelectionClearingTarget(target: ClearTarget | null | undefined): boolean {
   if (!target || typeof target.closest !== 'function') return false
-  return (target.closest as (sel: string) => unknown)('button') == null
+  return (target.closest as (sel: string) => unknown)('button, .rename-input') == null
 }

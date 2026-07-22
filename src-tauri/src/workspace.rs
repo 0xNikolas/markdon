@@ -183,6 +183,43 @@ pub fn restore_workspace(
     }
 }
 
+/// Forget the persisted last-workspace pointer so the next launch starts
+/// folder-less. Only the pointer is deleted — the in-memory allowlist grant is
+/// deliberately kept, because files from the closed folder may still be open
+/// (VS Code behavior) and must stay readable/savable until the app exits.
+/// A missing pointer file is success, not an error: closing twice is a no-op.
+#[tauri::command]
+pub fn close_workspace(app: AppHandle) -> Result<(), String> {
+    let file = state_file(&app)?;
+    match fs::remove_file(&file) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Adopt the workspace this process was launched with (`--workspace <dir>` in
+/// argv, stashed in `StartupWorkspace` by `run()`). Take-once: a re-mount gets
+/// `None` and falls back to `restore_workspace`. Grants + walks exactly like
+/// restore, but deliberately does NOT persist to workspace.json — the spawned
+/// instance must not clobber the restore pointer of the instance that spawned
+/// it. Fail-softs to `None` (like restore) if the dir vanished before launch
+/// finished, so a stale hand-off degrades to a folder-less start, not an error
+/// banner.
+#[tauri::command]
+pub fn take_startup_workspace(
+    startup: State<'_, crate::launch::StartupWorkspace>,
+    allowed: State<'_, AllowedPaths>,
+) -> Result<Option<Workspace>, String> {
+    let Some(dir) = startup.take() else {
+        return Ok(None);
+    };
+    match allowed.allow_root(&dir) {
+        Ok(canon) => Ok(Some(build_workspace(&canon)?)),
+        Err(_) => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -3,6 +3,7 @@ mod commands;
 mod dialogs;
 mod fileops;
 mod history;
+mod launch;
 mod menu;
 mod pdf;
 mod watcher;
@@ -21,8 +22,9 @@ use windows::{menu_target, wire_window, FocusedWindow, PendingWindowFile};
 ///
 /// POISON POLICY (one statement covering every `Mutex` behind these state
 /// newtypes — `OpenedFiles`, `FocusedWindow`, `PendingWindowFile`,
-/// `watcher::FileWatcher`, `pdf::PendingPrintHtml`, plus `allowlist::AllowedPaths`
-/// and `history::HistoryLocks`): each lock is `unwrap()`'d on poison
+/// `watcher::FileWatcher`, `pdf::PendingPrintHtml`, `launch::StartupWorkspace`,
+/// plus `allowlist::AllowedPaths` and `history::HistoryLocks`): each lock is
+/// `unwrap()`'d on poison
 /// deliberately. These are single-process, short-held locks guarding trivial
 /// in-memory bookkeeping; a panic while one is held leaves the process in an
 /// unknown state, so propagating the poison as a hard crash is the intended,
@@ -105,12 +107,35 @@ fn queue_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Argv is how a spawned "new instance" receives its work order (see
+    // launch.rs): positional files are granted + queued exactly like Finder
+    // opens (queue_opened_urls), so the frontend's normal take_opened_files
+    // drain opens them pinned and editable on mount — argv files are trusted
+    // local opens, and OpenedFiles carries no readonly flag, so nothing here
+    // can accidentally mark them read-only. The --workspace dir is stashed for
+    // the frontend to claim via take_startup_workspace. Seeding happens on the
+    // freshly built state objects BEFORE .manage(), so no window can race a
+    // half-seeded queue.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let launch_args = launch::parse_launch_args(&args);
+    let opened = OpenedFiles::default();
+    let allowed = allowlist::AllowedPaths::default();
+    let startup_files = launch_args
+        .files
+        .iter()
+        .filter_map(|p| p.to_str().map(str::to_string));
+    for p in startup_files {
+        allowed.allow(&p);
+        opened.extend([p]);
+    }
+
     let builder = tauri::Builder::default()
-        .manage(OpenedFiles::default())
+        .manage(opened)
         .manage(FocusedWindow::default())
         .manage(PendingWindowFile::default())
         .manage(watcher::FileWatcher::default())
-        .manage(allowlist::AllowedPaths::default())
+        .manage(allowed)
+        .manage(launch::StartupWorkspace::new(launch_args.workspace))
         .manage(pdf::PendingPrintHtml::default())
         .manage(history::HistoryLocks::default())
         // Serves the pending PDF-export HTML to the ephemeral print window.
@@ -174,13 +199,17 @@ pub fn run() {
             windows::take_window_file,
             set_readonly_menu_state,
             windows::open_document_window,
+            windows::open_file_new_instance,
             watcher::watch_file,
             watcher::unwatch,
             dialogs::open_file_dialog,
             dialogs::save_file_dialog,
             dialogs::open_workspace_dialog,
+            dialogs::pick_folder_new_instance,
             workspace::list_workspace,
             workspace::restore_workspace,
+            workspace::close_workspace,
+            workspace::take_startup_workspace,
             fileops::create_file,
             fileops::create_folder,
             fileops::rename_entry,

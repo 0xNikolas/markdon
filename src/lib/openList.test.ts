@@ -1,5 +1,18 @@
-import { describe, it, expect } from 'vitest'
-import { addOpen, removeOpen, neighbourAfterClose, retargetOpen, removeOpenSubtree } from './openList'
+import { describe, it, expect, beforeEach } from 'vitest'
+import { get } from 'svelte/store'
+import {
+  addOpen,
+  removeOpen,
+  neighbourAfterClose,
+  retargetOpen,
+  removeOpenSubtree,
+  retargetPreview,
+  clearPreviewInSubtree,
+  openList,
+  previewPath,
+  pinOpen,
+  pinPreview,
+} from './openList'
 
 describe('addOpen', () => {
   it('appends a new path to an empty list', () => {
@@ -114,5 +127,85 @@ describe('removeOpenSubtree', () => {
   it('is a referential no-op when nothing in the list is affected', () => {
     const list = ['/a.md', '/b.md']
     expect(removeOpenSubtree(list, '/z.md')).toBe(list)
+  })
+})
+
+describe('retargetPreview', () => {
+  it('passes null through (no preview open)', () => {
+    expect(retargetPreview(null, '/a.md', '/b.md')).toBeNull()
+  })
+
+  it('rewrites an exact file match', () => {
+    expect(retargetPreview('/a.md', '/a.md', '/renamed.md')).toBe('/renamed.md')
+  })
+
+  it('follows a moved ancestor folder, segment-safely', () => {
+    expect(retargetPreview('/ws/docs/a.md', '/ws/docs', '/ws/renamed')).toBe('/ws/renamed/a.md')
+    expect(retargetPreview('/ws/docs2/a.md', '/ws/docs', '/ws/renamed')).toBe('/ws/docs2/a.md')
+  })
+
+  it('leaves an unaffected preview unchanged', () => {
+    expect(retargetPreview('/keep.md', '/z.md', '/y.md')).toBe('/keep.md')
+  })
+})
+
+describe('clearPreviewInSubtree', () => {
+  it('passes null through', () => {
+    expect(clearPreviewInSubtree(null, '/a.md')).toBeNull()
+  })
+
+  it('clears an exact match', () => {
+    expect(clearPreviewInSubtree('/a.md', '/a.md')).toBeNull()
+  })
+
+  it('clears a preview nested under a trashed folder, segment-safely', () => {
+    expect(clearPreviewInSubtree('/ws/docs/a.md', '/ws/docs')).toBeNull()
+    expect(clearPreviewInSubtree('/ws/docs2/a.md', '/ws/docs')).toBe('/ws/docs2/a.md')
+  })
+
+  it('leaves an unrelated preview untouched', () => {
+    expect(clearPreviewInSubtree('/keep.md', '/z.md')).toBe('/keep.md')
+  })
+})
+
+describe('pinOpen / pinPreview (store transitions)', () => {
+  beforeEach(() => {
+    openList.set([])
+    previewPath.set(null)
+  })
+
+  it('pinOpen appends to openList and vacates a matching preview', () => {
+    previewPath.set('/a.md')
+    pinOpen('/a.md')
+    expect(get(openList)).toEqual(['/a.md'])
+    expect(get(previewPath)).toBeNull()
+  })
+
+  it('pinOpen leaves a NON-matching preview alone (plain open next to a preview)', () => {
+    previewPath.set('/peek.md')
+    pinOpen('/other.md')
+    expect(get(openList)).toEqual(['/other.md'])
+    expect(get(previewPath)).toBe('/peek.md')
+  })
+
+  it('pinOpen dedups an already-pinned path', () => {
+    openList.set(['/a.md', '/b.md'])
+    pinOpen('/a.md')
+    expect(get(openList)).toEqual(['/a.md', '/b.md'])
+  })
+
+  it('pinPreview promotes the current preview to the end of the pinned list', () => {
+    openList.set(['/a.md'])
+    previewPath.set('/peek.md')
+    pinPreview()
+    expect(get(openList)).toEqual(['/a.md', '/peek.md'])
+    expect(get(previewPath)).toBeNull()
+  })
+
+  it('pinPreview is a no-op when nothing is previewed', () => {
+    openList.set(['/a.md'])
+    pinPreview()
+    expect(get(openList)).toEqual(['/a.md'])
+    expect(get(previewPath)).toBeNull()
   })
 })

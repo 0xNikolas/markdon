@@ -218,6 +218,28 @@ pub fn open_document_window(
     }
 }
 
+/// Spawn a brand-NEW app process to host `path`, passed as a positional argv
+/// arg. Unlike `open_document_window` (same process, doc-N window), the child
+/// is a fully independent instance: its argv parsing (launch.rs) grants the
+/// file in the child's own allowlist and seeds it into `OpenedFiles`, so the
+/// normal drain flow opens it pinned and editable. This end only re-`ensure`s
+/// the already-granted path — same non-widening rule as open_document_window.
+/// The Child handle is dropped immediately: dropping detaches, it never kills
+/// or waits on the new instance.
+#[tauri::command]
+pub fn open_file_new_instance(
+    path: String,
+    allowed: State<'_, allowlist::AllowedPaths>,
+) -> Result<(), String> {
+    allowed.ensure(&path)?;
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    std::process::Command::new(exe)
+        .arg(&path)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
