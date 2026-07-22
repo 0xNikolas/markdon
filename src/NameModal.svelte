@@ -1,7 +1,7 @@
 <script lang="ts">
   import { focusTrap, dialogDismissHandlers } from './lib/focusTrap'
   import { portal } from './lib/portal'
-  import { leafNameError } from './lib/fileops'
+  import { leafNameError } from './lib/fileTree'
 
   interface Props {
     title: string

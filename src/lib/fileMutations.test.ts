@@ -1,60 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { get } from 'svelte/store'
 import { isSelfOrDescendant } from './paths'
-
-const invoke = vi.fn()
-vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
-// workspace.ts pulls in window (onFocusChanged) at import; stub so it loads.
-vi.mock('@tauri-apps/api/window', () => ({
-  getCurrentWindow: () => ({ onFocusChanged: () => Promise.resolve(() => {}) }),
-}))
-
-import {
-  leafNameError,
-  visibleRowPaths,
-  folderPaths,
-  folderRows,
-  pasteTargetDir,
-  selection,
-  focused,
-  clearSelection,
-  clipboard,
-  focusRow,
-  cutSelection,
-  copySelection,
-  paste,
-  performDelete,
-  performRename,
-  performMove,
-} from './fileops'
-import { type WorkspaceDir, workspace } from './workspace'
+import { invoke } from './test-support/tauriMocks'
+import { dir, tree } from './test-support/workspaceFixtures'
+import { paste, performDelete, performRename, performMove } from './fileMutations'
+import { selection, focused, clipboard, focusRow, cutSelection, copySelection } from './fileOpsState'
+import { workspace } from './workspace'
 import { doc, openDoc, newDoc, isDirty, resetReadonlyMemory } from './doc'
 import { notice, errorMessage } from './errors'
 import { openList, previewPath } from './openList'
-
-const dir = (name: string, path: string, dirs: WorkspaceDir[] = [], files = []): WorkspaceDir => ({
-  name,
-  path,
-  dirs,
-  files,
-  truncated: false,
-})
-
-// /ws
-//   docs/           (expanded)
-//     note.md
-//   img/            (collapsed)
-//     logo.svg
-//   readme.md
-const tree: WorkspaceDir = dir(
-  'ws',
-  '/ws',
-  [
-    dir('docs', '/ws/docs', [], [{ name: 'note.md', path: '/ws/docs/note.md' }] as never),
-    dir('img', '/ws/img', [], [{ name: 'logo.svg', path: '/ws/img/logo.svg' }] as never),
-  ],
-  [{ name: 'readme.md', path: '/ws/readme.md' }] as never,
-)
 
 beforeEach(() => {
   invoke.mockReset()
@@ -70,116 +24,12 @@ beforeEach(() => {
   previewPath.set(null)
 })
 
-describe('leafNameError', () => {
-  it.each(['note.md', 'README', '.hidden', '..twodots', 'a b c.markdown'])(
-    'accepts %s',
-    (name) => {
-      expect(leafNameError(name)).toBeNull()
-    },
-  )
-
-  it.each(['', '   ', '\t'])('rejects blank input %j', (name) => {
-    expect(leafNameError(name)).toContain('empty')
-  })
-
-  it.each(['.', '..'])('rejects the path special %s', (name) => {
-    expect(leafNameError(name)).toContain('not a valid name')
-  })
-
-  it.each(['a/b.md', '/abs.md', 'a\\b.md'])('rejects separator-bearing %s', (name) => {
-    expect(leafNameError(name)).toContain('cannot contain')
-  })
-})
-
-describe('visibleRowPaths', () => {
-  it('lists visible rows in display order, honoring the collapsed map', () => {
-    // img is collapsed -> its child logo.svg is excluded.
-    expect(visibleRowPaths(tree, { '/ws/img': true })).toEqual([
-      '/ws/docs',
-      '/ws/docs/note.md',
-      '/ws/img',
-      '/ws/readme.md',
-    ])
-  })
-
-  it('includes a collapsed subtree once expanded', () => {
-    expect(visibleRowPaths(tree, {})).toContain('/ws/img/logo.svg')
-  })
-
-  it('returns [] for a null tree', () => {
-    expect(visibleRowPaths(null, {})).toEqual([])
-  })
-})
-
-describe('folderPaths', () => {
-  it('collects every directory path including the root', () => {
-    expect(folderPaths(tree)).toEqual(new Set(['/ws', '/ws/docs', '/ws/img']))
-  })
-})
-
-describe('folderRows', () => {
-  it('lists the root then every folder with indentation depth', () => {
-    expect(folderRows(tree)).toEqual([
-      { path: '/ws', label: 'ws', depth: 0 },
-      { path: '/ws/docs', label: 'docs', depth: 1 },
-      { path: '/ws/img', label: 'img', depth: 1 },
-    ])
-  })
-
-  it('returns [] for a null tree', () => {
-    expect(folderRows(null)).toEqual([])
-  })
-})
-
-describe('pasteTargetDir', () => {
-  const folders = new Set(['/ws', '/ws/docs', '/ws/img'])
-
-  it('uses the focused folder directly', () => {
-    expect(pasteTargetDir('/ws/docs', folders, '/ws')).toBe('/ws/docs')
-  })
-  it("uses a focused file's parent", () => {
-    expect(pasteTargetDir('/ws/docs/note.md', folders, '/ws')).toBe('/ws/docs')
-  })
-  it('falls back to the workspace root when nothing is focused', () => {
-    expect(pasteTargetDir(null, folders, '/ws')).toBe('/ws')
-  })
-})
-
+// Pins the paths.ts predicate performDelete leans on for clipboard pruning.
 describe('isSelfOrDescendant', () => {
   it('matches the folder itself and descendants, segment-safely', () => {
     expect(isSelfOrDescendant('/ws/docs', '/ws/docs')).toBe(true)
     expect(isSelfOrDescendant('/ws/docs/note.md', '/ws/docs')).toBe(true)
     expect(isSelfOrDescendant('/ws/docs2/note.md', '/ws/docs')).toBe(false)
-  })
-})
-
-describe('workspace root changes clear file-ops state', () => {
-  it('resets selection, focused, and clipboard when the root changes', () => {
-    focusRow('/ws/docs/note.md')
-    cutSelection()
-    expect(get(selection).size).toBe(1)
-    expect(get(focused)).toBe('/ws/docs/note.md')
-    expect(get(clipboard)).not.toBeNull()
-
-    // A different workspace is opened (Open Folder / restore) -- same shape
-    // of update `adopt()` performs in workspace.ts.
-    workspace.set({ root: '/other', tree: dir('other', '/other') })
-
-    expect(get(selection).size).toBe(0)
-    expect(get(focused)).toBeNull()
-    expect(get(clipboard)).toBeNull()
-  })
-
-  it('does not clear on a same-root refresh (e.g. refreshWorkspace)', () => {
-    focusRow('/ws/docs/note.md')
-    cutSelection()
-
-    // Same root, new tree object -- what refreshWorkspace's adopt() does.
-    workspace.set({ root: '/ws', tree: dir('ws', '/ws') })
-
-    expect(get(selection).size).toBe(1)
-    expect(get(focused)).toBe('/ws/docs/note.md')
-    expect(get(clipboard)).not.toBeNull()
   })
 })
 
@@ -464,15 +314,5 @@ describe('performDelete', () => {
     await performDelete(['/ws/docs'])
     openDoc('/ws/docs/note.md', '# recreated')
     expect(get(doc).readonly).toBe(false)
-  })
-})
-
-describe('clearSelection', () => {
-  it('empties the selection and drops the focus anchor', () => {
-    selection.set(new Set(['/ws/a.md', '/ws/b.md']))
-    focused.set('/ws/a.md')
-    clearSelection()
-    expect(get(selection).size).toBe(0)
-    expect(get(focused)).toBeNull()
   })
 })

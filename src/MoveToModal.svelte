@@ -3,7 +3,7 @@
   import { portal } from './lib/portal'
   import { workspace } from './lib/workspace'
   import { isSelfOrDescendant } from './lib/paths'
-  import { folderRows } from './lib/fileops'
+  import { folderRows } from './lib/fileTree'
 
   interface Props {
     /** Paths being moved — used to disable invalid destinations. */

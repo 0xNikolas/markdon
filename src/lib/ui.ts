@@ -166,6 +166,19 @@ export function fileBreadcrumb(
   return { crumbs: parent ? [parent] : [], filename }
 }
 
+/**
+ * Native window title: filename (or "Untitled"), a leading bullet while the
+ * doc has unsaved changes, and an " — Markdon" suffix so taskbar/Mission
+ * Control entries stay identifiable. The dirty marker lives in the title text
+ * because Tauri 2's JS API has no setDocumentEdited (macOS proxy-icon)
+ * equivalent.
+ */
+export function windowTitle(path: string | null, dirty: boolean): string {
+  const segments = path?.split('/').filter(Boolean) ?? []
+  const name = segments[segments.length - 1] ?? 'Untitled'
+  return `${dirty ? '• ' : ''}${name} — Markdon`
+}
+
 // -- pure status-bar helpers --------------------------------------------------
 
 // Hoisted: formatInt runs per keystroke (words/chars) — don't allocate a

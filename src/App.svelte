@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { getCurrentWindow } from '@tauri-apps/api/window'
-  import { listenScoped } from './lib/windowing'
+  import { listenScoped, setWindowTitle } from './lib/windowing'
   import { get } from 'svelte/store'
   import {
     doc,
@@ -53,6 +53,7 @@
     isMacPlatform,
     isGotoLineFallbackKey,
     isFindReplaceFallbackKey,
+    windowTitle,
   } from './lib/ui'
   import { activeOverlay, openOverlay, closeOverlay, anyOverlayOpen } from './lib/overlay'
   import { openWorkspace, closeWorkspace, initWorkspace } from './lib/workspace'
@@ -415,6 +416,19 @@
   // covers every control that flips split, present or future.
   $effect(() => {
     if (shouldForceCloseFind($split, $searchUi.open)) closeFind()
+  })
+
+  // Mirror the doc onto the native window title (Mission Control, Cmd-Tab,
+  // taskbar; macOS hides in-window title text via hiddenTitle). $doc updates on
+  // every keystroke, so gate the IPC on the computed title actually changing —
+  // it then fires only on filename changes and clean<->dirty flips.
+  let lastTitle = ''
+  $effect(() => {
+    const t = windowTitle($doc.path, isDirty($doc))
+    if (t !== lastTitle) {
+      lastTitle = t
+      setWindowTitle(t)
+    }
   })
 
   // Esc closes the find bar even when focus is inside the editor (FindBar's

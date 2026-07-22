@@ -12,15 +12,17 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: (...a: unknown[]) => listen(..
 // jsdom has no injected Tauri internals, so currentLabel() falls back to
 // 'main' via its try/catch — mock getCurrentWindow to control the label.
 let windowLabel = 'main'
+const setTitle = vi.fn<(title: string) => Promise<void>>(() => Promise.resolve())
 vi.mock('@tauri-apps/api/window', () => ({
-  getCurrentWindow: () => ({ label: windowLabel }),
+  getCurrentWindow: () => ({ label: windowLabel, setTitle }),
 }))
 
-import { isForWindow, listenScoped, currentLabel } from './windowing'
+import { isForWindow, listenScoped, currentLabel, setWindowTitle } from './windowing'
 
 beforeEach(() => {
   listeners.clear()
   listen.mockClear()
+  setTitle.mockClear()
   windowLabel = 'main'
 })
 
@@ -73,5 +75,26 @@ describe('currentLabel', () => {
   it("returns this window's label from the Tauri window handle", () => {
     windowLabel = 'doc-7'
     expect(currentLabel()).toBe('doc-7')
+  })
+})
+
+describe('setWindowTitle', () => {
+  it("forwards the title to this window's handle", () => {
+    setWindowTitle('a.md — Markdon')
+    expect(setTitle).toHaveBeenCalledWith('a.md — Markdon')
+  })
+
+  it('does not throw when the Tauri handle is unavailable (jsdom fallback)', () => {
+    setTitle.mockImplementationOnce(() => {
+      throw new Error('no Tauri internals')
+    })
+    expect(() => setWindowTitle('x — Markdon')).not.toThrow()
+  })
+
+  it('swallows an async setTitle rejection', async () => {
+    setTitle.mockRejectedValueOnce(new Error('ipc down'))
+    setWindowTitle('x — Markdon')
+    // Flush the microtask queue: an unhandled rejection would fail the run.
+    await Promise.resolve()
   })
 })

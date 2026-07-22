@@ -24,6 +24,9 @@
     cutSelection,
     copySelection,
     selectVisible,
+    clearSelection,
+  } from './lib/fileOpsState'
+  import {
     paste,
     performCreateFile,
     performCreateFolder,
@@ -31,11 +34,8 @@
     performDuplicate,
     performMove,
     performDelete,
-    pasteTargetDir,
-    folderPaths,
-    clearSelection,
-    leafNameError,
-  } from './lib/fileops'
+  } from './lib/fileMutations'
+  import { pasteTargetDir, folderPaths, leafNameError } from './lib/fileTree'
   import { focusTrap } from './lib/focusTrap'
   import { portal } from './lib/portal'
   import { ancestorDirs } from './lib/paths'

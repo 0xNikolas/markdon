@@ -35,5 +35,6 @@ vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => ({
     label: 'main',
     onFocusChanged: () => Promise.resolve(() => {}),
+    setTitle: () => Promise.resolve(),
   }),
 }))

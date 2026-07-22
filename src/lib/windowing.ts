@@ -14,6 +14,22 @@ export function currentLabel(): string {
   }
 }
 
+/**
+ * Fire-and-forget native title update for THIS window (each webview resolves
+ * its own handle, so doc-N windows title themselves independently). Same
+ * try/catch fallback as `currentLabel` for vitest/jsdom, and the rejection is
+ * swallowed too — a failed title update is cosmetic.
+ */
+export function setWindowTitle(title: string): void {
+  try {
+    void getCurrentWindow()
+      .setTitle(title)
+      .catch(() => {})
+  } catch {
+    /* vitest/jsdom: no Tauri internals injected */
+  }
+}
+
 /** Payload shape of every MODE-B-routed event: the intended target's label. */
 interface Routed {
   target?: string | null

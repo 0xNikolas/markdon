@@ -18,7 +18,8 @@
 
 <script lang="ts">
   import { tick } from 'svelte'
-  import { selection, clipboard, folderPaths } from './lib/fileops'
+  import { selection, clipboard } from './lib/fileOpsState'
+  import { folderPaths } from './lib/fileTree'
   import { workspace, isMarkdownFile } from './lib/workspace'
   import { clampMenuPosition } from './lib/sidebarMenu'
 
