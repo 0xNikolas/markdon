@@ -5,7 +5,7 @@
   import { closeOverlay } from './lib/overlay'
   import { settings, updateSetting, type Settings } from './lib/settings'
   import { APP_SHORTCUTS } from './lib/shortcuts'
-  import { focusTrap } from './lib/focusTrap'
+  import { focusTrap, dialogDismissHandlers } from './lib/focusTrap'
 
   type TabId = 'general' | 'editor' | 'appearance' | 'export' | 'shortcuts'
   const TABS: {
@@ -44,16 +44,7 @@
 
   // Esc on the dialog element (not window): stops propagation so the find
   // bar's window-level Esc handler doesn't also fire.
-  function onDialogKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') {
-      e.stopPropagation()
-      closeOverlay()
-    }
-  }
-
-  function onBackdropClick(e: MouseEvent) {
-    if (e.target === e.currentTarget) closeOverlay()
-  }
+  const { onKeydown: onDialogKeydown, onBackdropClick } = dialogDismissHandlers(closeOverlay)
 
   const FONT_FAMILIES: { value: Settings['fontFamily']; label: string }[] = [
     { value: 'geist', label: 'Geist' },

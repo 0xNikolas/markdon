@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { focusTrap } from './lib/focusTrap'
+  import { focusTrap, dialogDismissHandlers } from './lib/focusTrap'
   import { portal } from './lib/portal'
 
   interface Props {
@@ -50,12 +50,7 @@
     onConfirm(value.trim())
   }
 
-  function onKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') {
-      e.stopPropagation()
-      onCancel()
-    }
-  }
+  const { onKeydown } = dialogDismissHandlers(() => onCancel())
 </script>
 
 <div class="modal-backdrop" use:portal>

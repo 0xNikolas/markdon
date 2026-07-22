@@ -56,3 +56,28 @@ export function focusTrap(node: HTMLElement): { destroy(): void } {
     },
   }
 }
+
+/**
+ * The Escape-key + click-outside-to-close pair repeated across every modal
+ * (HistoryModal, SettingsModal, and — Escape-only — NameModal, MoveToModal):
+ * Escape on the dialog stops propagation (so a window-level Escape handler
+ * elsewhere doesn't also fire) and closes; a backdrop click only closes when
+ * it lands on the backdrop itself, not one that bubbled up from inside the
+ * dialog (`target === currentTarget`).
+ */
+export function dialogDismissHandlers(close: () => void): {
+  onKeydown: (e: KeyboardEvent) => void
+  onBackdropClick: (e: MouseEvent) => void
+} {
+  return {
+    onKeydown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        close()
+      }
+    },
+    onBackdropClick(e: MouseEvent) {
+      if (e.target === e.currentTarget) close()
+    },
+  }
+}

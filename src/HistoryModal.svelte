@@ -3,7 +3,7 @@
   import Icon from './Icon.svelte'
   import ReadonlyMarkdown from './ReadonlyMarkdown.svelte'
   import { closeOverlay } from './lib/overlay'
-  import { focusTrap } from './lib/focusTrap'
+  import { focusTrap, dialogDismissHandlers } from './lib/focusTrap'
   import {
     loadVersions,
     readVersion,
@@ -74,15 +74,7 @@
     onRevert(selectedContent) // App.svelte: guarded() -> recordRevert -> revertBuffer -> close
   }
 
-  function onDialogKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') {
-      e.stopPropagation()
-      closeOverlay()
-    }
-  }
-  function onBackdropClick(e: MouseEvent) {
-    if (e.target === e.currentTarget) closeOverlay()
-  }
+  const { onKeydown: onDialogKeydown, onBackdropClick } = dialogDismissHandlers(closeOverlay)
 
   const hasHistory = $derived(entries.length > 0)
 </script>

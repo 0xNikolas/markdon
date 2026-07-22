@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { focusTrap } from './lib/focusTrap'
+  import { focusTrap, dialogDismissHandlers } from './lib/focusTrap'
   import { portal } from './lib/portal'
   import { workspace } from './lib/workspace'
   import { isSelfOrDescendant, folderRows } from './lib/fileops'
@@ -25,12 +25,7 @@
     return false
   }
 
-  function onKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') {
-      e.stopPropagation()
-      onCancel()
-    }
-  }
+  const { onKeydown } = dialogDismissHandlers(() => onCancel())
 </script>
 
 <div class="modal-backdrop" use:portal>

@@ -42,7 +42,7 @@
   import { activeOverlay, openOverlay, closeOverlay, anyOverlayOpen } from './lib/overlay'
   import { openWorkspace, initWorkspace } from './lib/workspace'
   import { exportDocument } from './lib/export'
-  import { focusTrap } from './lib/focusTrap'
+  import { focusTrap, dialogDismissHandlers } from './lib/focusTrap'
 
   // True while `save()` is in flight (native dialogs aren't window-parented,
   // so the modal stays clickable underneath them without this guard).
@@ -392,11 +392,13 @@
   // stopPropagation keeps this from also tripping the window-level Escape
   // handler (which only acts on the find bar, and skips while the discard
   // overlay is up anyway, but this mirrors SettingsModal's pattern).
-  function onModalKeydown(e: KeyboardEvent) {
-    if (e.key !== 'Escape') return
-    e.stopPropagation()
+  // Only the Escape half of dialogDismissHandlers is adopted here: this modal
+  // has no backdrop-click-to-close (the saving guard belongs to `cancel`, not
+  // to a bare close call, so wiring onBackdropClick too would newly add a
+  // dismiss path that ignores it).
+  const { onKeydown: onModalKeydown } = dialogDismissHandlers(() => {
     if (!saving) cancel()
-  }
+  })
 
   async function saveAndContinue() {
     saving = true
