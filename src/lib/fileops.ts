@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { get, writable, type Writable } from 'svelte/store'
-import { doc, retargetPath, detachToUntitled } from './doc'
+import { retargetPath, detachIfAffected } from './doc'
 import { reportError, reportNotice } from './errors'
 import { workspace, refreshWorkspace, type WorkspaceDir } from './workspace'
 import { openList, retargetOpen, removeOpenSubtree } from './openList'
@@ -310,7 +310,6 @@ export async function paste(): Promise<void> {
  * dead link. Clears any clipboard entry that referenced a trashed path.
  */
 export async function performDelete(paths: string[]): Promise<void> {
-  const openPath = get(doc).path
   try {
     await deleteEntries(paths)
   } catch (e) {
@@ -318,8 +317,10 @@ export async function performDelete(paths: string[]): Promise<void> {
     await refreshWorkspace()
     return
   }
-  if (openPath !== null && paths.some((p) => isSelfOrDescendant(openPath, p))) {
-    detachToUntitled()
+  // Decide detachment against the LIVE doc state after the await, not a pre-await
+  // snapshot: a doc switch that raced this delete must not detach the wrong
+  // document (DEFECT A2). detachIfAffected re-reads state inside doc.update.
+  if (detachIfAffected(paths)) {
     reportNotice('This file was moved to Trash — it is now an unsaved document.')
   }
   // Prune readonly memory for every trashed path unconditionally — detach only

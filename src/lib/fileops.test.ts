@@ -295,6 +295,28 @@ describe('performDelete', () => {
     expect(get(notice)).toBeNull()
   })
 
+  it('does not detach a doc opened mid-flight — decides against live state, not a pre-await snapshot (DEFECT A2)', async () => {
+    // The doc that is open when performDelete is CALLED is the one being trashed.
+    openDoc('/ws/readme.md', '# original')
+    // delete_entries stays pending until we resolve it; refreshWorkspace uses the default mock.
+    let resolveDelete!: () => void
+    const deleteGate = new Promise<void>((r) => {
+      resolveDelete = () => r()
+    })
+    invoke.mockReturnValueOnce(deleteGate)
+    const pending = performDelete(['/ws/readme.md'])
+    // The user switches to a DIFFERENT file while the delete is in flight.
+    openDoc('/ws/keep.md', '# keep')
+    resolveDelete()
+    await pending
+    const s = get(doc)
+    // The newly opened doc is unaffected by a delete of a different file.
+    expect(s.path).toBe('/ws/keep.md') // NOT detached to Untitled
+    expect(s.savedContent).toBe('# keep') // intact
+    expect(isDirty(s)).toBe(false)
+    expect(get(notice)).toBeNull() // no bogus "moved to Trash" notice
+  })
+
   it('reports an error and does not detach when the backend rejects', async () => {
     openDoc('/ws/readme.md', '# content')
     invoke.mockRejectedValueOnce('denied').mockResolvedValueOnce({ root: '/ws', tree })

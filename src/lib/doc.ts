@@ -1,5 +1,5 @@
 import { writable, type Writable } from 'svelte/store'
-import { rewritePrefix } from './paths'
+import { rewritePrefix, isSelfOrDescendant } from './paths'
 import { readonlyMemory } from './readonlyMemory'
 
 export interface DocState {
@@ -174,15 +174,26 @@ export function retargetPath(oldPrefix: string, newPrefix: string): void {
 }
 
 /**
- * Detach the open document from disk after its file (or an ancestor folder) was
- * moved to the Trash: keep the buffer on screen but drop `path` so it becomes an
- * unsaved Untitled document (content preserved, nothing lost). `savedContent` is
- * cleared so any non-empty buffer reads as dirty; `loadId` is untouched so the
- * editor keeps the live buffer rather than remounting empty.
+ * Detach the open document to an unsaved Untitled doc — but ONLY if its file
+ * (or an ancestor folder) is among `deletedPaths`. The self-or-descendant
+ * decision runs INSIDE doc.update against the LIVE doc state, so a doc switch
+ * that raced the delete's await cannot detach the wrong document (DEFECT A2):
+ * the caller must not branch on a pre-await snapshot of the open path.
+ *
+ * When it does detach: keep the buffer on screen but drop `path` (content
+ * preserved, nothing lost). `savedContent` is cleared so any non-empty buffer
+ * reads as dirty; `loadId` is untouched so the editor keeps the live buffer
+ * rather than remounting empty. Returns whether it detached, so the caller only
+ * surfaces the "moved to Trash" notice when the open doc was actually affected.
  */
-export function detachToUntitled(): void {
+export function detachIfAffected(deletedPaths: string[]): boolean {
+  let detached = false
   doc.update((s) => {
-    if (s.path !== null) readonlyMemory.unlock(s.path) // the path no longer exists on disk
+    if (s.path === null) return s
+    if (!deletedPaths.some((p) => isSelfOrDescendant(s.path as string, p))) return s
+    readonlyMemory.unlock(s.path) // the path no longer exists on disk
+    detached = true
     return { ...s, path: null, savedContent: '' }
   })
+  return detached
 }

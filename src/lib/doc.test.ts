@@ -10,7 +10,7 @@ import {
   enableEditing,
   enterReadonly,
   retargetPath,
-  detachToUntitled,
+  detachIfAffected,
   revertBuffer,
   resetReadonlyMemory,
   adoptNormalization,
@@ -202,19 +202,40 @@ describe('revertBuffer', () => {
   })
 })
 
-describe('detachToUntitled', () => {
+describe('detachIfAffected', () => {
   beforeEach(() => newDoc())
 
-  it('keeps the buffer, drops the path, and marks the doc dirty', () => {
+  it('detaches when the open file is exactly a deleted path: keeps the buffer, drops the path, marks dirty', () => {
     openDoc('/ws/gone.md', '# content')
     const loadId = get(doc).loadId
-    detachToUntitled()
+    expect(detachIfAffected(['/ws/gone.md'])).toBe(true)
     const s = get(doc)
     expect(s.path).toBeNull()
     expect(s.content).toBe('# content') // nothing lost
     expect(s.savedContent).toBe('')
     expect(isDirty(s)).toBe(true)
     expect(s.loadId).toBe(loadId) // buffer preserved, no remount
+  })
+
+  it('detaches when the open file is a descendant of a deleted folder', () => {
+    openDoc('/ws/docs/note.md', '# note')
+    expect(detachIfAffected(['/ws/docs'])).toBe(true)
+    expect(get(doc).path).toBeNull()
+  })
+
+  it('does not detach — nor touch — an unaffected open doc', () => {
+    openDoc('/ws/keep.md', '# keep')
+    expect(detachIfAffected(['/ws/other.md'])).toBe(false)
+    const s = get(doc)
+    expect(s.path).toBe('/ws/keep.md')
+    expect(s.savedContent).toBe('# keep')
+    expect(isDirty(s)).toBe(false)
+  })
+
+  it('is a no-op when nothing is open (path null)', () => {
+    newDoc()
+    expect(detachIfAffected(['/ws/anything.md'])).toBe(false)
+    expect(get(doc).path).toBeNull()
   })
 })
 
@@ -341,9 +362,9 @@ describe('readonly memory (per-path, survives switching files)', () => {
     expect(get(doc).readonly).toBe(true)
   })
 
-  it('detachToUntitled clears the memory for the detached path', () => {
+  it('detachIfAffected clears the memory for the detached path', () => {
     openDoc('/tmp/a.md', '# A', true)
-    detachToUntitled()
+    detachIfAffected(['/tmp/a.md'])
     openDoc('/tmp/a.md', '# A')
     expect(get(doc).readonly).toBe(false)
   })
