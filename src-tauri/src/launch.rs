@@ -13,6 +13,18 @@ pub struct LaunchArgs {
     pub files: Vec<PathBuf>,
 }
 
+impl LaunchArgs {
+    /// True when this launch was HANDED OFF work — a `--workspace` dir and/or
+    /// positional files. A handed-off child must never fall back to restoring
+    /// the persisted last-workspace pointer (that pointer belongs to the
+    /// SPAWNER), and it also skips restoring the shared window geometry.
+    /// A cold launch (empty argv, e.g. Finder starting the app) is not a
+    /// hand-off and keeps both restore behaviors.
+    pub fn is_handoff(&self) -> bool {
+        self.workspace.is_some() || !self.files.is_empty()
+    }
+}
+
 /// Parse process arguments (WITHOUT the leading program name — callers pass
 /// `std::env::args().skip(1)`). Rules:
 /// - `--workspace <dir>` captures the next arg as the startup workspace (last
@@ -45,18 +57,39 @@ pub fn parse_launch_args(args: &[String]) -> LaunchArgs {
 /// the webview's `take_startup_workspace` call on mount. Take-once semantics
 /// mirror `OpenedFiles`/`PendingWindowFile`: a re-mount must not re-adopt.
 /// Lock poisoning is unwrap()'d fail-fast per the policy note in lib.rs.
+///
+/// `suppress_restore` rides alongside, NON-consumed (reading it never clears
+/// anything): it records `LaunchArgs::is_handoff()` at construction, so even
+/// after the dir is taken — or when it was never adoptable (vanished, or a
+/// files-only hand-off with no `--workspace` at all) — the frontend can still
+/// tell "handed-off child, start folder-less" from "cold launch, restore the
+/// last folder". Without it, a fail-soft `None` was indistinguishable from a
+/// cold launch and a child silently adopted its SPAWNER's persisted folder.
 #[derive(Default)]
-pub struct StartupWorkspace(Mutex<Option<PathBuf>>);
+pub struct StartupWorkspace {
+    dir: Mutex<Option<PathBuf>>,
+    suppress_restore: bool,
+}
 
 impl StartupWorkspace {
-    /// Stash the parsed startup workspace dir (None when argv had none).
-    pub fn new(dir: Option<PathBuf>) -> Self {
-        Self(Mutex::new(dir))
+    /// Stash the parsed startup workspace dir (None when argv had none) and
+    /// whether this launch was a hand-off (`LaunchArgs::is_handoff()`).
+    pub fn new(dir: Option<PathBuf>, suppress_restore: bool) -> Self {
+        Self {
+            dir: Mutex::new(dir),
+            suppress_restore,
+        }
     }
 
     /// Claim the pending dir, leaving `None` so it is adopted exactly once.
     pub fn take(&self) -> Option<PathBuf> {
-        self.0.lock().unwrap().take()
+        self.dir.lock().unwrap().take()
+    }
+
+    /// Whether the ordinary last-workspace restore must be skipped. Stable
+    /// across (and after) `take` — see the struct doc comment.
+    pub fn suppress_restore(&self) -> bool {
+        self.suppress_restore
     }
 }
 
@@ -154,8 +187,25 @@ mod tests {
     }
 
     #[test]
+    fn is_handoff_true_for_workspace_or_files() {
+        let dir = tempdir().unwrap();
+        let f = dir.path().join("note.md");
+        fs::write(&f, "").unwrap();
+        assert!(parse_launch_args(&s(&["--workspace", "/ws"])).is_handoff());
+        assert!(parse_launch_args(&s(&[f.to_str().unwrap()])).is_handoff());
+    }
+
+    #[test]
+    fn is_handoff_false_for_a_cold_launch() {
+        // Empty argv — and argv that parses down to nothing (launcher junk) —
+        // is a cold launch: the persisted workspace/geometry restores run.
+        assert!(!parse_launch_args(&[]).is_handoff());
+        assert!(!parse_launch_args(&s(&["-psn_0_12345"])).is_handoff());
+    }
+
+    #[test]
     fn startup_workspace_takes_exactly_once() {
-        let sw = StartupWorkspace::new(Some(PathBuf::from("/ws")));
+        let sw = StartupWorkspace::new(Some(PathBuf::from("/ws")), true);
         assert_eq!(sw.take(), Some(PathBuf::from("/ws")));
         assert_eq!(sw.take(), None, "second claim must see nothing");
     }
@@ -163,6 +213,21 @@ mod tests {
     #[test]
     fn startup_workspace_default_is_empty() {
         assert_eq!(StartupWorkspace::default().take(), None);
-        assert_eq!(StartupWorkspace::new(None).take(), None);
+        assert!(!StartupWorkspace::default().suppress_restore());
+        assert_eq!(StartupWorkspace::new(None, false).take(), None);
+    }
+
+    #[test]
+    fn suppress_restore_is_not_consumed_by_take() {
+        // A files-only hand-off has no dir to take, yet must still suppress
+        // the restore; and taking the dir must not clear the flag either.
+        let files_only = StartupWorkspace::new(None, true);
+        assert_eq!(files_only.take(), None);
+        assert!(files_only.suppress_restore());
+
+        let with_dir = StartupWorkspace::new(Some(PathBuf::from("/ws")), true);
+        assert!(with_dir.suppress_restore());
+        with_dir.take();
+        assert!(with_dir.suppress_restore(), "stable across take()");
     }
 }

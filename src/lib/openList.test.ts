@@ -72,6 +72,19 @@ describe('neighbourAfterClose', () => {
   it('closing set has no active path (already untitled): returns null unchanged', () => {
     expect(neighbourAfterClose(['/a.md', '/b.md'], '/a.md', null)).toBeNull()
   })
+
+  it('an active PREVIEW appended after the pinned list falls back to the last pinned entry', () => {
+    // The preview path never lives in openList but renders as the LAST row;
+    // App.svelte appends it before the lookup so closing it activates the
+    // last pinned entry instead of blanking to a new doc.
+    expect(neighbourAfterClose(['/a.md', '/b.md', '/peek.md'], '/peek.md', '/peek.md')).toBe(
+      '/b.md',
+    )
+  })
+
+  it('an active preview appended to an EMPTY pinned list still yields null (nothing to fall back to)', () => {
+    expect(neighbourAfterClose(['/peek.md'], '/peek.md', '/peek.md')).toBeNull()
+  })
 })
 
 describe('retargetOpen', () => {

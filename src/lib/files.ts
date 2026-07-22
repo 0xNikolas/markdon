@@ -11,6 +11,13 @@ interface OpenedFile {
   content: string
 }
 
+/** One drained OpenedFiles entry (mirrors Rust `OpenedEntry` in lib.rs):
+    Finder/OS-association opens arrive readonly, argv hand-offs editable. */
+export interface OpenedEntry {
+  path: string
+  readonly: boolean
+}
+
 /**
  * Load `path` into the single doc buffer. A `preview` open (sidebar single
  * click) keeps the path OUT of `openList` and parks it in the preview slot
@@ -84,6 +91,29 @@ export function openInPreferredTarget(
 /** The raw spawn both window-open paths share; callers own error handling. */
 function spawnDocumentWindow(path: string, readonly: boolean): Promise<void> {
   return invoke('open_document_window', { path, readonly })
+}
+
+/**
+ * Route a whole drained OpenedFiles batch (Finder opens / argv files), so a
+ * multi-file drop never silently loses everything after the first entry. The
+ * FIRST entry behaves exactly like a single open: through
+ * `openInPreferredTarget` with the caller's `openFirstInPlace` closure as the
+ * in-place path — it becomes the active doc (MODE A) or spawns its own window
+ * (MODE B). Every REMAINING entry must still surface without stealing
+ * activation, and `openInPreferredTarget(path, pinOpen, readonly)` does both
+ * modes in one call: MODE B gives each file its own window (honoring its
+ * per-entry readonly), MODE A pins it into the Open Files strip only —
+ * paths-only, no read needed — and a MODE B spawn failure degrades to that
+ * same visible pinned row instead of clobbering the active doc.
+ */
+export function openDrainedEntries(
+  entries: OpenedEntry[],
+  openFirstInPlace: (path: string, readonly: boolean) => void,
+): void {
+  const [first, ...rest] = entries
+  if (first === undefined) return
+  openInPreferredTarget(first.path, (p) => openFirstInPlace(p, first.readonly), first.readonly)
+  for (const entry of rest) openInPreferredTarget(entry.path, pinOpen, entry.readonly)
 }
 
 /**

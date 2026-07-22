@@ -123,12 +123,14 @@ describe('openWorkspace', () => {
 })
 
 describe('closeWorkspace', () => {
-  it('deletes the restore pointer and resets the store + breadcrumb', async () => {
+  it('deletes the restore pointer (passing the owned root) and resets the store + breadcrumb', async () => {
     workspace.set({ root: '/ws/notes', tree: tree('notes') })
     workspaceName.set('notes')
     invoke.mockResolvedValue(undefined)
     await closeWorkspace()
-    expect(invoke).toHaveBeenCalledWith('close_workspace')
+    // The root rides along so Rust can prove this instance owns the pointer
+    // before deleting the file shared by every running instance.
+    expect(invoke).toHaveBeenCalledWith('close_workspace', { root: '/ws/notes' })
     expect(get(workspace)).toEqual({ root: null, tree: null })
     expect(get(workspaceName)).toBeNull()
   })
@@ -142,24 +144,42 @@ describe('closeWorkspace', () => {
     expect(get(workspace)).toEqual({ root: null, tree: null })
     expect(get(workspaceName)).toBeNull()
   })
+
+  it('with no folder open, skips the invoke entirely and just resets the store', async () => {
+    await closeWorkspace()
+    expect(invoke).not.toHaveBeenCalled()
+    expect(get(workspace)).toEqual({ root: null, tree: null })
+  })
 })
 
 describe('takeStartupWorkspace', () => {
-  it('adopts a CLI-provided workspace and reports it took one', async () => {
-    invoke.mockResolvedValue({ root: '/ws/cli', tree: tree('cli') })
+  it('adopts a CLI-provided workspace and reports the restore is suppressed', async () => {
+    invoke.mockResolvedValue({
+      workspace: { root: '/ws/cli', tree: tree('cli') },
+      suppress_restore: true,
+    })
     await expect(takeStartupWorkspace()).resolves.toBe(true)
     expect(invoke).toHaveBeenCalledWith('take_startup_workspace')
     expect(get(workspace).root).toBe('/ws/cli')
     expect(get(workspaceName)).toBe('cli')
   })
 
-  it('reports false when no startup workspace is pending', async () => {
-    invoke.mockResolvedValue(null)
+  it('reports false (restore allowed) on a cold launch with nothing pending', async () => {
+    invoke.mockResolvedValue({ workspace: null, suppress_restore: false })
     await expect(takeStartupWorkspace()).resolves.toBe(false)
     expect(get(workspace).root).toBeNull()
   })
 
-  it('swallows errors and reports false (caller falls back to restore)', async () => {
+  it('a handed-off launch whose dir vanished still suppresses the restore (folder-less start)', async () => {
+    // The tri-state that stops a child adopting its SPAWNER's folder: no
+    // workspace to adopt, but the launch WAS a hand-off.
+    invoke.mockResolvedValue({ workspace: null, suppress_restore: true })
+    await expect(takeStartupWorkspace()).resolves.toBe(true)
+    expect(get(workspace).root).toBeNull()
+    expect(get(workspaceName)).toBeNull()
+  })
+
+  it('swallows errors and reports false (caller falls back to restore, like a cold launch)', async () => {
     invoke.mockRejectedValue('nope')
     await expect(takeStartupWorkspace()).resolves.toBe(false)
     expect(get(workspace).root).toBeNull()
@@ -170,7 +190,9 @@ describe('takeStartupWorkspace', () => {
 describe('initWorkspace startup ordering', () => {
   it('a startup workspace wins and SKIPS restore_workspace entirely', async () => {
     invoke.mockImplementation(async (cmd: unknown) =>
-      cmd === 'take_startup_workspace' ? { root: '/ws/cli', tree: tree('cli') } : null,
+      cmd === 'take_startup_workspace'
+        ? { workspace: { root: '/ws/cli', tree: tree('cli') }, suppress_restore: true }
+        : null,
     )
     const teardown = await initWorkspace()
     await vi.waitFor(() => expect(get(workspace).root).toBe('/ws/cli'))
@@ -178,10 +200,27 @@ describe('initWorkspace startup ordering', () => {
     teardown()
   })
 
-  it('falls back to restore_workspace when no startup workspace is pending', async () => {
+  it('a suppressed hand-off with no adoptable workspace stays folder-less (no restore)', async () => {
+    // open_file_new_instance children (files-only argv) and --workspace dirs
+    // that vanished both land here: restore would adopt the spawner's folder.
     invoke.mockImplementation(async (cmd: unknown) =>
-      cmd === 'restore_workspace' ? { root: '/ws/prev', tree: tree('prev') } : null,
+      cmd === 'take_startup_workspace' ? { workspace: null, suppress_restore: true } : null,
     )
+    const teardown = await initWorkspace()
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('take_startup_workspace'))
+    // Let the takeStartupWorkspace().then(...) chain settle before asserting
+    // the restore branch was genuinely skipped, not merely not-yet-reached.
+    await new Promise((r) => setTimeout(r, 0))
+    expect(invoke).not.toHaveBeenCalledWith('restore_workspace')
+    expect(get(workspace).root).toBeNull()
+    teardown()
+  })
+
+  it('falls back to restore_workspace on a cold launch with nothing pending', async () => {
+    invoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === 'take_startup_workspace') return { workspace: null, suppress_restore: false }
+      return cmd === 'restore_workspace' ? { root: '/ws/prev', tree: tree('prev') } : null
+    })
     const teardown = await initWorkspace()
     await vi.waitFor(() => expect(get(workspace).root).toBe('/ws/prev'))
     expect(invoke).toHaveBeenCalledWith('take_startup_workspace')

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isSelfOrDescendant, rewritePrefix } from './paths'
+import { isSelfOrDescendant, rewritePrefix, ancestorDirs } from './paths'
 
 describe('isSelfOrDescendant', () => {
   it('is true for the exact same path', () => {
@@ -46,5 +46,31 @@ describe('rewritePrefix', () => {
 
   it('is segment-safe on the exact-match boundary too', () => {
     expect(rewritePrefix('/ws/proj2', '/ws/proj', '/ws/renamed')).toBe('/ws/proj2')
+  })
+})
+
+describe('ancestorDirs', () => {
+  it('lists every dir strictly between root and path, outermost first', () => {
+    expect(ancestorDirs('/ws', '/ws/a/b/c.md')).toEqual(['/ws/a', '/ws/a/b'])
+  })
+
+  it('a direct child of the root has no ancestors to expand', () => {
+    expect(ancestorDirs('/ws', '/ws/note.md')).toEqual([])
+  })
+
+  it('excludes the path itself (a folder rename target is not its own ancestor)', () => {
+    expect(ancestorDirs('/ws', '/ws/a/b')).toEqual(['/ws/a'])
+  })
+
+  it('a path outside the root yields nothing', () => {
+    expect(ancestorDirs('/ws', '/elsewhere/a/b.md')).toEqual([])
+  })
+
+  it('is segment-safe: a sibling sharing the root as a name prefix yields nothing', () => {
+    expect(ancestorDirs('/ws', '/ws2/a/b.md')).toEqual([])
+  })
+
+  it('the root itself yields nothing', () => {
+    expect(ancestorDirs('/ws', '/ws')).toEqual([])
   })
 })

@@ -38,6 +38,7 @@
   } from './lib/fileops'
   import { focusTrap } from './lib/focusTrap'
   import { portal } from './lib/portal'
+  import { ancestorDirs } from './lib/paths'
   import { get } from 'svelte/store'
   import { selectionForContextMenu, isSelectionClearingTarget } from './lib/sidebarMenu'
 
@@ -124,9 +125,26 @@
   }
 
   function startRename(path: string) {
+    // Expand every collapsed ancestor first (VS Code behavior): the rename
+    // input only exists for VISIBLE rows, so arming a hidden one would leave
+    // an input that mounts later, steals focus, and can commit stale.
+    const root = get(workspace).root
+    if (root !== null) for (const dir of ancestorDirs(root, path)) collapsed[dir] = false
     renameValue = basename(path)
     renaming = path
   }
+
+  // A workspace switch invalidates any in-flight rename — the armed path
+  // belongs to the OLD tree, and its input could otherwise mount against an
+  // unrelated same-named row later. Tracked against the ROOT only: refreshes
+  // of the same folder (refocus, file ops) must not cancel the user's typing.
+  let renameRoot: string | null = get(workspace).root
+  $effect(() => {
+    if ($workspace.root !== renameRoot) {
+      renameRoot = $workspace.root
+      renaming = null
+    }
+  })
 
   // Focus the fresh rename input and preselect the stem (files) or the whole
   // name (folders) — Svelte action, runs once per input mount.
@@ -252,7 +270,11 @@
     if (isMarkdownFile(f.name)) onOpenFile(f.path, { preview: true })
   }
   function onFileDblClick(f: WorkspaceFile) {
-    if (isMarkdownFile(f.name)) onOpenFile(f.path, { preview: false })
+    // A tree dblclick means "open in THIS window" by definition — `inPlace`
+    // bypasses openMode routing, so a dblclick racing its own first click's
+    // still-loading preview can never spawn a duplicate window under
+    // openMode:'window'.
+    if (isMarkdownFile(f.name)) onOpenFile(f.path, { preview: false, inPlace: true })
   }
   function onFolderClick(d: WorkspaceDir) {
     focusRow(d.path)
@@ -434,12 +456,24 @@
         <!-- The single-click preview: ONE italic row after the pinned ones.
              Clicking it re-asserts the preview (a no-op while it's already
              the active doc) rather than pinning — only a tree dblclick, an
-             explicit open, or editing the buffer promotes it. -->
+             explicit open, or editing the buffer promotes it. The italics are
+             invisible to a screen reader, so both aria-labels carry the
+             "(preview)" state in words. Enter on the already-active row PINS
+             it — the keyboard's promotion affordance, mirroring the mouse's
+             dblclick (preventDefault keeps the button's synthetic click, which
+             would merely re-preview, from also firing). -->
         <div class="open-file-row preview" class:active={pv === activePath}>
           <button
             class="open-file-main"
+            aria-label="{basename(pv)} (preview)"
             aria-current={pv === activePath ? 'true' : undefined}
             onclick={() => onOpenFile(pv, { preview: true })}
+            onkeydown={(e) => {
+              if (e.key === 'Enter' && pv === activePath) {
+                e.preventDefault()
+                onOpenFile(pv, { preview: false, inPlace: true })
+              }
+            }}
           >
             <span class="active-bar"></span>
             <Icon name={fileIcon(basename(pv))} size={16} />
@@ -447,7 +481,7 @@
           </button>
           <button
             class="close-file"
-            aria-label="Close {basename(pv)}"
+            aria-label="Close {basename(pv)} (preview)"
             onclick={(e) => { e.stopPropagation(); onCloseFile(pv) }}
           >
             <Icon name="x" size={12} />

@@ -85,16 +85,21 @@ export async function openWorkspace(): Promise<void> {
 
 /**
  * Close the open folder: delete the persisted restore pointer, then reset the
- * store exactly inverse of `adopt` (root/tree null + breadcrumb). Open files
- * and the doc stay as they are (VS Code behavior); selection/clipboard clear
+ * store exactly inverse of `adopt` (root/tree null + breadcrumb). The current
+ * root rides along so Rust can prove ownership — the pointer file is shared
+ * by every running instance, and one whose folder was never persisted (a
+ * `--workspace` child) must not delete the pointer another instance saved;
+ * with no root there is nothing to close remotely at all. Open files and the
+ * doc stay as they are (VS Code behavior); selection/clipboard clear
  * automatically via fileops.ts's workspace.subscribe hook. The local close
  * happens even if deleting the pointer fails — a stale pointer only means the
  * folder comes back on next launch, which beats a close button that does
  * nothing.
  */
 export async function closeWorkspace(): Promise<void> {
+  const root = get(workspace).root
   try {
-    await invoke('close_workspace')
+    if (root !== null) await invoke('close_workspace', { root })
   } catch (e) {
     reportError(`Could not close folder: ${String(e)}`)
   }
@@ -137,16 +142,22 @@ export async function restoreWorkspace(): Promise<void> {
  * second instance spawned by `pick_folder_new_instance`). The Rust side takes
  * the pending dir at most once, grants it, walks it, and deliberately does NOT
  * persist it — two instances must not clobber each other's restore pointer.
- * Returns whether a startup workspace was adopted, so the caller knows to skip
- * the ordinary restore. Errors are swallowed like `restoreWorkspace`'s: a
- * launch hiccup here just falls back to restoring (or an empty sidebar).
+ * Returns whether the ordinary restore must be SKIPPED: true for every
+ * handed-off launch (a `--workspace` dir and/or argv files), even when no
+ * workspace was adoptable — the dir vanished, or the hand-off carried only
+ * files — because falling back to `restoreWorkspace` would make the child
+ * silently adopt its SPAWNER's persisted folder. Cold launches (no argv)
+ * return false and keep restoring. Errors are swallowed like
+ * `restoreWorkspace`'s: an IPC hiccup here just falls back to restoring (or
+ * an empty sidebar), same as a cold launch.
  */
 export async function takeStartupWorkspace(): Promise<boolean> {
   try {
-    const ws = await invoke<Workspace | null>('take_startup_workspace')
-    if (ws === null) return false
-    adopt(ws)
-    return true
+    const handoff = await invoke<{ workspace: Workspace | null; suppress_restore: boolean }>(
+      'take_startup_workspace',
+    )
+    if (handoff.workspace !== null) adopt(handoff.workspace)
+    return handoff.suppress_restore
   } catch {
     return false
   }
@@ -154,15 +165,16 @@ export async function takeStartupWorkspace(): Promise<boolean> {
 
 /**
  * Wire up the workspace for the app lifetime: adopt a CLI-provided startup
- * workspace (which wins over — and skips — the persisted restore pointer),
- * else restore the last folder; refresh the tree when the open document's path
- * changes (a Save As into the workspace shows the file immediately) and when
- * the window regains focus (external edits happen while unfocused). Returns an
- * async teardown, matching `initFileSync`.
+ * workspace, restoring the persisted last folder ONLY on a non-handed-off
+ * (cold) launch — a spawned child starts folder-less rather than adopting its
+ * spawner's folder; refresh the tree when the open document's path changes (a
+ * Save As into the workspace shows the file immediately) and when the window
+ * regains focus (external edits happen while unfocused). Returns an async
+ * teardown, matching `initFileSync`.
  */
 export function initWorkspace(): Promise<() => void> {
-  takeStartupWorkspace().then((adopted) => {
-    if (!adopted) restoreWorkspace()
+  takeStartupWorkspace().then((suppressRestore) => {
+    if (!suppressRestore) restoreWorkspace()
   })
 
   let lastPath: string | null = get(doc).path

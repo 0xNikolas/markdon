@@ -15,7 +15,15 @@
     adoptNormalization,
   } from './lib/doc'
   import { recordRevert } from './lib/history'
-  import { open, save, saveAs, openPath, openInPreferredTarget } from './lib/files'
+  import {
+    open,
+    save,
+    saveAs,
+    openPath,
+    openInPreferredTarget,
+    openDrainedEntries,
+    type OpenedEntry,
+  } from './lib/files'
   import {
     openList,
     previewPath,
@@ -65,8 +73,36 @@
   // replacement for the old behavior of stacking the discard modal invisibly
   // behind the open overlay.
   function guarded(action: () => void) {
+    // Every new guard cycle invalidates any remembered deferred-preview path
+    // (see pendingPreviewPath): the slot only ever describes the CURRENT
+    // discard overlay's deferred action, never a previous one's.
+    pendingPreviewPath = null
     if (isDirty(get(doc))) openOverlay({ kind: 'discard', action })
     else action()
+  }
+
+  // The path of a PREVIEW open currently deferred behind the discard overlay.
+  // Needed because the second click of a tree dblclick lands on the modal
+  // backdrop (the overlay mounted between the clicks), so the pin intent
+  // would otherwise be lost — the file would re-open as a mere preview after
+  // the prompt resolves. onBackdropDblClick uses it to upgrade the deferred
+  // action in place; cleared whenever the overlay resolves (discard/cancel)
+  // or a new guard cycle starts.
+  let pendingPreviewPath: string | null = null
+
+  // Dblclick on the discard backdrop while a preview open sits deferred:
+  // swap the deferred action to a PINNED in-place open of the same path —
+  // the second click that would have pinned it hit the backdrop instead.
+  // Gated on target === currentTarget so dblclicks inside the modal itself
+  // (e.g. on button text) never retarget the action.
+  function onBackdropDblClick(e: MouseEvent) {
+    if (e.target !== e.currentTarget) return
+    const p = pendingPreviewPath
+    if (p === null) return
+    pendingPreviewPath = null
+    activeOverlay.update((o) =>
+      o?.kind === 'discard' ? { kind: 'discard', action: () => openPath(p) } : o,
+    )
   }
 
   // Push the read-only flag to the native File-menu "Read Only" check mark.
@@ -155,6 +191,9 @@
     }
     if (opts.preview) {
       guarded(() => openPath(path, { preview: true }))
+      // Only when the guard actually deferred (dirty doc -> discard overlay up)
+      // is there a pin intent to protect; an immediate open needs no memory.
+      if (get(activeOverlay)?.kind === 'discard') pendingPreviewPath = path
       return
     }
     if (opts.inPlace) {
@@ -171,9 +210,11 @@
   // invariant). Closing the active entry (pinned or preview — a preview is a
   // normal live doc) still runs the guard, then switches to the neighbour
   // computed BEFORE removal (previous, else next, else null -> falls back to
-  // newDoc()). The preview path is never in openList, so the neighbour logic
-  // runs on the pinned list as-is; clearing state inside the guard keeps
-  // Cancel non-destructive.
+  // newDoc()). The preview path is never in openList, but it RENDERS as the
+  // last row (after every pinned one), so closing an active preview appends
+  // it for the lookup — its visual previous neighbour is the last pinned
+  // entry, not a blank new doc. Clearing state inside the guard keeps Cancel
+  // non-destructive.
   function onCloseFile(path: string) {
     if (path !== get(doc).path) {
       if (path === get(previewPath)) previewPath.set(null)
@@ -181,7 +222,9 @@
       return
     }
     guarded(() => {
-      const next = neighbourAfterClose(get(openList), path, get(doc).path)
+      const list = get(openList)
+      const lookup = path === get(previewPath) ? [...list, path] : list
+      const next = neighbourAfterClose(lookup, path, get(doc).path)
       previewPath.update((pv) => (pv === path ? null : pv))
       openList.update((l) => removeOpen(l, path))
       if (next === null) newDoc()
@@ -189,18 +232,18 @@
     })
   }
 
-  // Open a file the OS handed us via a .md file association (Finder double-click).
-  // Drains the Rust-side buffer and routes the first path through the openMode
-  // preference: MODE A opens it in-place (guarded, read-only like before); MODE
-  // B spawns a fresh window for it, leaving this (focused) window's doc alone.
-  // Called on mount (cold launch) and on each `file:opened` ping.
+  // Open the files the OS or a spawner handed us (.md association double-click,
+  // argv of a new instance). Drains the Rust-side buffer and routes the whole
+  // batch through openDrainedEntries: the first entry becomes the active doc
+  // (MODE A, guarded in-place) or its own window (MODE B); the rest surface
+  // without stealing activation. Each entry carries its OWN readonly flag from
+  // Rust — Finder opens keep the read-only safety net, argv files open
+  // editable — threaded into both the in-place openPath and the MODE B window
+  // hand-off (AssignedFile.readonly). Called on mount (cold launch) and on
+  // each `file:opened` ping.
   async function drainOpenedFiles() {
-    const paths = await invoke<string[]>('take_opened_files')
-    // readonly=true in BOTH modes: in-place opens pass it to openPath directly,
-    // and MODE B carries it through the window hand-off (AssignedFile.readonly)
-    // so the spawned window keeps the same Finder-open safety net.
-    if (paths.length > 0)
-      openInPreferredTarget(paths[0], (p) => guarded(() => openPath(p, { readonly: true })), true)
+    const entries = await invoke<OpenedEntry[]>('take_opened_files')
+    openDrainedEntries(entries, (p, readonly) => guarded(() => openPath(p, { readonly })))
   }
 
   // A spawned document window (doc-N) drains the file it was created to host
@@ -274,11 +317,22 @@
       listenScoped('menu:close_folder', () => closeWorkspace()),
       listenScoped('menu:close_tab', () => {
         // Cmd+W closes the active entry (pinned or preview) through the same
-        // onCloseFile path as the strip's close button; with no file open
-        // (untitled doc) it falls through to closing the window — VS Code
-        // behavior.
+        // onCloseFile path as the strip's close button. On an untitled doc
+        // the "tab" being closed is the scratch buffer, NOT the window: while
+        // pinned tabs or a preview are still alive, dismiss the scratch
+        // (guarded — unsaved edits still prompt) and land back on the preview
+        // (kept as a preview, avoiding a stale italic row) or the last pinned
+        // entry. Only when nothing else is open does Cmd+W fall through to
+        // closing the window — that truly-empty case is the VS Code behavior.
         const p = get(doc).path
-        if (p !== null) onCloseFile(p)
+        if (p !== null) {
+          onCloseFile(p)
+          return
+        }
+        const pv = get(previewPath)
+        const pinned = get(openList)
+        if (pv !== null) guarded(() => openPath(pv, { preview: true }))
+        else if (pinned.length > 0) guarded(() => openPath(pinned[pinned.length - 1]))
         else closeThisWindow()
       }),
       listenScoped('menu:close_window', closeThisWindow),
@@ -433,13 +487,17 @@
   }
 
   // Pull the deferred action off the discard overlay, close it, then run it.
+  // Both resolutions drop any remembered deferred-preview path — the overlay
+  // it described is gone either way (see pendingPreviewPath).
   function discard() {
     const o = get(activeOverlay)
     const action = o?.kind === 'discard' ? o.action : null
+    pendingPreviewPath = null
     closeOverlay()
     action?.()
   }
   function cancel() {
+    pendingPreviewPath = null
     closeOverlay()
     // A cancelled Read-Only toggle left $doc.readonly untouched, so the store
     // subscription won't fire — re-assert the check mark to undo muda's
@@ -545,7 +603,8 @@
 </main>
 
 {#if $activeOverlay?.kind === 'discard'}
-  <div class="modal-backdrop">
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="modal-backdrop" ondblclick={onBackdropDblClick}>
     <div
       class="modal"
       role="dialog"

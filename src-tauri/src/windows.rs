@@ -221,11 +221,13 @@ pub fn open_document_window(
 /// Spawn a brand-NEW app process to host `path`, passed as a positional argv
 /// arg. Unlike `open_document_window` (same process, doc-N window), the child
 /// is a fully independent instance: its argv parsing (launch.rs) grants the
-/// file in the child's own allowlist and seeds it into `OpenedFiles`, so the
-/// normal drain flow opens it pinned and editable. This end only re-`ensure`s
-/// the already-granted path — same non-widening rule as open_document_window.
-/// The Child handle is dropped immediately: dropping detaches, it never kills
-/// or waits on the new instance.
+/// file in the child's own allowlist and seeds it into `OpenedFiles` with
+/// `readonly: false` (an explicit user hand-off, not an OS association), so
+/// the child's normal drain flow opens it pinned and editable. This end only
+/// re-`ensure`s the already-granted path — same non-widening rule as
+/// open_document_window. Dropping the Child handle would NOT detach it — the
+/// exited child would linger as a zombie until waited on — so a throwaway
+/// thread reaps it; the thread never influences the child's lifetime.
 #[tauri::command]
 pub fn open_file_new_instance(
     path: String,
@@ -233,10 +235,13 @@ pub fn open_file_new_instance(
 ) -> Result<(), String> {
     allowed.ensure(&path)?;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    std::process::Command::new(exe)
+    let mut child = std::process::Command::new(exe)
         .arg(&path)
         .spawn()
         .map_err(|e| e.to_string())?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
     Ok(())
 }
 

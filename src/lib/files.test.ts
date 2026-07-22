@@ -5,7 +5,15 @@ const invoke = vi.fn()
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
 
 import { doc, newDoc, edit, isDirty, openDoc, docWith } from './doc'
-import { open, save, saveAs, openPath, openInPreferredTarget, openInNewWindow } from './files'
+import {
+  open,
+  save,
+  saveAs,
+  openPath,
+  openInPreferredTarget,
+  openInNewWindow,
+  openDrainedEntries,
+} from './files'
 import { errorMessage } from './errors'
 import { openList, previewPath } from './openList'
 import { settings, DEFAULTS } from './settings'
@@ -288,6 +296,72 @@ describe('openInPreferredTarget', () => {
     // The focused window's own doc is untouched (the new window loads it).
     expect(get(doc).path).toBeNull()
     expect(get(openList)).toEqual([])
+  })
+})
+
+describe('openDrainedEntries', () => {
+  const entry = (path: string, readonly = false) => ({ path, readonly })
+
+  it('is a no-op on an empty drain', () => {
+    openDrainedEntries([], () => {})
+    expect(invoke).not.toHaveBeenCalled()
+    expect(get(openList)).toEqual([])
+  })
+
+  it("MODE A ('tab'): the first entry opens in place and becomes active; the rest pin without stealing activation", async () => {
+    invoke.mockResolvedValue('# body')
+    openDrainedEntries([entry('/a.md'), entry('/b.md'), entry('/c.md')], (p, readonly) =>
+      openPath(p, { readonly }),
+    )
+    await vi.waitFor(() => expect(get(doc).path).toBe('/a.md'))
+    // Every drained path surfaces in the strip — nothing after the first is lost.
+    expect([...get(openList)].sort()).toEqual(['/a.md', '/b.md', '/c.md'])
+    expect(get(doc).path).toBe('/a.md')
+  })
+
+  it('MODE A: threads the first entry\'s OWN readonly flag into the in-place closure', async () => {
+    invoke.mockResolvedValue('# finder open')
+    openDrainedEntries([entry('/finder.md', true)], (p, readonly) => openPath(p, { readonly }))
+    await vi.waitFor(() => expect(get(doc).path).toBe('/finder.md'))
+    expect(get(doc).readonly).toBe(true)
+  })
+
+  it('MODE A: an argv (editable) first entry opens editable — never hardcoded readonly', async () => {
+    invoke.mockResolvedValue('# argv open')
+    openDrainedEntries([entry('/argv.md', false)], (p, readonly) => openPath(p, { readonly }))
+    await vi.waitFor(() => expect(get(doc).path).toBe('/argv.md'))
+    expect(get(doc).readonly).toBe(false)
+  })
+
+  it("MODE B ('window'): every entry gets its own window, each honoring its per-entry readonly", () => {
+    settings.set({ ...DEFAULTS, openMode: 'window' })
+    invoke.mockResolvedValue(undefined)
+    const inPlace: string[] = []
+    openDrainedEntries(
+      [entry('/finder.md', true), entry('/argv.md', false)],
+      (p) => inPlace.push(p),
+    )
+    expect(invoke).toHaveBeenCalledWith('open_document_window', {
+      path: '/finder.md',
+      readonly: true,
+    })
+    expect(invoke).toHaveBeenCalledWith('open_document_window', {
+      path: '/argv.md',
+      readonly: false,
+    })
+    // The focused window's own doc/list stay untouched in window mode.
+    expect(inPlace).toEqual([])
+    expect(get(openList)).toEqual([])
+  })
+
+  it('MODE B: a failed spawn of a REST entry degrades to a pinned strip row, not an in-place open', async () => {
+    settings.set({ ...DEFAULTS, openMode: 'window' })
+    invoke.mockRejectedValue('no window config to clone')
+    const inPlace: string[] = []
+    openDrainedEntries([entry('/a.md'), entry('/b.md')], (p) => inPlace.push(p))
+    // First entry falls back to the caller's in-place closure; the rest pin.
+    await vi.waitFor(() => expect(inPlace).toEqual(['/a.md']))
+    await vi.waitFor(() => expect(get(openList)).toEqual(['/b.md']))
   })
 })
 

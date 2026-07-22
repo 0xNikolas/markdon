@@ -16,9 +16,21 @@ use tauri::{Emitter, EventTarget, Manager, State};
 
 use windows::{menu_target, wire_window, FocusedWindow, PendingWindowFile};
 
-/// Buffer of file paths macOS asked us to open (via Finder double-click / `open`).
-/// Needed because on a cold launch the OS delivers the file before the webview's
-/// JS listeners exist, so we stash paths here until the frontend drains them.
+/// One queued open: the path plus whether it must open read-only. OS-association
+/// opens (Finder double-click / `open`) queue `readonly: true` — the safety-net
+/// banner + "Enable editing" — while argv files handed to a spawned instance
+/// queue `readonly: false`: they are trusted local opens the user explicitly
+/// routed here (open_file_new_instance / CLI), not surprise associations.
+#[derive(Clone, serde::Serialize)]
+pub struct OpenedEntry {
+    pub path: String,
+    pub readonly: bool,
+}
+
+/// Buffer of files the OS or a spawner asked us to open (Finder double-click /
+/// `open` / argv). Needed because on a cold launch the OS delivers the file
+/// before the webview's JS listeners exist, so we stash entries here until the
+/// frontend drains them.
 ///
 /// POISON POLICY (one statement covering every `Mutex` behind these state
 /// newtypes — `OpenedFiles`, `FocusedWindow`, `PendingWindowFile`,
@@ -30,19 +42,19 @@ use windows::{menu_target, wire_window, FocusedWindow, PendingWindowFile};
 /// unknown state, so propagating the poison as a hard crash is the intended,
 /// fail-fast behavior — never recovered from, never swallowed.
 #[derive(Default)]
-pub struct OpenedFiles(Mutex<Vec<String>>);
+pub struct OpenedFiles(Mutex<Vec<OpenedEntry>>);
 
 impl OpenedFiles {
-    /// Drain and return every buffered path, leaving the buffer empty
-    /// (`mem::take`). Draining is what guarantees each queued path is delivered
+    /// Drain and return every buffered entry, leaving the buffer empty
+    /// (`mem::take`). Draining is what guarantees each queued entry is delivered
     /// exactly once regardless of ordering.
-    pub fn take_all(&self) -> Vec<String> {
+    pub fn take_all(&self) -> Vec<OpenedEntry> {
         std::mem::take(&mut *self.0.lock().unwrap())
     }
 
-    /// Append freshly granted open paths to the buffer.
-    pub fn extend(&self, paths: impl IntoIterator<Item = String>) {
-        self.0.lock().unwrap().extend(paths);
+    /// Append freshly granted open entries to the buffer.
+    pub fn extend(&self, entries: impl IntoIterator<Item = OpenedEntry>) {
+        self.0.lock().unwrap().extend(entries);
     }
 }
 
@@ -55,11 +67,12 @@ impl OpenedFiles {
 /// so no extra lock is needed.
 pub struct ReadonlyMenuItem(pub tauri::menu::CheckMenuItem<tauri::Wry>);
 
-/// Drain and return any pending file-open paths. The frontend calls this on mount
-/// (cold start) and whenever a `file:opened` event fires (already-running app).
-/// Draining guarantees each path is delivered exactly once regardless of ordering.
+/// Drain and return any pending file-open entries (path + per-entry readonly).
+/// The frontend calls this on mount (cold start) and whenever a `file:opened`
+/// event fires (already-running app). Draining guarantees each entry is
+/// delivered exactly once regardless of ordering.
 #[tauri::command]
-fn take_opened_files(state: State<'_, OpenedFiles>) -> Vec<String> {
+fn take_opened_files(state: State<'_, OpenedFiles>) -> Vec<OpenedEntry> {
     state.take_all()
 }
 
@@ -92,7 +105,12 @@ fn queue_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
         }
     }
     if let Some(state) = app.try_state::<OpenedFiles>() {
-        state.extend(paths);
+        // OS-association opens keep the read-only safety net: the user asked
+        // the OS to "open with", not to edit — see OpenedEntry's doc comment.
+        state.extend(paths.into_iter().map(|path| OpenedEntry {
+            path,
+            readonly: true,
+        }));
     }
     // Ping the focused window (which decides tab-vs-window per its own
     // openMode preference). Fall back to `main` when nothing is focused yet.
@@ -108,16 +126,24 @@ fn queue_opened_urls(app: &tauri::AppHandle, urls: Vec<tauri::Url>) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Argv is how a spawned "new instance" receives its work order (see
-    // launch.rs): positional files are granted + queued exactly like Finder
-    // opens (queue_opened_urls), so the frontend's normal take_opened_files
-    // drain opens them pinned and editable on mount — argv files are trusted
-    // local opens, and OpenedFiles carries no readonly flag, so nothing here
-    // can accidentally mark them read-only. The --workspace dir is stashed for
+    // launch.rs): positional files are granted + queued like Finder opens
+    // (queue_opened_urls), except each entry is queued `readonly: false` —
+    // argv files are trusted local opens the user explicitly routed here
+    // (open_file_new_instance / CLI), so the frontend's take_opened_files
+    // drain opens them pinned and editable on mount, while Finder opens keep
+    // their per-entry read-only safety net. The --workspace dir is stashed for
     // the frontend to claim via take_startup_workspace. Seeding happens on the
     // freshly built state objects BEFORE .manage(), so no window can race a
     // half-seeded queue.
     let args: Vec<String> = std::env::args().skip(1).collect();
     let launch_args = launch::parse_launch_args(&args);
+    // Computed BEFORE launch_args.workspace is moved into StartupWorkspace: a
+    // handed-off child (spawned with --workspace and/or argv files) must
+    // neither restore the spawner's persisted folder (suppress_restore, see
+    // StartupWorkspace) nor restore the spawner's window geometry — all
+    // instances share one window-state file, so without skip_initial_state
+    // every child would pixel-stack exactly on top of its parent.
+    let handed_off = launch_args.is_handoff();
     let opened = OpenedFiles::default();
     let allowed = allowlist::AllowedPaths::default();
     let startup_files = launch_args
@@ -126,7 +152,10 @@ pub fn run() {
         .filter_map(|p| p.to_str().map(str::to_string));
     for p in startup_files {
         allowed.allow(&p);
-        opened.extend([p]);
+        opened.extend([OpenedEntry {
+            path: p,
+            readonly: false,
+        }]);
     }
 
     let builder = tauri::Builder::default()
@@ -135,7 +164,10 @@ pub fn run() {
         .manage(PendingWindowFile::default())
         .manage(watcher::FileWatcher::default())
         .manage(allowed)
-        .manage(launch::StartupWorkspace::new(launch_args.workspace))
+        .manage(launch::StartupWorkspace::new(
+            launch_args.workspace,
+            handed_off,
+        ))
         .manage(pdf::PendingPrintHtml::default())
         .manage(history::HistoryLocks::default())
         // Serves the pending PDF-export HTML to the ephemeral print window.
@@ -151,9 +183,19 @@ pub fn run() {
 
     // Must be registered on the builder (before config windows are created):
     // the plugin restores state only in its window-created hook, and "main"
-    // already exists by the time `setup` runs in this app.
+    // already exists by the time `setup` runs in this app. A handed-off child
+    // skips the initial restore for `main` (it still SAVES state on close):
+    // all instances share one state file, so restoring would stack the child
+    // pixel-exactly on the parent that just spawned it — OS-default placement
+    // is the honest "new window" behavior there.
     #[cfg(desktop)]
-    let builder = builder.plugin(tauri_plugin_window_state::Builder::default().build());
+    let builder = {
+        let mut state_plugin = tauri_plugin_window_state::Builder::default();
+        if handed_off {
+            state_plugin = state_plugin.skip_initial_state("main");
+        }
+        builder.plugin(state_plugin.build())
+    };
 
     builder
         .setup(|app| {
@@ -238,14 +280,46 @@ pub fn run() {
 mod tests {
     use super::*;
 
+    fn entry(path: &str, readonly: bool) -> OpenedEntry {
+        OpenedEntry {
+            path: path.into(),
+            readonly,
+        }
+    }
+
     #[test]
     fn opened_files_take_all_drains_and_extend_appends() {
         // Pins the accessor surface: extend appends, take_all drains (mem::take)
         // so a second drain yields nothing — the exactly-once delivery guarantee.
         let of = OpenedFiles::default();
-        of.extend(vec!["/a.md".to_string(), "/b.md".to_string()]);
-        of.extend(vec!["/c.md".to_string()]);
-        assert_eq!(of.take_all(), vec!["/a.md", "/b.md", "/c.md"]);
+        of.extend(vec![entry("/a.md", true), entry("/b.md", true)]);
+        of.extend(vec![entry("/c.md", false)]);
+        let paths: Vec<String> = of.take_all().into_iter().map(|e| e.path).collect();
+        assert_eq!(paths, vec!["/a.md", "/b.md", "/c.md"]);
         assert!(of.take_all().is_empty());
+    }
+
+    #[test]
+    fn opened_files_entries_carry_per_entry_readonly() {
+        // Finder opens queue readonly, argv files editable — the flag must
+        // survive the queue verbatim so the drain can honor each entry's own.
+        let of = OpenedFiles::default();
+        of.extend(vec![entry("/finder.md", true), entry("/argv.md", false)]);
+        let drained = of.take_all();
+        assert_eq!(
+            drained
+                .iter()
+                .map(|e| (e.path.as_str(), e.readonly))
+                .collect::<Vec<_>>(),
+            vec![("/finder.md", true), ("/argv.md", false)]
+        );
+    }
+
+    #[test]
+    fn opened_entry_serializes_path_and_readonly() {
+        // The wire shape the frontend drain relies on: verbatim field names,
+        // no serde renames — matching AssignedFile in windows.rs.
+        let json = serde_json::to_string(&entry("/a.md", true)).unwrap();
+        assert_eq!(json, r#"{"path":"/a.md","readonly":true}"#);
     }
 }

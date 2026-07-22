@@ -129,8 +129,10 @@ pub async fn open_workspace_dialog(
 /// do all of that in its own allowlist, and skipping persistence keeps the two
 /// instances from clobbering each other's restore pointer. Returns whether a
 /// folder was actually picked (false = cancelled), so the frontend can skip
-/// any "opened" UI on cancel. The spawned Child handle is dropped immediately:
-/// dropping it detaches — it never kills or waits on the new instance.
+/// any "opened" UI on cancel. Dropping the spawned Child handle would NOT
+/// detach it — the exited child would linger as a zombie until waited on — so
+/// a throwaway thread reaps it; the thread never influences the child's
+/// lifetime.
 #[tauri::command]
 pub async fn pick_folder_new_instance(app: AppHandle) -> Result<bool, String> {
     let picked =
@@ -142,10 +144,13 @@ pub async fn pick_folder_new_instance(app: AppHandle) -> Result<bool, String> {
     };
     let path = to_path_string(folder)?;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    std::process::Command::new(exe)
+    let mut child = std::process::Command::new(exe)
         .args(["--workspace", &path])
         .spawn()
         .map_err(|e| e.to_string())?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
     Ok(true)
 }
 
