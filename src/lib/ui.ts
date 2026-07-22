@@ -38,7 +38,14 @@ function loadSplit(): boolean {
   }
 }
 
-/** Split-preview mode, persisted across launches. Consumed by split-preview. */
+/**
+ * Split-preview mode, persisted across launches. Consumed by split-preview.
+ * Deliberately NOT moved into the shared settings.json (unlike settings.ts):
+ * it's read once per window at module load and in-memory after, so the
+ * shared-localStorage last-writer-wins only affects the NEXT window's
+ * default — and syncing it through settings would wrongly couple the split
+ * state of every window.
+ */
 export const split: Writable<boolean> = writable(loadSplit())
 
 export function toggleSplit(): void {

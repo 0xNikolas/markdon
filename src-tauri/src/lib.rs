@@ -6,6 +6,7 @@ mod history;
 mod launch;
 mod menu;
 mod pdf;
+mod prefs;
 mod watcher;
 mod windows;
 mod workspace;
@@ -165,9 +166,10 @@ pub fn run() {
     // Computed BEFORE launch_args.workspace is moved into StartupWorkspace: a
     // handed-off child (spawned with --workspace and/or argv files) must
     // neither restore the spawner's persisted folder (suppress_restore, see
-    // StartupWorkspace) nor restore the spawner's window geometry — all
-    // instances share one window-state file, so without skip_initial_state
-    // every child would pixel-stack exactly on top of its parent.
+    // StartupWorkspace) nor touch the spawner's window geometry — all
+    // instances share one window-state file, so a child restoring would
+    // pixel-stack exactly on top of its parent, and a child SAVING would
+    // clobber the parent's geometry (see the window-state plugin block below).
     let handed_off = launch_args.is_handoff();
     let opened = OpenedFiles::default();
     let allowed = allowlist::AllowedPaths::default();
@@ -209,17 +211,20 @@ pub fn run() {
     // Must be registered on the builder (before config windows are created):
     // the plugin restores state only in its window-created hook, and "main"
     // already exists by the time `setup` runs in this app. A handed-off child
-    // skips the initial restore for `main` (it still SAVES state on close):
-    // all instances share one state file, so restoring would stack the child
-    // pixel-exactly on the parent that just spawned it — OS-default placement
-    // is the honest "new window" behavior there.
+    // gets NO plugin at all — neither restore nor save: all instances share
+    // one state file, so restoring would stack the child pixel-exactly on the
+    // parent that just spawned it (OS-default placement is the honest "new
+    // window" behavior), and saving — the plugin's RunEvent::Exit auto-save or
+    // the explicit save in wire_window — would clobber the parent's geometry
+    // with the child's (worse still, `doc-N` labels collide across
+    // instances). wire_window gates its explicit save on the same handoff
+    // signal, which is mandatory: save_window_state panics when the plugin is
+    // unregistered.
     #[cfg(desktop)]
-    let builder = {
-        let mut state_plugin = tauri_plugin_window_state::Builder::default();
-        if handed_off {
-            state_plugin = state_plugin.skip_initial_state("main");
-        }
-        builder.plugin(state_plugin.build())
+    let builder = if handed_off {
+        builder
+    } else {
+        builder.plugin(tauri_plugin_window_state::Builder::default().build())
     };
 
     builder
@@ -298,6 +303,8 @@ pub fn run() {
             history::record_history,
             history::list_history,
             history::read_history_version,
+            prefs::load_prefs,
+            prefs::save_prefs,
             pdf::export_pdf
         ])
         .build(tauri::generate_context!())
