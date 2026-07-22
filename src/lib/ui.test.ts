@@ -18,12 +18,6 @@ const {
   parseSplit,
   split,
   toggleSplit,
-  settingsOpen,
-  openSettings,
-  closeSettings,
-  gotoOpen,
-  openGoto,
-  closeGoto,
   exportTick,
   requestExport,
   fileBreadcrumb,
@@ -93,25 +87,9 @@ describe('split', () => {
   })
 })
 
-describe('settingsOpen', () => {
-  it('openSettings/closeSettings set and clear the flag', () => {
-    expect(get(settingsOpen)).toBe(false)
-    openSettings()
-    expect(get(settingsOpen)).toBe(true)
-    closeSettings()
-    expect(get(settingsOpen)).toBe(false)
-  })
-})
-
-describe('gotoOpen', () => {
-  it('openGoto/closeGoto set and clear the flag', () => {
-    expect(get(gotoOpen)).toBe(false)
-    openGoto()
-    expect(get(gotoOpen)).toBe(true)
-    closeGoto()
-    expect(get(gotoOpen)).toBe(false)
-  })
-})
+// Settings / Go to Line / History visibility moved to overlay.ts — their
+// open/close behavior is asserted in overlay.test.ts (unified activeOverlay
+// store with refuse-if-open semantics).
 
 describe('fileBreadcrumb', () => {
   it('is just "Untitled" with no crumbs for a null path', () => {

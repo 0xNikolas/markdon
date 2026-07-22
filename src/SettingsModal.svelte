@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { getVersion } from '@tauri-apps/api/app'
   import Icon from './Icon.svelte'
-  import { closeSettings } from './lib/ui'
+  import { closeOverlay } from './lib/overlay'
   import { settings, updateSetting, type Settings } from './lib/settings'
   import { APP_SHORTCUTS } from './lib/shortcuts'
   import { focusTrap } from './lib/focusTrap'
@@ -47,12 +47,12 @@
   function onDialogKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
       e.stopPropagation()
-      closeSettings()
+      closeOverlay()
     }
   }
 
   function onBackdropClick(e: MouseEvent) {
-    if (e.target === e.currentTarget) closeSettings()
+    if (e.target === e.currentTarget) closeOverlay()
   }
 
   const FONT_FAMILIES: { value: Settings['fontFamily']; label: string }[] = [
@@ -101,7 +101,7 @@
            order, so the active tab below carries data-autofocus to keep
            initial keyboard focus on the tablist (focusTrap.ts) instead of
            this tiny control. -->
-      <button class="traffic-close" aria-label="Close settings" onclick={closeSettings}>
+      <button class="traffic-close" aria-label="Close settings" onclick={closeOverlay}>
         <span class="glyph" aria-hidden="true"></span>
       </button>
     </div>

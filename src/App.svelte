@@ -33,36 +33,29 @@
   import { searchUi, openFind, openReplace, closeFind, shouldForceCloseFind } from './lib/searchPlugin'
   import { openSourceSearch, clearPendingLine } from './lib/sourceEditor'
   import {
-    settingsOpen,
-    openSettings,
-    gotoOpen,
-    openGoto,
-    closeGoto,
-    historyOpen,
-    openHistory,
-    closeHistory,
     split,
     exportTick,
     isMacPlatform,
     isGotoLineFallbackKey,
     isFindReplaceFallbackKey,
   } from './lib/ui'
+  import { activeOverlay, openOverlay, closeOverlay, anyOverlayOpen } from './lib/overlay'
   import { openWorkspace, initWorkspace } from './lib/workspace'
   import { exportDocument } from './lib/export'
   import { focusTrap } from './lib/focusTrap'
-
-  // Action to run if the user chooses to discard unsaved changes. When set, the
-  // confirm modal is shown. Guards New, Open, and window close uniformly.
-  let pendingAction = $state<(() => void) | null>(null)
 
   // True while `save()` is in flight (native dialogs aren't window-parented,
   // so the modal stays clickable underneath them without this guard).
   let saving = $state(false)
 
   // Run `action` immediately if the document is clean; otherwise defer it behind
-  // the discard-confirm modal so unsaved edits are never silently lost.
+  // the discard-confirm modal (the 'discard' overlay) so unsaved edits are never
+  // silently lost. Guards New, Open, and window close uniformly. openOverlay
+  // refuses if any overlay is already up; every guarded() call site is reached
+  // only when none is (applyRevert closes History first), so the action is never
+  // dropped.
   function guarded(action: () => void) {
-    if (isDirty(get(doc))) pendingAction = action
+    if (isDirty(get(doc))) openOverlay({ kind: 'discard', action })
     else action()
   }
 
@@ -199,40 +192,34 @@
       listenScoped('menu:find', () => routeFind()),
       listenScoped('menu:find_replace', () => routeFindReplace()),
       listenScoped('menu:goto_line', () => {
-        // Same gating as the Cmd+L keydown fallback below: the native Edit
-        // menu item isn't disabled by app state (menu.rs has no such wiring),
-        // so without this the item stays clickable while the discard-guard
-        // modal or Settings is open, stacking GoToLineBar's focus trap behind
-        // them and, on close, stripping `inert` out from under the modal
-        // that's still open (focusTrap.destroy() unconditionally clears it).
-        if (pendingAction !== null || get(settingsOpen) || get(gotoOpen)) return
-        openGoto()
+        // The native Edit menu item isn't disabled by app state (menu.rs has
+        // no such wiring), so it stays clickable while another overlay is up.
+        // openOverlay enforces mutual exclusion at the store: it refuses (no-op)
+        // if one is already open, so Go to Line can't stack its focus trap
+        // behind the discard guard / Settings / History (DEFECT A1).
+        openOverlay({ kind: 'goto' })
       }),
       listenScoped('menu:history', () => {
         // Untitled/never-saved docs have no history — the menu item no-ops.
-        // Same modal-precedence gating as the goto branch above: the native
-        // File-menu item isn't disabled by app state, so without this it would
-        // stack HistoryModal's focus trap behind the discard-guard/Settings/
-        // Go-to-Line overlays (or itself) and strip `inert` on close.
+        // openOverlay handles modal precedence (refuses if any overlay is open).
         if (get(doc).path === null) return
-        if (pendingAction !== null || get(settingsOpen) || get(gotoOpen) || get(historyOpen)) return
-        openHistory()
+        openOverlay({ kind: 'history' })
       }),
       listenScoped('menu:toggle_readonly', () => {
         // The native menu item is always clickable, and muda optimistically
-        // flips its check on click before this fires. Don't clobber an in-flight
-        // discard guard, and don't stack the guard modal (opened by the dirty
-        // path) behind another overlay — same modal-precedence gating as the
-        // goto/history branches above. When blocked, re-sync the check to the
+        // flips its check on click before this fires. Read-only isn't itself an
+        // overlay (toggleReadonly may OPEN the discard guard via the dirty
+        // path), so this can't lean on openOverlay's refusal — it gates on
+        // anyOverlayOpen() directly. When blocked, re-sync the check to the
         // store's real value to undo muda's optimistic flip (the store didn't
         // change, so the subscription won't).
-        if (pendingAction !== null || get(settingsOpen) || get(gotoOpen) || get(historyOpen)) {
+        if (anyOverlayOpen()) {
           syncReadonlyMenu(get(doc).readonly)
           return
         }
         toggleReadonly()
       }),
-      listenScoped('menu:settings', () => openSettings()),
+      listenScoped('menu:settings', () => openOverlay({ kind: 'settings' })),
       listenScoped('menu:open_folder', () => openWorkspace()),
       listenScoped('menu:export', () => exportDocument()),
       listenScoped('window:close-requested', () => guarded(() => getCurrentWindow().destroy())),
@@ -330,9 +317,10 @@
   // Ctrl+L and CM's non-mac selectLine binding is Alt-L (no collision), so
   // ctrlKey is honored there too -- otherwise the fallback would be
   // unreachable by keyboard on Windows/Linux. Unlike the ungated Cmd+F
-  // fallback above, this one explicitly skips while another modal/overlay
-  // is already up (pendingAction, Settings, or the popover itself) so it
-  // can't double-open or steal focus from a higher-priority surface.
+  // fallback above, this one skips while any overlay is already up
+  // (anyOverlayOpen(): the discard guard, Settings, History, or the popover
+  // itself) so it can't double-open or steal focus from a higher-priority
+  // surface.
   //
   // Find and Replace's fallback (isFindReplaceFallbackKey) is checked BEFORE
   // the plain Cmd+F branch and gated the same way as Go to Line: it must run
@@ -341,24 +329,24 @@
   // isFindReplaceFallbackKey's doc comment on why it checks e.code instead).
   const macPlatform = isMacPlatform()
   function handleWindowKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape' && $searchUi.open && pendingAction === null) {
+    if (e.key === 'Escape' && $searchUi.open && $activeOverlay?.kind !== 'discard') {
       e.preventDefault()
       closeFind()
-    } else if (e.key === 'Escape' && $gotoOpen) {
+    } else if (e.key === 'Escape' && $activeOverlay?.kind === 'goto') {
       e.preventDefault()
       clearPendingLine()
-      closeGoto()
+      closeOverlay()
     } else if (isFindReplaceFallbackKey(e)) {
-      if (pendingAction !== null || $settingsOpen || $gotoOpen) return
+      if (anyOverlayOpen()) return
       e.preventDefault()
       routeFindReplace()
     } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
       e.preventDefault()
       routeFind()
     } else if (isGotoLineFallbackKey(e, macPlatform)) {
-      if (pendingAction !== null || $settingsOpen || $gotoOpen) return
+      if (anyOverlayOpen()) return
       e.preventDefault()
-      openGoto()
+      openOverlay({ kind: 'goto' })
     }
   }
 
@@ -368,18 +356,14 @@
   // a best-effort pre-revert snapshot captures the current on-disk state first so
   // the revert is itself reversible.
   //
-  // closeHistory() runs BEFORE guarded(), unconditionally -- not after, and not
-  // only on the immediate-run path. HistoryModal's backdrop sets z-index:100 and
-  // position:fixed always creates a stacking context, so if the buffer already
-  // has unsaved edits, guarded() would defer into pendingAction and the discard
-  // modal (position:fixed, no z-index) would paint UNDER the still-open History
-  // modal -- visible to nobody, but still focus-trapped and clickable-by-nobody.
-  // Closing History first guarantees the discard modal (if guarded() opens one)
-  // is the only overlay left, same as every other guarded() call site (New/Open/
-  // window-close), all of which are triggered from non-modal surfaces to begin
-  // with.
+  // closeOverlay() runs BEFORE guarded(), unconditionally -- not after, and not
+  // only on the immediate-run path. It closes the History overlay so guarded()'s
+  // openOverlay({kind:'discard'}) isn't refused by History still being active
+  // (mutual exclusion), leaving the discard modal as the only overlay left --
+  // same as every other guarded() call site (New/Open/window-close), all
+  // triggered from non-modal surfaces to begin with.
   function applyRevert(content: string) {
-    closeHistory()
+    closeOverlay()
     guarded(() => {
       const p = get(doc).path
       if (p) void recordRevert(p)
@@ -387,13 +371,15 @@
     })
   }
 
+  // Pull the deferred action off the discard overlay, close it, then run it.
   function discard() {
-    const action = pendingAction
-    pendingAction = null
+    const o = get(activeOverlay)
+    const action = o?.kind === 'discard' ? o.action : null
+    closeOverlay()
     action?.()
   }
   function cancel() {
-    pendingAction = null
+    closeOverlay()
     // A cancelled Read-Only toggle left $doc.readonly untouched, so the store
     // subscription won't fire — re-assert the check mark to undo muda's
     // optimistic on-click flip (task 25). Idempotent/harmless for New/Open/
@@ -404,8 +390,8 @@
   // Esc cancels the guard modal, same as clicking Cancel -- but stays inert
   // while a save is in flight (the buttons are disabled(saving) too).
   // stopPropagation keeps this from also tripping the window-level Escape
-  // handler (which only acts on the find bar, and is gated on
-  // pendingAction === null anyway, but this mirrors SettingsModal's pattern).
+  // handler (which only acts on the find bar, and skips while the discard
+  // overlay is up anyway, but this mirrors SettingsModal's pattern).
   function onModalKeydown(e: KeyboardEvent) {
     if (e.key !== 'Escape') return
     e.stopPropagation()
@@ -488,7 +474,7 @@
   <StatusBar content={$doc.content} />
 </main>
 
-{#if pendingAction}
+{#if $activeOverlay?.kind === 'discard'}
   <div class="modal-backdrop">
     <div
       class="modal"
@@ -508,15 +494,15 @@
   </div>
 {/if}
 
-{#if $settingsOpen}
+{#if $activeOverlay?.kind === 'settings'}
   <SettingsModal />
 {/if}
 
-{#if $gotoOpen}
+{#if $activeOverlay?.kind === 'goto'}
   <GoToLineBar />
 {/if}
 
-{#if $historyOpen}
+{#if $activeOverlay?.kind === 'history'}
   <HistoryModal path={$doc.path} readonly={$doc.readonly} onRevert={applyRevert} />
 {/if}
 

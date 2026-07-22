@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from './Icon.svelte'
-  import { workspaceName, fileBreadcrumb, split, toggleSplit, requestExport, openSettings } from './lib/ui'
+  import { workspaceName, fileBreadcrumb, split, toggleSplit, requestExport } from './lib/ui'
+  import { openOverlay } from './lib/overlay'
   import { workspace } from './lib/workspace'
   import wordmarkLight from './assets/brand/wordmark-light.svg?raw'
   import wordmarkDark from './assets/brand/wordmark-dark.svg?raw'
@@ -48,7 +49,9 @@
       <Icon name="file-up" />
       Export
     </button>
-    <button class="btn icon-only" aria-label="Settings" onclick={openSettings}>
+    <!-- openOverlay refuses (silent no-op) if any overlay is already up — that
+         refusal IS the fix for the gear stacking a second focus trap. -->
+    <button class="btn icon-only" aria-label="Settings" onclick={() => openOverlay({ kind: 'settings' })}>
       <Icon name="settings" />
     </button>
   </div>

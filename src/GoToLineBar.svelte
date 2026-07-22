@@ -1,6 +1,7 @@
 <script lang="ts">
   import { doc } from './lib/doc'
-  import { split, closeGoto } from './lib/ui'
+  import { split } from './lib/ui'
+  import { closeOverlay } from './lib/overlay'
   import { goToSourceLine, clearPendingLine } from './lib/sourceEditor'
   import { parseGoto, lineCount } from './lib/gotoLine'
   import { focusTrap } from './lib/focusTrap'
@@ -20,7 +21,7 @@
   function submit() {
     const trimmed = value.trim()
     if (trimmed === '') {
-      closeGoto()
+      closeOverlay()
       return
     }
     const t = parseGoto(trimmed)
@@ -34,7 +35,7 @@
     // pane hasn't mounted yet (queued jump flushes on SourcePane mount).
     if (!get(split)) split.set(true)
     goToSourceLine(t.line, t.col)
-    closeGoto()
+    closeOverlay()
   }
 
   function onInput(e: Event) {
@@ -58,7 +59,7 @@
   // mount can't fire a stale caret jump.
   function close() {
     clearPendingLine()
-    closeGoto()
+    closeOverlay()
   }
 
   // Outside-click dismiss (mirrors FileOpsMenu's onWindowPointerDown pattern

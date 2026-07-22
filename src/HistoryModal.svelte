@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import Icon from './Icon.svelte'
   import ReadonlyMarkdown from './ReadonlyMarkdown.svelte'
-  import { closeHistory } from './lib/ui'
+  import { closeOverlay } from './lib/overlay'
   import { focusTrap } from './lib/focusTrap'
   import {
     loadVersions,
@@ -77,11 +77,11 @@
   function onDialogKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
       e.stopPropagation()
-      closeHistory()
+      closeOverlay()
     }
   }
   function onBackdropClick(e: MouseEvent) {
-    if (e.target === e.currentTarget) closeHistory()
+    if (e.target === e.currentTarget) closeOverlay()
   }
 
   const hasHistory = $derived(entries.length > 0)
@@ -102,7 +102,7 @@
     <div class="header">
       <span class="title-icon" aria-hidden="true"><Icon name="history" size={16} /></span>
       <h2 id="history-title">File History</h2>
-      <button class="close" aria-label="Close file history" onclick={closeHistory}>
+      <button class="close" aria-label="Close file history" onclick={closeOverlay}>
         <Icon name="x" size={16} />
       </button>
     </div>
@@ -164,7 +164,7 @@
           Reverting loads this version as unsaved changes — save to keep it.
         </p>
         <div class="footer-actions">
-          <button class="secondary" onclick={closeHistory}>Close</button>
+          <button class="secondary" onclick={closeOverlay}>Close</button>
           <button
             class="primary"
             disabled={selectedId === null || readonly}

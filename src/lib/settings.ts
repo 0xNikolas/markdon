@@ -9,9 +9,9 @@ import { themePref, type ThemePref } from './theme'
  * CodeMirror split pane), CodeMirror behavior opts (contract only until
  * split-preview lands), and the default export format.
  *
- * `settingsOpen`/`openSettings`/`closeSettings` live in ui.ts (shell owns
- * them) — this module imports nothing from there to avoid a cycle; the modal
- * component wires the two together.
+ * Settings-modal visibility lives in overlay.ts (the shell's mutually
+ * exclusive activeOverlay store) — this module imports nothing from there to
+ * avoid a cycle; the modal component wires the two together.
  */
 export interface Settings {
   version: 1

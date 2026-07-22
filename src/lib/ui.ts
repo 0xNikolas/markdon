@@ -53,32 +53,9 @@ export function toggleSplit(): void {
   })
 }
 
-/** Settings modal visibility. The settings feature renders from this flag. */
-export const settingsOpen: Writable<boolean> = writable(false)
-export function openSettings(): void {
-  settingsOpen.set(true)
-}
-export function closeSettings(): void {
-  settingsOpen.set(false)
-}
-
-/** Go to Line popover visibility. Mirrors settingsOpen/openSettings/closeSettings. */
-export const gotoOpen: Writable<boolean> = writable(false)
-export function openGoto(): void {
-  gotoOpen.set(true)
-}
-export function closeGoto(): void {
-  gotoOpen.set(false)
-}
-
-/** File History modal visibility. Mirrors settingsOpen/openSettings/closeSettings. */
-export const historyOpen: Writable<boolean> = writable(false)
-export function openHistory(): void {
-  historyOpen.set(true)
-}
-export function closeHistory(): void {
-  historyOpen.set(false)
-}
+// Settings / Go to Line / File History visibility moved to overlay.ts, which
+// unifies them (plus the discard guard) into one mutually-exclusive
+// activeOverlay store — see openOverlay/closeOverlay there.
 
 // -- Go to Line keyboard fallback --------------------------------------------
 
