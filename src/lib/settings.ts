@@ -236,10 +236,15 @@ export function initSettings(env: SettingsEnv = realEnv()): () => void {
     .catch(() => {})
 
   const offFocus = env.onFocus(() => {
+    const snapshot = current
     void env
       .loadRemote()
       .then((remote) => {
         if (!active || remote === null) return
+        // A user edit while this load was in flight was already persisted
+        // and must win over the possibly-older file content (same rule as
+        // the boot reconcile above).
+        if (current !== snapshot) return
         applyRemote(remote)
       })
       .catch(() => {})

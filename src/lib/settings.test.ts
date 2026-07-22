@@ -339,6 +339,20 @@ describe('initSettings shared-file routing', () => {
     expect(env.saveRemote).not.toHaveBeenCalled() // the apply must not echo a save
   })
 
+  it('focus re-read never reverts a user edit made while the load was in flight', async () => {
+    const env = fakeEnv()
+    env.setRemote(JSON.stringify(DEFAULTS))
+    teardown = initSettings(env)
+    await flush()
+    env.defer()
+    env.fireFocus() // load_prefs now hangs with pre-edit file content pending
+    updateSetting('tabWidth', 4)
+    env.resolvePending(JSON.stringify(DEFAULTS)) // stale read lands after the edit
+    await flush()
+    expect(get(settings).tabWidth).toBe(4)
+    expect(JSON.parse(env.store.get(SETTINGS_KEY)!).tabWidth).toBe(4)
+  })
+
   it('focus re-read with an identical remote applies and saves nothing', async () => {
     const env = fakeEnv()
     env.setRemote(JSON.stringify(DEFAULTS))

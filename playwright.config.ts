@@ -8,6 +8,7 @@ import { defineConfig, devices } from '@playwright/test'
 // webServer plus e2e/support/tauriInternals.js.
 export default defineConfig({
   testDir: 'e2e',
+  forbidOnly: !!process.env.CI,
   webServer: {
     command: 'bun run build && bunx vite preview --port 4173 --strictPort',
     url: 'http://localhost:4173',

@@ -197,6 +197,19 @@ describe('createPreviewScheduler', () => {
     expect(h.apply).toHaveBeenCalledTimes(1)
   })
 
+  it('a timer armed while visible re-parks when it fires hidden', () => {
+    const h = make()
+    h.scheduler.notify('x')
+    h.hidden = true // window hides while the debounce timer is armed
+    vi.runAllTimers()
+    expect(h.apply).not.toHaveBeenCalled()
+
+    h.hidden = false
+    h.becomeVisible()
+    expect(h.apply).toHaveBeenCalledTimes(1)
+    expect(h.apply).toHaveBeenCalledWith('x')
+  })
+
   it('a hidden park followed by a visible notify times out normally', () => {
     const h = make()
     h.hidden = true

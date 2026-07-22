@@ -97,6 +97,9 @@ export function createPreviewScheduler(opts: PreviewSchedulerOptions): PreviewSc
       if (isHidden()) return
       timer = setTimeout(() => {
         timer = undefined
+        // The window may have hidden while the timer was armed: re-park
+        // (pending stays set) and let the visibility subscription apply it.
+        if (isHidden()) return
         applyPending()
       }, delayFor(md))
     },
