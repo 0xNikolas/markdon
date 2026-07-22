@@ -427,7 +427,10 @@
     <div class="header">
       <span class="label">Open Files</span>
     </div>
-    <div class="tree">
+    <!-- data-testid: the strip and the workspace tree are visually identical
+         .tree containers whose rows can render the same file names — e2e
+         locators need an unambiguous scope for each. -->
+    <div class="tree" data-testid="open-files">
       {#each openFiles as path (path)}
         <!-- Two sibling buttons, not a nested button-in-button: the row opens
              the file, the small trailing button closes it (stopPropagation
@@ -525,7 +528,8 @@
     />
   {/if}
   {#if $workspace.tree}
-    <div class="tree">
+    <!-- data-testid: see the Open Files strip's note above. -->
+    <div class="tree" data-testid="workspace-tree">
       {#each $workspace.tree.dirs as d (d.path)}{@render dirRows(d)}{/each}
       {#each $workspace.tree.files as f (f.path)}{@render fileRow(f)}{/each}
     </div>
