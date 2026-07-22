@@ -302,6 +302,28 @@ describe('readonly memory (per-path, survives switching files)', () => {
     expect(get(doc).readonly).toBe(true)
   })
 
+  it('retargetPath moves the memory when an ancestor folder moves', () => {
+    openDoc('/ws/docs/a.md', '# A', true)
+    retargetPath('/ws/docs', '/ws/notes')
+    openDoc('/tmp/b.md', '# B')
+    openDoc('/ws/notes/a.md', '# A')
+    expect(get(doc).readonly).toBe(true)
+  })
+
+  it('detachIfAffected clears the memory for the detached path', () => {
+    openDoc('/tmp/a.md', '# A', true)
+    detachIfAffected(['/tmp/a.md'])
+    openDoc('/tmp/a.md', '# A')
+    expect(get(doc).readonly).toBe(false)
+  })
+})
+
+describe('adoptNormalization (normalization baseline)', () => {
+  beforeEach(() => {
+    newDoc()
+    resetReadonlyMemory()
+  })
+
   it('adoptNormalization keeps the buffer CLEAN and remembers the baseline', () => {
     // The Crepe editor's first (debounced) emission for an untouched buffer is
     // its re-serialization of what we loaded — not a user edit. Adopting it
@@ -352,20 +374,5 @@ describe('readonly memory (per-path, survives switching files)', () => {
     adoptNormalization('- x\n')
     markSaved('/tmp/a.md', '- x\n')
     expect(isDirty(get(doc))).toBe(false)
-  })
-
-  it('retargetPath moves the memory when an ancestor folder moves', () => {
-    openDoc('/ws/docs/a.md', '# A', true)
-    retargetPath('/ws/docs', '/ws/notes')
-    openDoc('/tmp/b.md', '# B')
-    openDoc('/ws/notes/a.md', '# A')
-    expect(get(doc).readonly).toBe(true)
-  })
-
-  it('detachIfAffected clears the memory for the detached path', () => {
-    openDoc('/tmp/a.md', '# A', true)
-    detachIfAffected(['/tmp/a.md'])
-    openDoc('/tmp/a.md', '# A')
-    expect(get(doc).readonly).toBe(false)
   })
 })
