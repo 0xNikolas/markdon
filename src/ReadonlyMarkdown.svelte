@@ -5,6 +5,9 @@
   import '@milkdown/crepe/theme/common/style.css'
   import '@milkdown/crepe/theme/frame.css'
   import './editor-theme.css' // after the Crepe theme, to override its fonts
+  import { get } from 'svelte/store'
+  import { doc } from './lib/doc'
+  import { resolveImageSrc } from './lib/imagePaste'
 
   // Minimal read-only Crepe render, factored from PreviewPane.svelte but WITHOUT
   // its registerHtmlSource/export wiring: this is a File History version preview,
@@ -34,6 +37,13 @@
         [Crepe.Feature.Toolbar]: false,
         [Crepe.Feature.Placeholder]: false,
         [Crepe.Feature.Cursor]: false,
+      },
+      featureConfigs: {
+        // History versions belong to the open document, so relative pasted-
+        // image links resolve against the same doc path as the live editor.
+        [Crepe.Feature.ImageBlock]: {
+          proxyDomURL: (url: string) => resolveImageSrc(url, get(doc).path),
+        },
       },
     })
     crepe.setReadonly(true) // flips only the editable prop -> replaceAll still dispatches

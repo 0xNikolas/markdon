@@ -19,7 +19,17 @@ import { vi } from 'vitest'
  */
 export const invoke = vi.fn()
 
-vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
+/**
+ * `convertFileSrc` mirrors the real macOS/Linux shape (`asset://localhost/`
+ * + the path) closely enough for imagePaste.test.ts to assert on, and is
+ * exported as a spy so tests can also assert what path it was handed.
+ */
+export const convertFileSrc = vi.fn((path: string) => `asset://localhost/${path}`)
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: (...a: unknown[]) => invoke(...a),
+  convertFileSrc: (path: string) => convertFileSrc(path),
+}))
 
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => ({

@@ -9,9 +9,11 @@
 //! Trash (`trash::delete`) — a permanent unlink is never reachable from here.
 
 use std::fs;
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
-use tauri::State;
+use base64::Engine as _;
+use tauri::{Manager, State};
 
 use crate::allowlist::AllowedPaths;
 
@@ -246,6 +248,73 @@ pub(crate) fn delete_entries_impl(allowed: &AllowedPaths, paths: &[String]) -> R
     Ok(())
 }
 
+// -- pasted images -------------------------------------------------------------
+
+/// Extensions a pasted image may be written with. A closed allowlist (not a
+/// blocklist): anything else -- svg with scripts, html, arbitrary binaries --
+/// is rejected before a single byte touches disk.
+const PASTED_IMAGE_EXTS: [&str; 5] = ["png", "jpg", "jpeg", "gif", "webp"];
+
+/// Pure: the candidate filename for pasted image number `n` of document
+/// `<stem>.md` -- `<stem>-pasted-<n>.<ext>`.
+fn pasted_image_name(stem: &str, n: usize, ext: &str) -> String {
+    format!("{stem}-pasted-{n}.{ext}")
+}
+
+/// Byte twin of commands.rs's `atomic_write` (temp file in the same dir +
+/// rename), minus the permission-preserving step: the target never exists
+/// (the collision loop guarantees it), so there is nothing to preserve.
+fn atomic_write_bytes(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let dir = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(bytes)?;
+    tmp.as_file().sync_all()?;
+    tmp.persist(path).map_err(|e| e.error)?;
+    Ok(())
+}
+
+/// Decode and write a pasted image next to `doc_path` as
+/// `<doc-stem>-pasted-<n>.<ext>` (first free n >= 1). Returns the bare file
+/// NAME (what the markdown link needs) plus the absolute path (what the
+/// command wrapper feeds to the asset-protocol grant). `doc_path` goes
+/// through the same `ensure` gate as read/write -- a webview can only anchor
+/// a paste to a document it was already granted -- and the new file is
+/// granted afterwards so future reads of it pass `ensure` too.
+pub(crate) fn save_pasted_image_impl(
+    allowed: &AllowedPaths,
+    doc_path: &str,
+    data_b64: &str,
+    ext: &str,
+) -> Result<(String, PathBuf), String> {
+    allowed.ensure(doc_path)?;
+    if !PASTED_IMAGE_EXTS.contains(&ext) {
+        return Err("unsupported image type".into());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_b64)
+        .map_err(|e| e.to_string())?;
+    let doc = Path::new(doc_path);
+    let dir = doc.parent().ok_or("no parent")?;
+    let stem = doc
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or("non-UTF-8 name")?;
+    for n in 1.. {
+        let name = pasted_image_name(stem, n, ext);
+        let target = dir.join(&name);
+        if target.exists() {
+            continue;
+        }
+        atomic_write_bytes(&target, &bytes).map_err(|e| e.to_string())?;
+        grant(allowed, &target)?;
+        return Ok((name, target));
+    }
+    unreachable!("the collision counter is unbounded")
+}
+
 // -- tauri command wrappers ---------------------------------------------------
 
 #[tauri::command]
@@ -301,6 +370,26 @@ pub fn duplicate_entry(path: String, allowed: State<'_, AllowedPaths>) -> Result
 #[tauri::command]
 pub fn delete_entries(paths: Vec<String>, allowed: State<'_, AllowedPaths>) -> Result<(), String> {
     delete_entries_impl(allowed.inner(), &paths)
+}
+
+#[tauri::command]
+pub fn save_pasted_image(
+    doc_path: String,
+    data_b64: String,
+    ext: String,
+    app: tauri::AppHandle,
+    allowed: State<'_, AllowedPaths>,
+) -> Result<String, String> {
+    let (name, abs) = save_pasted_image_impl(allowed.inner(), &doc_path, &data_b64, &ext)?;
+    // Runtime asset-protocol grant so convertFileSrc URLs for this exact file
+    // render in the webview (the config scope stays empty -- grants are
+    // per-file, at write time). Best-effort: a failed grant only degrades
+    // display of the (already written, already returned) image, so it must
+    // not turn a successful save into an error.
+    if let Err(e) = app.asset_protocol_scope().allow_file(&abs) {
+        log::warn!("could not allow pasted image in asset scope: {e}");
+    }
+    Ok(name)
 }
 
 #[cfg(test)]
@@ -561,6 +650,87 @@ mod tests {
         let p = duplicate_entry_impl(&a, folder.to_str().unwrap()).unwrap();
         assert_eq!(Path::new(&p), dir.path().join("v1.2-release copy"));
         assert!(Path::new(&p).is_dir());
+    }
+
+    // -- pasted images ---------------------------------------------------------
+
+    #[test]
+    fn pasted_image_name_formats_stem_counter_and_ext() {
+        assert_eq!(pasted_image_name("note", 1, "png"), "note-pasted-1.png");
+        assert_eq!(pasted_image_name("note", 12, "webp"), "note-pasted-12.webp");
+        assert_eq!(
+            pasted_image_name("a.b-draft", 2, "jpg"),
+            "a.b-draft-pasted-2.jpg"
+        );
+    }
+
+    fn b64(bytes: &[u8]) -> String {
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    #[test]
+    fn save_pasted_image_writes_next_to_the_doc_and_grants_it() {
+        let (dir, a) = granted();
+        let doc = dir.path().join("note.md");
+        fs::write(&doc, "# hi").unwrap();
+        let (name, abs) =
+            save_pasted_image_impl(&a, doc.to_str().unwrap(), &b64(b"PNGDATA"), "png").unwrap();
+        assert_eq!(name, "note-pasted-1.png");
+        assert_eq!(abs, dir.path().join("note-pasted-1.png"));
+        assert_eq!(fs::read(&abs).unwrap(), b"PNGDATA");
+        // Granted, so a follow-up read of the image passes ensure.
+        assert!(a.ensure(abs.to_str().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn save_pasted_image_skips_existing_counters() {
+        let (dir, a) = granted();
+        let doc = dir.path().join("note.md");
+        fs::write(&doc, "# hi").unwrap();
+        fs::write(dir.path().join("note-pasted-1.png"), "old").unwrap();
+        let (name, _) =
+            save_pasted_image_impl(&a, doc.to_str().unwrap(), &b64(b"x"), "png").unwrap();
+        assert_eq!(name, "note-pasted-2.png", "n = first free counter >= 1");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("note-pasted-1.png")).unwrap(),
+            "old",
+            "an existing image is never clobbered"
+        );
+    }
+
+    #[test]
+    fn save_pasted_image_rejects_a_non_allowlisted_extension() {
+        let (dir, a) = granted();
+        let doc = dir.path().join("note.md");
+        fs::write(&doc, "# hi").unwrap();
+        for bad in ["svg", "html", "exe", "PNG", "png/../x", ""] {
+            assert!(
+                save_pasted_image_impl(&a, doc.to_str().unwrap(), &b64(b"x"), bad).is_err(),
+                "{bad:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn save_pasted_image_rejects_an_ungranted_doc_path() {
+        let a = AllowedPaths::default();
+        let outside = tempdir().unwrap();
+        let doc = outside.path().join("note.md");
+        fs::write(&doc, "# hi").unwrap();
+        assert!(save_pasted_image_impl(&a, doc.to_str().unwrap(), &b64(b"x"), "png").is_err());
+        assert!(
+            !outside.path().join("note-pasted-1.png").exists(),
+            "nothing written for an unauthorized doc"
+        );
+    }
+
+    #[test]
+    fn save_pasted_image_rejects_invalid_base64() {
+        let (dir, a) = granted();
+        let doc = dir.path().join("note.md");
+        fs::write(&doc, "# hi").unwrap();
+        assert!(save_pasted_image_impl(&a, doc.to_str().unwrap(), "not base64!!", "png").is_err());
+        assert!(!dir.path().join("note-pasted-1.png").exists());
     }
 
     // -- delete ---------------------------------------------------------------

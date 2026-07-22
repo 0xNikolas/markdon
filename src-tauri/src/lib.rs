@@ -259,6 +259,7 @@ pub fn run() {
             fileops::copy_entry,
             fileops::duplicate_entry,
             fileops::delete_entries,
+            fileops::save_pasted_image,
             history::record_history,
             history::list_history,
             history::read_history_version,

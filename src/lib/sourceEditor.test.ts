@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import { EditorState } from '@codemirror/state'
-import { cursorAt, tabExt, readonlyExt, gotoPos } from './sourceEditor'
+import {
+  cursorAt,
+  tabExt,
+  readonlyExt,
+  gotoPos,
+  maxLineLength,
+  LONG_LINE_LIMIT,
+} from './sourceEditor'
 
 /** Build a state with the caret at `head` so we can assert the Ln/Col mapping. */
 function stateAt(doc: string, head: number): EditorState {
@@ -52,6 +59,36 @@ describe('readonlyExt', () => {
   it('leaves the state editable otherwise', () => {
     const state = EditorState.create({ doc: 'x', extensions: readonlyExt(false) })
     expect(state.readOnly).toBe(false)
+  })
+})
+
+describe('maxLineLength', () => {
+  it('is 0 for the empty string', () => {
+    expect(maxLineLength('')).toBe(0)
+  })
+
+  it('is the full length when there is no newline', () => {
+    expect(maxLineLength('abcde')).toBe(5)
+  })
+
+  it('ignores the empty final line after a trailing newline', () => {
+    expect(maxLineLength('abc\n')).toBe(3)
+  })
+
+  it('finds the longest of several lines, including the last', () => {
+    expect(maxLineLength('ab\ncdef\ng')).toBe(4)
+    expect(maxLineLength('ab\ncd\nefghij')).toBe(6) // longest line is the unterminated tail
+  })
+
+  it('counts the \\r of a CRLF ending toward the line length', () => {
+    // One char of inflation per line -- documented as fine at a 100K threshold.
+    expect(maxLineLength('abc\r\nde')).toBe(4)
+  })
+
+  it('flags a synthetic data-URI-sized line while sparing real markdown', () => {
+    const huge = '![](data:image/png;base64,' + 'A'.repeat(LONG_LINE_LIMIT) + ')'
+    expect(maxLineLength(`# ok\n\n${huge}\n`)).toBeGreaterThan(LONG_LINE_LIMIT)
+    expect(maxLineLength('# ok\n\nsome ordinary paragraph\n')).toBeLessThan(LONG_LINE_LIMIT)
   })
 })
 

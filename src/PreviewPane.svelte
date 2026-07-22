@@ -5,7 +5,10 @@
   import '@milkdown/crepe/theme/common/style.css'
   import '@milkdown/crepe/theme/frame.css'
   import './editor-theme.css' // after the Crepe theme, to override its fonts
+  import { get } from 'svelte/store'
   import { registerHtmlSource, unregisterHtmlSource } from './lib/export'
+  import { doc } from './lib/doc'
+  import { resolveImageSrc } from './lib/imagePaste'
 
   interface Props {
     content: string
@@ -45,6 +48,14 @@
         [Crepe.Feature.Toolbar]: false,
         [Crepe.Feature.Placeholder]: false,
         [Crepe.Feature.Cursor]: false,
+      },
+      featureConfigs: {
+        // Same relative-image resolution as Editor.svelte (no onUpload: a
+        // readonly pane never uploads) so pasted `<stem>-pasted-<n>.<ext>`
+        // links render in split preview too.
+        [Crepe.Feature.ImageBlock]: {
+          proxyDomURL: (url: string) => resolveImageSrc(url, get(doc).path),
+        },
       },
     })
     crepe.setReadonly(true) // flips only the editable prop -> replaceAll still dispatches
