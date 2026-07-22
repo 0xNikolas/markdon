@@ -228,19 +228,42 @@ pub fn run() {
     };
 
     builder
-        .setup(|app| {
+        .setup(move |app| {
             // Release error sink: everything log:: (Rust) and the webview's
             // forwarded console/errors (src/lib/logging.ts) land in
             // <app-log-dir>/markdon.log, capped at ~1 MB with one rotation.
             // Deliberately NO TargetKind::Webview (and no attachConsole in
             // JS): the frontend forwards console.warn/error INTO this plugin,
             // so echoing plugin output back to the webview console would loop.
+            // Handed-off instances write markdon-<pid>.log instead: the
+            // plugin's size-cap rotation unlinks the live file, so two
+            // processes sharing one file silently lose whichever side kept
+            // the stale descriptor — exactly the crash lines this sink
+            // exists to preserve. The primary sweeps stale per-pid files.
+            let log_file = if handed_off {
+                Some(format!("markdon-{}", std::process::id()))
+            } else {
+                if let Ok(dir) = app.path().app_log_dir() {
+                    if let Ok(entries) = std::fs::read_dir(&dir) {
+                        for entry in entries.flatten() {
+                            let name = entry.file_name();
+                            let name = name.to_string_lossy();
+                            if name.starts_with("markdon-") && name.ends_with(".log") {
+                                let _ = std::fs::remove_file(entry.path());
+                            }
+                        }
+                    }
+                }
+                None
+            };
             app.handle().plugin(
                 tauri_plugin_log::Builder::default()
                     .level(log::LevelFilter::Info)
                     .targets([
                         Target::new(TargetKind::Stdout),
-                        Target::new(TargetKind::LogDir { file_name: None }),
+                        Target::new(TargetKind::LogDir {
+                            file_name: log_file,
+                        }),
                     ])
                     .max_file_size(1_000_000)
                     .rotation_strategy(RotationStrategy::KeepOne)
