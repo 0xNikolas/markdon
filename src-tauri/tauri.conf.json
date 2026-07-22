@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "markdon",
+  "productName": "Markdon",
   "version": "0.1.0",
   "identifier": "com.markdon.editor",
   "build": {
@@ -12,11 +12,16 @@
   "app": {
     "windows": [
       {
-        "title": "markdon",
+        "title": "Markdon",
         "width": 800,
         "height": 600,
+        "minWidth": 700,
+        "minHeight": 480,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 20, "y": 24 }
       }
     ],
     "security": {

@@ -1,22 +1,49 @@
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, EventTarget, State, WebviewWindow};
 
-/// Holds the single active file watcher. Replacing the `Option` (or setting it to
-/// `None`) drops the previous watcher, which stops its background thread.
-#[derive(Default)]
-pub struct FileWatcher(pub Mutex<Option<RecommendedWatcher>>);
-
-/// Watch `path` for external modifications, emitting `file:external-change` to the
-/// frontend when the file changes on disk. Replaces any previously watched file.
+/// Per-window file watchers, keyed by webview label. In MODE B (multi-window)
+/// two windows can watch two different files at once; keying by label means one
+/// window replacing/stopping its watcher never clobbers another window's.
+/// Dropping a `RecommendedWatcher` (via `remove`/`set`) stops its background
+/// thread.
 ///
-/// The parent directory is watched (non-recursively) rather than the file itself,
-/// so atomic rename-replace saves (used by many editors) are still detected; events
-/// are then filtered down to the target file name.
+/// Poison policy: the inner `Mutex` is `unwrap()`'d on poison deliberately —
+/// see the central note on `crate::OpenedFiles`.
+#[derive(Default)]
+pub struct FileWatcher(Mutex<HashMap<String, RecommendedWatcher>>);
+
+impl FileWatcher {
+    /// Install (or replace) the watcher for `label`. Replacing drops the prior
+    /// `RecommendedWatcher`, stopping its background thread; only this label's
+    /// slot is touched, so other windows' watchers are untouched.
+    pub fn set(&self, label: String, watcher: RecommendedWatcher) {
+        self.0.lock().unwrap().insert(label, watcher);
+    }
+
+    /// Drop `label`'s watcher, if any (stopping its thread). Removing by label
+    /// leaves every other window's watcher in place. No-op when absent.
+    pub fn remove(&self, label: &str) {
+        self.0.lock().unwrap().remove(label);
+    }
+}
+
+/// Watch `path` for external modifications, emitting `file:external-change` to
+/// the calling window (via `emit_to(label)`) when the file changes on disk.
+/// Replaces only THIS window's previously watched file.
+///
+/// The parent directory is watched (non-recursively) rather than the file
+/// itself, so atomic rename-replace saves (used by many editors) are still
+/// detected; events are then filtered down to the target file name.
+///
+/// `window` is injected by Tauri (not supplied by the webview), so the label is
+/// always the real calling window.
 #[tauri::command]
 pub fn watch_file(
     path: String,
+    window: WebviewWindow,
     app: AppHandle,
     state: State<'_, FileWatcher>,
     allowed: State<'_, crate::allowlist::AllowedPaths>,
@@ -34,6 +61,9 @@ pub fn watch_file(
         .map(|p| p.to_path_buf())
         .ok_or_else(|| "path has no parent directory".to_string())?;
 
+    let label = window.label().to_string();
+    // Owned copy for the notify callback (runs on the watcher's own thread).
+    let cb_label = label.clone();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         let Ok(event) = res else { return };
         if !matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
@@ -44,21 +74,82 @@ pub fn watch_file(
             .iter()
             .any(|p| p.file_name().map(|n| n.to_os_string()) == target_name);
         if concerns_target {
-            let _ = app.emit("file:external-change", ());
+            // Route to the owning window only. The target label is ALSO carried
+            // in the payload so the frontend can defensively drop a delivery
+            // that leaked to the wrong webview.
+            let _ = app.emit_to(
+                EventTarget::webview_window(&cb_label),
+                "file:external-change",
+                serde_json::json!({ "target": cb_label }),
+            );
         }
     })
-    .map_err(|e| e.to_string())?;
+    // notify's error Display can echo the watched path; never surface that
+    // to the webview/IPC. Log the real error server-side, return a fixed
+    // message instead (mirrors fileops::delete_entries_impl's trash mapping).
+    .map_err(|e| {
+        log::warn!("could not create file watcher for {path}: {e}");
+        "could not watch file for external changes".to_string()
+    })?;
 
     watcher
         .watch(&dir, RecursiveMode::NonRecursive)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            log::warn!(
+                "could not watch {} for external changes: {e}",
+                dir.display()
+            );
+            "could not watch file for external changes".to_string()
+        })?;
 
-    *state.0.lock().unwrap() = Some(watcher);
+    // Replaces only this window's slot; other windows' watchers are untouched.
+    state.set(label, watcher);
     Ok(())
 }
 
-/// Stop watching the current file, if any.
+/// Stop watching the calling window's current file, if any. Removing by label
+/// leaves every other window's watcher in place.
 #[tauri::command]
-pub fn unwatch(state: State<'_, FileWatcher>) {
-    *state.0.lock().unwrap() = None;
+pub fn unwatch(window: WebviewWindow, state: State<'_, FileWatcher>) {
+    state.remove(window.label());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dummy_watcher() -> RecommendedWatcher {
+        notify::recommended_watcher(|_res: notify::Result<notify::Event>| {}).unwrap()
+    }
+
+    #[test]
+    fn watchers_are_isolated_per_label() {
+        // The core MODE B invariant: two windows watching two files coexist,
+        // and one window's unwatch (a `remove` by label) never drops another's.
+        // Mutations go through the accessors (set/remove); the isolation
+        // assertions read the in-module private map (no query accessor exists).
+        let fw = FileWatcher::default();
+        fw.set("main".into(), dummy_watcher());
+        fw.set("doc-1".into(), dummy_watcher());
+        assert_eq!(fw.0.lock().unwrap().len(), 2);
+
+        // Simulate unwatch("main").
+        fw.remove("main");
+        assert!(!fw.0.lock().unwrap().contains_key("main"));
+        assert!(
+            fw.0.lock().unwrap().contains_key("doc-1"),
+            "removing one window's watcher must leave the other's intact"
+        );
+    }
+
+    #[test]
+    fn reinserting_same_label_replaces_only_that_slot() {
+        let fw = FileWatcher::default();
+        fw.set("doc-1".into(), dummy_watcher());
+        fw.set("doc-2".into(), dummy_watcher());
+        // watch_file for doc-1 again replaces doc-1's watcher, keeps doc-2.
+        fw.set("doc-1".into(), dummy_watcher());
+        assert_eq!(fw.0.lock().unwrap().len(), 2);
+        assert!(fw.0.lock().unwrap().contains_key("doc-2"));
+    }
 }

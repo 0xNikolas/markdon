@@ -1,3 +1,125 @@
-:root { font-family: system-ui, sans-serif; }
+@font-face {
+  font-family: 'Geist';
+  src: url('./assets/fonts/Geist-Variable.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('./assets/fonts/GeistMono-Variable.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+:root {
+  font-family: var(--font-ui);
+
+  --font-ui: 'Geist', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, monospace;
+
+  --bg: #f8fafc;             /* app + editor canvas background */
+  --border: #e2e8f0;         /* hairline dividers (header/status bars) */
+  --surface: #e2e8f0;        /* buttons / badges / code surfaces */
+  --surface-border: transparent; /* dark-only border on primary buttons */
+  --fg-strong: #0f1729;      /* headings, filename, primary buttons */
+  --fg: #1e293b;             /* body text (kept from dark-mode seam) */
+  --fg-secondary: #334155;   /* secondary labels (status text, buttons) */
+  --fg-muted: #64748b;       /* metadata, breadcrumb, mono clusters */
+  --fg-faint: #64748b;       /* sidebar section label (same in both themes) */
+  --accent: #e5682b;         /* ember accent */
+  --accent-tint: rgba(229, 104, 43, 0.08);
+  --accent-tint-strong: rgba(229, 104, 43, 0.16); /* pressed control + hover/active */
+  --accent-tint-fg: #a54619; /* icon/text on --accent-tint bg (a11y fix: --accent itself
+                                 is only ~2.9:1 on the composited light tint, below the
+                                 3:1 UI floor; this darker shade clears 4.5:1 at both the
+                                 8% rest tint and the 16% hover/active tint) */
+  --accent-hover: #d95f28;   /* filled-accent button hover (Save/CTA) */
+  --accent-active: #c2551f;  /* filled-accent button active/pressed */
+  --on-accent: #ffffff;      /* text/icon color on filled-accent buttons */
+  --accent-solid: #bc521e;        /* solid-fill button bg (a11y fix: bare --accent is only
+                                      3.31:1 with white text, below WCAG AA 4.5:1; this
+                                      shade clears 4.5:1+ in both themes) */
+  --accent-solid-hover: #ad4a1a;  /* darkens further on hover (white text stays >=4.5:1;
+                                      also fixes the dark-theme hover regression where the
+                                      old lighter --accent-hover dropped to 2.79:1) */
+  --accent-solid-active: #9e4318; /* darkens further on press, same rationale */
+  --status-live: #22c55e;    /* watch dot (decision: design dot has no fill) */
+  --surface-sunken: #f1f5f9; /* SettingsModal sidebar (design gap, decided) */
+  --surface-hover: #cbd5e1;  /* hover bg for surface-resting controls (button-states) */
+  --surface-active: #b6c2d1; /* active/pressed bg for surface-resting controls */
+  --focus-ring: var(--accent); /* token-based keyboard focus ring, all interactive controls */
+
+  --danger: #b3261e;         /* App.svelte .danger button */
+  --danger-tint: rgba(179, 38, 30, 0.08);        /* danger button hover */
+  --danger-tint-strong: rgba(179, 38, 30, 0.14); /* danger button active */
+  --traffic-close: #ff5f57;        /* SettingsModal traffic-light close dot (macOS red, same both themes) */
+  --traffic-close-hover: #ff443a;
+  --traffic-close-active: #e0362d;
+  --traffic-close-glyph: #4d0000;  /* × glyph shown on hover, macOS-style dark maroon on the red dot */
+  --modal-bg: #ffffff;       /* App.svelte .modal background */
+  --backdrop: rgba(15, 23, 41, 0.45); /* App.svelte .modal-backdrop */
+  --shadow-popover: 0 4px 12px rgba(15, 23, 41, 0.12); /* FileOpsMenu dropdown surface */
+  --error-bg: #fef2f2;       /* Banner.svelte .banner background */
+  --error-fg: #991b1b;       /* Banner.svelte .banner color */
+  --warn-bg: #fef9c3;        /* App.svelte .reload-bar background */
+  --warn-fg: #854d0e;        /* App.svelte .reload-bar color */
+  --warn-border: #fde68a;    /* App.svelte .reload-bar border-bottom */
+  --info-bg: #eff6ff;        /* App.svelte .readonly-bar background */
+  --info-fg: #1e40af;        /* App.svelte .readonly-bar color */
+  --info-border: #bfdbfe;    /* App.svelte .readonly-bar border-bottom */
+  --find-match-bg: rgba(229, 104, 43, 0.2);  /* editor-theme.css .find-match */
+  --find-active-bg: rgba(229, 104, 43, 0.45); /* editor-theme.css .find-active */
+
+  /* Settings-driven editor typography contract (src/lib/settings.ts stamps these
+     inline on <html> on every change, outranking these :root defaults). */
+  --editor-font-family: var(--font-ui);
+  --editor-font-size: 14px;
+  --editor-line-height: 1.6;
+}
+:root[data-theme='dark'] {
+  --bg: #0b0f19;
+  --border: #1e293b;
+  --surface: #1e293b;
+  --surface-border: #334155;
+  --fg-strong: #f8fafc;
+  --fg: #cbd5e1;
+  --fg-secondary: #94a3b8;
+  --fg-muted: #94a3b8;
+  --fg-faint: #64748b;
+  --accent: #e5682b;
+  --accent-tint: rgba(229, 104, 43, 0.15);
+  --accent-tint-strong: rgba(229, 104, 43, 0.22);
+  --accent-tint-fg: var(--accent); /* dark tint bg is dark enough that bare --accent
+                                       already clears 4.5:1 (~4.9:1 rest, ~4.4:1 hover) */
+  --accent-hover: #ef7a43;
+  --accent-active: #d96a30;
+  --status-live: #22c55e;
+  --surface-sunken: #07090f; /* SettingsModal sidebar, from Figma node 11:365 */
+  --surface-hover: #293548;
+  --surface-active: #334155;
+
+  --danger: #ff6666;
+  --danger-tint: rgba(255, 102, 102, 0.12);
+  --danger-tint-strong: rgba(255, 102, 102, 0.2);
+  --modal-bg: #1e293b;
+  --backdrop: rgba(0, 0, 0, 0.7);
+  --shadow-popover: 0 6px 20px rgba(0, 0, 0, 0.5);
+  --error-bg: #2d1414;  --error-fg: #fca5a5;
+  --warn-bg:  #2a2205;  --warn-fg:  #fde68a;  --warn-border: #453a0a;
+  --info-bg:  #0f1e35;  --info-fg:  #93c5fd;  --info-border: #1e3a5f;
+  --find-match-bg: rgba(229, 104, 43, 0.3);
+  --find-active-bg: rgba(229, 104, 43, 0.55);
+}
 html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--fg); }
 #app { height: 100%; }
+
+/* Token-based keyboard focus ring for every interactive control (button-states
+   audit): only shows for keyboard/programmatic focus, never on mouse click. */
+:focus {
+  outline: none;
+}
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}

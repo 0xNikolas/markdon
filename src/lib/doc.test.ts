@@ -1,9 +1,26 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { get } from 'svelte/store'
-import { doc, openDoc, newDoc, edit, markSaved, isDirty, enableEditing } from './doc'
+import {
+  doc,
+  openDoc,
+  newDoc,
+  edit,
+  markSaved,
+  isDirty,
+  enableEditing,
+  enterReadonly,
+  retargetPath,
+  detachIfAffected,
+  revertBuffer,
+  resetReadonlyMemory,
+  adoptNormalization,
+} from './doc'
 
 describe('doc store', () => {
-  beforeEach(() => newDoc()) // reset (also bumps loadId, fine for isolation)
+  beforeEach(() => {
+    newDoc() // reset (also bumps loadId, fine for isolation)
+    resetReadonlyMemory()
+  })
 
   it('openDoc sets path and content, is clean, bumps loadId', () => {
     const before = get(doc).loadId
@@ -89,5 +106,293 @@ describe('doc store', () => {
     openDoc('/tmp/a.md', '# A', true)
     newDoc()
     expect(get(doc).readonly).toBe(false)
+  })
+
+  it('enterReadonly sets the flag on a clean buffer', () => {
+    openDoc('/tmp/a.md', '# A')
+    enterReadonly()
+    const s = get(doc)
+    expect(s.readonly).toBe(true)
+    expect(s.content).toBe('# A')
+    expect(isDirty(s)).toBe(false)
+  })
+
+  it('enterReadonly no-ops on a dirty buffer, preserving the readonly⇒clean invariant', () => {
+    openDoc('/tmp/a.md', '# A')
+    edit('# A edited') // dirty
+    enterReadonly()
+    const s = get(doc)
+    expect(s.readonly).toBe(false) // refused: would strand unsaved edits behind readonly
+    expect(isDirty(s)).toBe(true)
+  })
+
+  it('never lands readonly+dirty via enterReadonly on a dirty buffer (the invariant updateDoc asserts)', () => {
+    openDoc('/tmp/a.md', '# A')
+    edit('# A edited') // dirty
+    expect(() => enterReadonly()).not.toThrow()
+    const s = get(doc)
+    expect(s.readonly && isDirty(s)).toBe(false)
+  })
+
+  it('enterReadonly then enableEditing round-trips, preserving content and savedContent', () => {
+    openDoc('/tmp/a.md', '# A')
+    enterReadonly()
+    enableEditing()
+    const s = get(doc)
+    expect(s.readonly).toBe(false)
+    expect(s.content).toBe('# A')
+    expect(s.savedContent).toBe('# A')
+    expect(isDirty(s)).toBe(false)
+  })
+})
+
+describe('retargetPath', () => {
+  beforeEach(() => newDoc())
+
+  it('rewrites the path when the open file itself is renamed, keeping dirty state', () => {
+    openDoc('/ws/old.md', '# A')
+    edit('# A edited') // dirty
+    const loadId = get(doc).loadId
+    retargetPath('/ws/old.md', '/ws/new.md')
+    const s = get(doc)
+    expect(s.path).toBe('/ws/new.md')
+    expect(s.content).toBe('# A edited')
+    expect(isDirty(s)).toBe(true)
+    expect(s.loadId).toBe(loadId) // no remount
+  })
+
+  it('rewrites the path when an ancestor folder is moved', () => {
+    openDoc('/ws/docs/note.md', '# A')
+    retargetPath('/ws/docs', '/ws/archive/docs')
+    expect(get(doc).path).toBe('/ws/archive/docs/note.md')
+  })
+
+  it('is segment-safe: a sibling folder with a shared string prefix is untouched', () => {
+    openDoc('/ws/proj2/note.md', '# A')
+    retargetPath('/ws/proj', '/ws/renamed')
+    expect(get(doc).path).toBe('/ws/proj2/note.md')
+  })
+
+  it('leaves an unrelated open doc untouched', () => {
+    openDoc('/ws/other.md', '# A')
+    retargetPath('/ws/old.md', '/ws/new.md')
+    expect(get(doc).path).toBe('/ws/other.md')
+  })
+
+  it('is a no-op when nothing is open', () => {
+    newDoc()
+    retargetPath('/ws/old.md', '/ws/new.md')
+    expect(get(doc).path).toBeNull()
+  })
+})
+
+describe('revertBuffer', () => {
+  beforeEach(() => newDoc())
+
+  it('loads content as unsaved changes, preserving savedContent and path, bumping loadId', () => {
+    openDoc('/ws/a.md', '# current')
+    const loadId = get(doc).loadId
+    revertBuffer('# old version')
+    const s = get(doc)
+    expect(s.content).toBe('# old version')
+    expect(s.savedContent).toBe('# current') // disk truth untouched
+    expect(s.path).toBe('/ws/a.md') // still the same file
+    expect(isDirty(s)).toBe(true) // buffer now differs from disk
+    expect(s.loadId).toBe(loadId + 1) // editor remounts with the reverted text
+  })
+
+  it('always makes the buffer editable, even reverting a read-only doc', () => {
+    openDoc('/ws/a.md', '# current', true)
+    revertBuffer('# old version')
+    const s = get(doc)
+    expect(s.readonly).toBe(false)
+    expect(s.content).toBe('# old version')
+  })
+})
+
+describe('detachIfAffected', () => {
+  beforeEach(() => newDoc())
+
+  it('detaches when the open file is exactly a deleted path: keeps the buffer, drops the path, marks dirty', () => {
+    openDoc('/ws/gone.md', '# content')
+    const loadId = get(doc).loadId
+    expect(detachIfAffected(['/ws/gone.md'])).toBe(true)
+    const s = get(doc)
+    expect(s.path).toBeNull()
+    expect(s.content).toBe('# content') // nothing lost
+    expect(s.savedContent).toBe('')
+    expect(isDirty(s)).toBe(true)
+    expect(s.loadId).toBe(loadId) // buffer preserved, no remount
+  })
+
+  it('detaches when the open file is a descendant of a deleted folder', () => {
+    openDoc('/ws/docs/note.md', '# note')
+    expect(detachIfAffected(['/ws/docs'])).toBe(true)
+    expect(get(doc).path).toBeNull()
+  })
+
+  it('clears readonly on detach, preserving the readonly=>clean invariant', () => {
+    // A readonly-opened file that gets deleted: savedContent is cleared (so a
+    // non-empty buffer reads dirty) but readonly locks a FILE, and this doc no
+    // longer has one — leaving readonly=true would strand the buffer dirty
+    // behind the flag.
+    openDoc('/ws/gone.md', '# content', true)
+    detachIfAffected(['/ws/gone.md'])
+    const s = get(doc)
+    expect(s.readonly).toBe(false)
+    expect(isDirty(s)).toBe(true)
+  })
+
+  it('does not detach — nor touch — an unaffected open doc', () => {
+    openDoc('/ws/keep.md', '# keep')
+    expect(detachIfAffected(['/ws/other.md'])).toBe(false)
+    const s = get(doc)
+    expect(s.path).toBe('/ws/keep.md')
+    expect(s.savedContent).toBe('# keep')
+    expect(isDirty(s)).toBe(false)
+  })
+
+  it('is a no-op when nothing is open (path null)', () => {
+    newDoc()
+    expect(detachIfAffected(['/ws/anything.md'])).toBe(false)
+    expect(get(doc).path).toBeNull()
+  })
+})
+
+describe('readonly memory (per-path, survives switching files)', () => {
+  beforeEach(() => {
+    newDoc()
+    resetReadonlyMemory()
+  })
+
+  it('re-opening a readonly-opened path without the flag stays readonly', () => {
+    // The Finder double-click bug: file opened readonly, user switches to
+    // another file via the sidebar (openDoc without the flag), then back —
+    // the readonly state must follow the path, not the call site.
+    openDoc('/tmp/a.md', '# A', true)
+    openDoc('/tmp/b.md', '# B')
+    openDoc('/tmp/a.md', '# A') // sidebar switch: no readonly arg
+    expect(get(doc).readonly).toBe(true)
+  })
+
+  it('a path never opened readonly opens editable', () => {
+    openDoc('/tmp/a.md', '# A')
+    expect(get(doc).readonly).toBe(false)
+  })
+
+  it('enableEditing clears the memory: the path re-opens editable', () => {
+    openDoc('/tmp/a.md', '# A', true)
+    enableEditing()
+    openDoc('/tmp/b.md', '# B')
+    openDoc('/tmp/a.md', '# A')
+    expect(get(doc).readonly).toBe(false)
+  })
+
+  it('enterReadonly (manual toggle) persists across a switch too', () => {
+    openDoc('/tmp/a.md', '# A')
+    enterReadonly()
+    openDoc('/tmp/b.md', '# B')
+    openDoc('/tmp/a.md', '# A')
+    expect(get(doc).readonly).toBe(true)
+  })
+
+  it('markSaved clears the memory (a completed write proves edit intent)', () => {
+    openDoc('/tmp/a.md', '# A', true)
+    markSaved('/tmp/a.md', '# A')
+    openDoc('/tmp/b.md', '# B')
+    openDoc('/tmp/a.md', '# A')
+    expect(get(doc).readonly).toBe(false)
+  })
+
+  it('revertBuffer clears the memory (a revert makes the buffer editable)', () => {
+    openDoc('/tmp/a.md', '# A', true)
+    enableEditing() // History revert is disabled while readonly; lift first
+    enterReadonly()
+    revertBuffer('# older A')
+    openDoc('/tmp/b.md', '# B')
+    openDoc('/tmp/a.md', '# A')
+    expect(get(doc).readonly).toBe(false)
+  })
+
+  it('retargetPath moves the memory with a renamed file', () => {
+    openDoc('/tmp/a.md', '# A', true)
+    retargetPath('/tmp/a.md', '/tmp/renamed.md')
+    openDoc('/tmp/b.md', '# B')
+    openDoc('/tmp/renamed.md', '# A')
+    expect(get(doc).readonly).toBe(true)
+  })
+
+  it('retargetPath moves the memory when an ancestor folder moves', () => {
+    openDoc('/ws/docs/a.md', '# A', true)
+    retargetPath('/ws/docs', '/ws/notes')
+    openDoc('/tmp/b.md', '# B')
+    openDoc('/ws/notes/a.md', '# A')
+    expect(get(doc).readonly).toBe(true)
+  })
+
+  it('detachIfAffected clears the memory for the detached path', () => {
+    openDoc('/tmp/a.md', '# A', true)
+    detachIfAffected(['/tmp/a.md'])
+    openDoc('/tmp/a.md', '# A')
+    expect(get(doc).readonly).toBe(false)
+  })
+})
+
+describe('adoptNormalization (normalization baseline)', () => {
+  beforeEach(() => {
+    newDoc()
+    resetReadonlyMemory()
+  })
+
+  it('adoptNormalization keeps the buffer CLEAN and remembers the baseline', () => {
+    // The Crepe editor's first (debounced) emission for an untouched buffer is
+    // its re-serialization of what we loaded — not a user edit. Adopting it
+    // must not dirty the doc (the phantom-"Edited" bug).
+    openDoc('/tmp/a.md', '* bullet\n')
+    adoptNormalization('- bullet\n')
+    const s = get(doc)
+    expect(s.content).toBe('- bullet\n')
+    expect(s.savedContent).toBe('* bullet\n') // disk truth untouched
+    expect(isDirty(s)).toBe(false)
+  })
+
+  it('a real edit after adoption reads dirty; undoing back to the baseline reads clean', () => {
+    openDoc('/tmp/a.md', '* bullet\n')
+    adoptNormalization('- bullet\n')
+    edit('- bullet\n- more\n')
+    expect(isDirty(get(doc))).toBe(true)
+    edit('- bullet\n')
+    expect(isDirty(get(doc))).toBe(false)
+  })
+
+  it('adoptNormalization refuses a dirty buffer (only untouched loads adopt)', () => {
+    openDoc('/tmp/a.md', '# A')
+    edit('# A typed')
+    adoptNormalization('# A normalized')
+    const s = get(doc)
+    expect(s.content).toBe('# A typed')
+    expect(isDirty(s)).toBe(true)
+  })
+
+  it('adoptNormalization refuses a readonly buffer', () => {
+    openDoc('/tmp/a.md', '# A', true)
+    adoptNormalization('# A normalized')
+    expect(get(doc).content).toBe('# A')
+  })
+
+  it('opening another file clears the baseline', () => {
+    openDoc('/tmp/a.md', '* x\n')
+    adoptNormalization('- x\n')
+    openDoc('/tmp/b.md', '# B')
+    const s = get(doc)
+    expect(s.normalized).toBeNull()
+    expect(isDirty(s)).toBe(false)
+  })
+
+  it('saving the normalized content reads clean afterwards', () => {
+    openDoc('/tmp/a.md', '* x\n')
+    adoptNormalization('- x\n')
+    markSaved('/tmp/a.md', '- x\n')
+    expect(isDirty(get(doc))).toBe(false)
   })
 })

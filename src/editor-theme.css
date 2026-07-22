@@ -2,10 +2,21 @@
    Imported after Crepe's frame theme so these override the theme defaults
    (Crepe's frame theme uses Noto Serif headings + Noto Sans body). */
 .milkdown {
-  --crepe-font-title: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
-    'Helvetica Neue', Arial, sans-serif;
-  --crepe-font-default: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
-    'Helvetica Neue', Arial, sans-serif;
+  --crepe-font-title: var(--font-ui);
+  --crepe-font-default: var(--editor-font-family);
+  --crepe-font-code: var(--font-mono);
+  --crepe-color-background: var(--bg);
+}
+
+/* Dark seam: the runtime-injected crepe dark sheet (theme.ts scopeDarkCss,
+   selector :root[data-theme='dark'] .milkdown, specificity (0,3,0)) still
+   paints crepe's #1a1a1a. The #app id anchor lifts this to (1,2,0) so the id
+   wins regardless of sheet order and the editor canvas stays on var(--bg).
+   DEPENDENCY: the mount id in index.html must stay `app` and the injected
+   dark sheet must not gain an id selector, or the editor reverts to #1a1a1a. */
+:root[data-theme='dark'] #app .milkdown {
+  --crepe-color-background: var(--bg);
+  --crepe-color-on-background: var(--fg);
 }
 
 /* Comfortable centered reading column, like Obsidian/Typora. */
@@ -13,7 +24,18 @@
   max-width: 44rem;
   margin: 0 auto;
   padding: 2.5rem 1.75rem 6rem;
-  line-height: 1.7;
-  font-size: 1.05rem;
-  color: #2e2e2e;
+  line-height: var(--editor-line-height);
+  font-size: var(--editor-font-size);
+  color: var(--fg);
+}
+
+/* In-document search highlights (search.ts / searchPlugin.ts decorations).
+   Global, not scoped -- decorations render inside Milkdown's DOM, out of
+   reach of Svelte's scoped component styles. */
+.find-match {
+  background: var(--find-match-bg);
+  border-radius: 2px;
+}
+.find-match.find-active {
+  background: var(--find-active-bg);
 }

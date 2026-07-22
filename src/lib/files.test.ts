@@ -4,13 +4,17 @@ import { get } from 'svelte/store'
 const invoke = vi.fn()
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
 
-import { doc, newDoc, edit, isDirty, openDoc } from './doc'
-import { open, save, saveAs, openPath } from './files'
+import { doc, newDoc, edit, isDirty, openDoc, docWith } from './doc'
+import { open, save, saveAs, openPath, openInPreferredTarget } from './files'
 import { errorMessage } from './errors'
+import { openList } from './openList'
+import { settings, DEFAULTS } from './settings'
 
 beforeEach(() => {
   invoke.mockReset()
   newDoc()
+  openList.set([])
+  settings.set({ ...DEFAULTS }) // openMode: 'tab' (MODE A) unless a test opts in
 })
 
 describe('openPath', () => {
@@ -29,6 +33,25 @@ describe('openPath', () => {
     invoke.mockRejectedValue('nope')
     await openPath('/tmp/missing.md')
     expect(get(errorMessage)).toContain('Could not open file')
+  })
+
+  it('adds the path to the open list on success', async () => {
+    invoke.mockResolvedValue('# From association')
+    await openPath('/tmp/assoc.md')
+    expect(get(openList)).toEqual(['/tmp/assoc.md'])
+  })
+
+  it('re-opening an already-listed path does not duplicate it', async () => {
+    invoke.mockResolvedValue('# body')
+    await openPath('/tmp/a.md')
+    await openPath('/tmp/a.md')
+    expect(get(openList)).toEqual(['/tmp/a.md'])
+  })
+
+  it('leaves the open list untouched when the read fails', async () => {
+    invoke.mockRejectedValue('nope')
+    await openPath('/tmp/missing.md')
+    expect(get(openList)).toEqual([])
   })
 })
 
@@ -50,12 +73,26 @@ describe('open', () => {
     await open()
     expect(get(doc).path).toBeNull()
   })
+
+  it('adds the picked path to the open list', async () => {
+    invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === 'open_file_dialog' ? { path: '/tmp/a.md', content: '# Loaded' } : undefined,
+    )
+    await open()
+    expect(get(openList)).toEqual(['/tmp/a.md'])
+  })
+
+  it('leaves the open list untouched when the dialog is cancelled', async () => {
+    invoke.mockResolvedValue(null)
+    await open()
+    expect(get(openList)).toEqual([])
+  })
 })
 
 describe('save', () => {
   it('writes to the existing path and records the saved content', async () => {
     // arrange a document already backed by a path, with unsaved edits
-    doc.set({ path: '/tmp/a.md', content: 'body', savedContent: 'old', readonly: false, loadId: 1 })
+    doc.set(docWith({ path: '/tmp/a.md', content: 'body', savedContent: 'old' }))
     invoke.mockResolvedValue(undefined)
     await save()
     expect(invoke).toHaveBeenCalledWith('write_file', { path: '/tmp/a.md', contents: 'body' })
@@ -76,7 +113,7 @@ describe('save', () => {
   })
 
   it('keeps edits typed during an in-flight save dirty', async () => {
-    doc.set({ path: '/tmp/a.md', content: 'v1', savedContent: 'v0', readonly: false, loadId: 1 })
+    doc.set(docWith({ path: '/tmp/a.md', content: 'v1', savedContent: 'v0' }))
     invoke.mockImplementation(async () => {
       edit('v2') // the user types while write_file is in flight
     })
@@ -106,6 +143,75 @@ describe('saveAs', () => {
     await saveAs()
     expect(get(errorMessage)).toContain('Could not save file')
   })
+
+  it('adds the newly saved-as path to the open list', async () => {
+    newDoc()
+    edit('draft')
+    invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === 'save_file_dialog' ? '/tmp/new.md' : undefined,
+    )
+    await saveAs()
+    expect(get(openList)).toEqual(['/tmp/new.md'])
+  })
+})
+
+describe('openInPreferredTarget', () => {
+  it("MODE A ('tab'): delegates to the caller-supplied in-place opener", () => {
+    const opened: string[] = []
+    openInPreferredTarget('/tmp/a.md', (p) => opened.push(p))
+    expect(opened).toEqual(['/tmp/a.md'])
+    expect(invoke).not.toHaveBeenCalledWith('open_document_window', expect.anything())
+  })
+
+  it("MODE B ('window'): spawns a new window and does NOT open in place", () => {
+    settings.set({ ...DEFAULTS, openMode: 'window' })
+    invoke.mockResolvedValue(undefined)
+    const opened: string[] = []
+    openInPreferredTarget('/tmp/a.md', (p) => opened.push(p))
+    expect(invoke).toHaveBeenCalledWith('open_document_window', {
+      path: '/tmp/a.md',
+      readonly: false,
+    })
+    expect(opened).toEqual([]) // focused window keeps its own doc
+  })
+
+  it('MODE B: a readonly open (Finder association) carries the flag into the hand-off', () => {
+    // The Finder-open safety net must survive the window hand-off: the spawned
+    // window opens the file read-only (banner + Enable editing), exactly like
+    // MODE A's in-place openPath(p, true).
+    settings.set({ ...DEFAULTS, openMode: 'window' })
+    invoke.mockResolvedValue(undefined)
+    openInPreferredTarget('/tmp/a.md', () => {}, true)
+    expect(invoke).toHaveBeenCalledWith('open_document_window', {
+      path: '/tmp/a.md',
+      readonly: true,
+    })
+  })
+
+  it("MODE B: falls back to opening in place if spawning the window fails", async () => {
+    settings.set({ ...DEFAULTS, openMode: 'window' })
+    errorMessage.set(null)
+    invoke.mockRejectedValue('no window config to clone')
+    const opened: string[] = []
+    openInPreferredTarget('/tmp/a.md', (p) => opened.push(p))
+    await vi.waitFor(() => expect(opened).toEqual(['/tmp/a.md']))
+    expect(get(errorMessage)).toContain('Could not open a new window')
+  })
+
+  it("MODE B: File > Open routes the picked file to a new window", async () => {
+    settings.set({ ...DEFAULTS, openMode: 'window' })
+    invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === 'open_file_dialog' ? { path: '/tmp/a.md', content: '# Loaded' } : undefined,
+    )
+    await open()
+    expect(invoke).toHaveBeenCalledWith('open_document_window', {
+      path: '/tmp/a.md',
+      readonly: false,
+    })
+    // The focused window's own doc is untouched (the new window loads it).
+    expect(get(doc).path).toBeNull()
+    expect(get(openList)).toEqual([])
+  })
 })
 
 describe('error handling', () => {
@@ -118,7 +224,7 @@ describe('error handling', () => {
 
   it('reports an error when write_file rejects and keeps dirty', async () => {
     errorMessage.set(null)
-    doc.set({ path: '/tmp/a.md', content: 'body', savedContent: 'old', readonly: false, loadId: 1 })
+    doc.set(docWith({ path: '/tmp/a.md', content: 'body', savedContent: 'old' }))
     invoke.mockRejectedValue('disk full')
     await save()
     expect(get(errorMessage)).toContain('Could not save file')

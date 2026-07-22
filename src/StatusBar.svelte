@@ -1,12 +1,11 @@
 <script lang="ts">
+  import { watchStatus, cursor, formatInt, lnColText, watchLabel } from './lib/ui'
+
   interface Props {
-    path: string | null
-    dirty: boolean
     content: string
   }
-  let { path, dirty, content }: Props = $props()
+  let { content }: Props = $props()
 
-  const filename = $derived(path ? path.split('/').pop() : 'Untitled')
   // Count runs of letters/digits (keeping apostrophes/hyphens inside words) so
   // markdown syntax tokens like `#`, `*`, `>` aren't counted as words.
   const words = $derived(
@@ -15,17 +14,61 @@
 </script>
 
 <footer class="status">
-  <span class="name">{filename}{dirty ? ' •' : ''}</span>
-  <span class="words">{words} words</span>
+  <div class="left">
+    <span class="watch">
+      <span class="dot" class:live={$watchStatus === 'watching'}></span>
+      <span class="watch-label">{watchLabel($watchStatus)}</span>
+    </span>
+    <span class="meta">UTF-8</span>
+  </div>
+  <div class="right">
+    {#if $cursor}
+      <span class="meta">{lnColText($cursor)}</span>
+    {/if}
+    <span class="meta">{formatInt(words)} words</span>
+    <span class="meta">{formatInt(content.length)} chars</span>
+  </div>
 </footer>
 
 <style>
   .status {
     display: flex;
     justify-content: space-between;
-    padding: 4px 12px;
-    font: 12px system-ui, sans-serif;
-    border-top: 1px solid #ddd;
-    background: #f7f7f7;
+    align-items: center;
+    padding: 8px 20px;
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+  }
+  .left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .watch {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--fg-muted);
+  }
+  .dot.live {
+    background: var(--status-live);
+  }
+  .watch-label {
+    font: 400 12px var(--font-ui);
+    color: var(--fg-secondary);
+  }
+  .meta {
+    font: 400 12px var(--font-mono);
+    color: var(--fg-muted);
+  }
+  .right {
+    display: flex;
+    align-items: center;
+    gap: 16px;
   }
 </style>

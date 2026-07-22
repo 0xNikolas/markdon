@@ -1,8 +1,10 @@
 import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
 import { get, writable, type Writable } from 'svelte/store'
-import { doc, openDoc } from './doc'
+import { doc, openDoc, isDirty } from './doc'
 import { reportError } from './errors'
+import { watchStatus } from './ui'
+import { recordExternal } from './history'
+import { listenScoped } from './windowing'
 
 /**
  * When set, the open file changed on disk while the buffer had unsaved edits.
@@ -25,13 +27,16 @@ export type ExternalChange = 'ignore' | 'reload' | 'conflict'
  * - `conflict`— buffer has unsaved edits that differ from disk: ask the user.
  */
 export function classifyExternalChange(
-  current: { content: string; savedContent: string },
+  current: { content: string; savedContent: string; normalized?: string | null },
   disk: string,
   declined: string | null,
 ): ExternalChange {
   if (disk === current.content) return 'ignore'
   if (disk === current.savedContent) return 'ignore' // our own save; buffer just has newer edits
-  if (current.content === current.savedContent) return 'reload'
+  // Clean per isDirty — including a buffer sitting on the editor's
+  // normalization baseline (content differs from disk bytes, user typed
+  // nothing): silently adopt the external version rather than prompting.
+  if (!isDirty(current)) return 'reload'
   if (disk === declined) return 'ignore'
   return 'conflict'
 }
@@ -41,6 +46,10 @@ export function reloadFromDisk(content: string): void {
   const current = get(doc)
   if (current.path === null) return
   openDoc(current.path, content, current.readonly)
+  // Record the adopted on-disk version so an external overwrite is recoverable
+  // from File History. Best-effort; 'keep mine' dismissals record
+  // nothing. Rust re-reads the file, so passing the path is enough.
+  void recordExternal(current.path)
   conflict.set(null)
   dismissedDisk = null
 }
@@ -64,14 +73,24 @@ export async function initFileSync(): Promise<() => void> {
     // Switching files invalidates any pending conflict / decline for the old file.
     conflict.set(null)
     dismissedDisk = null
-    if (s.path)
-      invoke('watch_file', { path: s.path }).catch((e) =>
-        reportError(`Could not watch file for external changes: ${String(e)}`),
+    watchStatus.set('idle')
+    if (s.path) {
+      const path = s.path
+      invoke('watch_file', { path }).then(
+        () => {
+          // Guard: a path switch while the invoke was in flight means this
+          // resolution is for a file we no longer watch — don't go green.
+          if (watchedPath === path) watchStatus.set('watching')
+        },
+        (e) => {
+          if (watchedPath === path) watchStatus.set('idle')
+          reportError(`Could not watch file for external changes: ${String(e)}`)
+        },
       )
-    else invoke('unwatch').catch(() => {})
+    } else invoke('unwatch').catch(() => {})
   })
 
-  const unlisten = await listen('file:external-change', async () => {
+  const unlisten = await listenScoped('file:external-change', async () => {
     const before = get(doc)
     if (before.path === null) return
     let disk: string
@@ -100,6 +119,7 @@ export async function initFileSync(): Promise<() => void> {
   return () => {
     unsubDoc()
     unlisten()
+    watchStatus.set('idle')
     invoke('unwatch').catch(() => {})
   }
 }
