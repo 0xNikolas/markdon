@@ -7,10 +7,28 @@ use tauri::{AppHandle, Emitter, EventTarget, State, WebviewWindow};
 /// Per-window file watchers, keyed by webview label. In MODE B (multi-window)
 /// two windows can watch two different files at once; keying by label means one
 /// window replacing/stopping its watcher never clobbers another window's.
-/// Dropping a `RecommendedWatcher` (via `remove`/`insert`) stops its background
+/// Dropping a `RecommendedWatcher` (via `remove`/`set`) stops its background
 /// thread.
+///
+/// Poison policy: the inner `Mutex` is `unwrap()`'d on poison deliberately —
+/// see the central note on `crate::OpenedFiles`.
 #[derive(Default)]
-pub struct FileWatcher(pub Mutex<HashMap<String, RecommendedWatcher>>);
+pub struct FileWatcher(Mutex<HashMap<String, RecommendedWatcher>>);
+
+impl FileWatcher {
+    /// Install (or replace) the watcher for `label`. Replacing drops the prior
+    /// `RecommendedWatcher`, stopping its background thread; only this label's
+    /// slot is touched, so other windows' watchers are untouched.
+    pub fn set(&self, label: String, watcher: RecommendedWatcher) {
+        self.0.lock().unwrap().insert(label, watcher);
+    }
+
+    /// Drop `label`'s watcher, if any (stopping its thread). Removing by label
+    /// leaves every other window's watcher in place. No-op when absent.
+    pub fn remove(&self, label: &str) {
+        self.0.lock().unwrap().remove(label);
+    }
+}
 
 /// Watch `path` for external modifications, emitting `file:external-change` to
 /// the calling window (via `emit_to(label)`) when the file changes on disk.
@@ -85,7 +103,7 @@ pub fn watch_file(
         })?;
 
     // Replaces only this window's slot; other windows' watchers are untouched.
-    state.0.lock().unwrap().insert(label, watcher);
+    state.set(label, watcher);
     Ok(())
 }
 
@@ -93,7 +111,7 @@ pub fn watch_file(
 /// leaves every other window's watcher in place.
 #[tauri::command]
 pub fn unwatch(window: WebviewWindow, state: State<'_, FileWatcher>) {
-    state.0.lock().unwrap().remove(window.label());
+    state.remove(window.label());
 }
 
 #[cfg(test)]
@@ -108,16 +126,15 @@ mod tests {
     fn watchers_are_isolated_per_label() {
         // The core MODE B invariant: two windows watching two files coexist,
         // and one window's unwatch (a `remove` by label) never drops another's.
+        // Mutations go through the accessors (set/remove); the isolation
+        // assertions read the in-module private map (no query accessor exists).
         let fw = FileWatcher::default();
-        {
-            let mut m = fw.0.lock().unwrap();
-            m.insert("main".into(), dummy_watcher());
-            m.insert("doc-1".into(), dummy_watcher());
-        }
+        fw.set("main".into(), dummy_watcher());
+        fw.set("doc-1".into(), dummy_watcher());
         assert_eq!(fw.0.lock().unwrap().len(), 2);
 
         // Simulate unwatch("main").
-        fw.0.lock().unwrap().remove("main");
+        fw.remove("main");
         assert!(!fw.0.lock().unwrap().contains_key("main"));
         assert!(
             fw.0.lock().unwrap().contains_key("doc-1"),
@@ -128,13 +145,10 @@ mod tests {
     #[test]
     fn reinserting_same_label_replaces_only_that_slot() {
         let fw = FileWatcher::default();
-        {
-            let mut m = fw.0.lock().unwrap();
-            m.insert("doc-1".into(), dummy_watcher());
-            m.insert("doc-2".into(), dummy_watcher());
-        }
+        fw.set("doc-1".into(), dummy_watcher());
+        fw.set("doc-2".into(), dummy_watcher());
         // watch_file for doc-1 again replaces doc-1's watcher, keeps doc-2.
-        fw.0.lock().unwrap().insert("doc-1".into(), dummy_watcher());
+        fw.set("doc-1".into(), dummy_watcher());
         assert_eq!(fw.0.lock().unwrap().len(), 2);
         assert!(fw.0.lock().unwrap().contains_key("doc-2"));
     }

@@ -47,8 +47,32 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder}
 /// HTML awaiting pickup by the `pdfprint://` scheme handler. Stashed here
 /// because `WebviewUrl` has no raw-HTML variant; the handler drains it when the
 /// helper window loads. Cleared on teardown so document content does not linger.
+///
+/// Poison policy: the inner `Mutex` is `unwrap()`'d on poison deliberately —
+/// see the central note on `crate::OpenedFiles`.
 #[derive(Default)]
-pub struct PendingPrintHtml(pub Mutex<Option<String>>);
+pub struct PendingPrintHtml(Mutex<Option<String>>);
+
+impl PendingPrintHtml {
+    /// Stash the export HTML (`Some`) or clear it (`None`, on teardown).
+    pub fn set(&self, html: Option<String>) {
+        *self.0.lock().unwrap() = html;
+    }
+
+    /// The stashed HTML as bytes, or an empty document when nothing is pending —
+    /// the body served by the `pdfprint://` scheme handler. This CLONES (it does
+    /// not drain): teardown owns the clear, and `on_page_load` can fire more than
+    /// once, so the body must survive re-reads until the helper tears down. Pure
+    /// enough to unit-test without a running webview.
+    pub fn body(&self) -> Vec<u8> {
+        self.0
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_default()
+            .into_bytes()
+    }
+}
 
 /// Label of the ephemeral print window; also the URI-scheme authority host.
 pub const PRINT_WINDOW_LABEL: &str = "pdf-print";
@@ -72,7 +96,7 @@ pub fn resolve_window_title(doc_title: &str) -> String {
 /// the panel is dismissed (see `present_print_panel` / `teardown`).
 #[tauri::command]
 pub async fn export_pdf(app: AppHandle, html: String, title: String) -> Result<(), String> {
-    *app.state::<PendingPrintHtml>().0.lock().unwrap() = Some(html);
+    app.state::<PendingPrintHtml>().set(Some(html));
 
     // A prior export whose panel was never dismissed could still have a helper.
     if let Some(existing) = app.get_webview_window(PRINT_WINDOW_LABEL) {
@@ -139,7 +163,7 @@ fn teardown(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(PRINT_WINDOW_LABEL) {
         let _ = window.close();
     }
-    *app.state::<PendingPrintHtml>().0.lock().unwrap() = None;
+    app.state::<PendingPrintHtml>().set(None);
 }
 
 /// Run the real AppKit print panel for a WKWebView and block until it is
@@ -181,19 +205,6 @@ fn run_native_print(webview_ptr: *mut std::ffi::c_void, job_title: &str) {
     }
 }
 
-/// Body served by the `pdfprint://` scheme handler: the stashed export HTML, or
-/// an empty document when nothing is pending. Pure so it is unit-testable
-/// without a running webview.
-pub fn pending_print_body(state: &PendingPrintHtml) -> Vec<u8> {
-    state
-        .0
-        .lock()
-        .unwrap()
-        .clone()
-        .unwrap_or_default()
-        .into_bytes()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,24 +212,26 @@ mod tests {
     #[test]
     fn body_is_empty_when_nothing_pending() {
         let state = PendingPrintHtml::default();
-        assert!(pending_print_body(&state).is_empty());
+        assert!(state.body().is_empty());
     }
 
     #[test]
     fn body_returns_the_stashed_html() {
         let state = PendingPrintHtml::default();
-        *state.0.lock().unwrap() = Some("<h1>hi</h1>".to_string());
-        assert_eq!(pending_print_body(&state), b"<h1>hi</h1>".to_vec());
+        state.set(Some("<h1>hi</h1>".to_string()));
+        assert_eq!(state.body(), b"<h1>hi</h1>".to_vec());
     }
 
     #[test]
-    fn stash_take_round_trip_then_clear() {
+    fn set_round_trip_then_clear() {
         let state = PendingPrintHtml::default();
-        *state.0.lock().unwrap() = Some("<p>doc</p>".to_string());
-        assert_eq!(pending_print_body(&state), b"<p>doc</p>".to_vec());
+        state.set(Some("<p>doc</p>".to_string()));
+        assert_eq!(state.body(), b"<p>doc</p>".to_vec());
+        // body clones, not drains: a re-read still returns it until cleared.
+        assert_eq!(state.body(), b"<p>doc</p>".to_vec());
         // teardown clears it
-        *state.0.lock().unwrap() = None;
-        assert!(pending_print_body(&state).is_empty());
+        state.set(None);
+        assert!(state.body().is_empty());
     }
 
     #[test]
