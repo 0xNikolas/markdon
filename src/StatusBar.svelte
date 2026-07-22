@@ -1,16 +1,22 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte'
   import { watchStatus, cursor, formatInt, lnColText, watchLabel } from './lib/ui'
+  import { createWordCounter } from './lib/textMetrics'
 
   interface Props {
     content: string
   }
   let { content }: Props = $props()
 
-  // Count runs of letters/digits (keeping apostrophes/hyphens inside words) so
-  // markdown syntax tokens like `#`, `*`, `>` aren't counted as words.
-  const words = $derived(
-    (content.match(/[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*/gu) ?? []).length,
-  )
+  // Size-adaptive word count: synchronous for small docs, deferred to idle
+  // time above the sync limit -- so the count may be briefly stale on huge
+  // docs (and 0 for the first effect tick). The chars count stays exact.
+  let words = $state(0)
+  const counter = createWordCounter((n) => (words = n))
+  $effect(() => {
+    counter.update(content)
+  })
+  onDestroy(() => counter.dispose())
 </script>
 
 <footer class="status">
