@@ -7,13 +7,15 @@
 //
 // KNOWN LIMITATION (deliberate, not fixed here): images pasted into an
 // untitled doc have no directory to land in, so they stay blob:-backed for the
-// session and die on reload; and relatively-linked images only render for
-// documents whose paths the backend has allowlisted (asset-protocol grants are
-// runtime-only, issued per pasted file).
+// session and die on reload. Relatively-linked images render for any doc
+// inside a granted directory — the backend issues a recursive asset-protocol
+// grant (display-only, runtime-only) for every opened workspace root and every
+// opened/saved file's parent dir, plus a per-file grant for each pasted image.
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import { get } from 'svelte/store'
 import { doc } from './doc'
 import { reportError } from './errors'
+import { joinRelative } from './paths'
 
 const MIME_EXT: Record<string, string> = {
   'image/png': 'png',
@@ -64,17 +66,24 @@ export async function uploadPastedImage(file: File): Promise<string> {
 
 /**
  * Crepe ImageBlock `proxyDomURL`: map a markdown image src to what the <img>
- * tag should actually load. Anything self-describing -- a scheme'd URL
- * (http://, data:, blob:, asset:, ...) or an absolute path -- passes through
- * verbatim; a bare relative name (what uploadPastedImage writes) resolves
- * against the document's parent directory and goes through convertFileSrc so
- * the webview loads it via the asset protocol. Pure over its inputs.
+ * tag should actually load. A scheme'd URL (http://, data:, blob:, asset:,
+ * ...) passes through verbatim; an absolute path goes through convertFileSrc
+ * (verbatim it would be origin-relative in the webview and never render);
+ * a relative src resolves against the document's parent directory, normalized
+ * by joinRelative, then through convertFileSrc so the webview loads it via
+ * the asset protocol. Pure over its inputs.
+ *
+ * A resolved path whose file is missing (or a `../` escaping every granted
+ * root) fails the asset scope/read silently: the <img> errors and Crepe shows
+ * its broken-image state — no banner, no retry; the image appears only once
+ * the node re-renders after the file exists. Fail closed, by design.
  */
 export function resolveImageSrc(src: string, docPath: string | null): string {
-  if (src === '' || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(src) || src.startsWith('/')) return src
+  if (src === '' || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(src)) return src
+  if (src.startsWith('/')) return convertFileSrc(src)
   // No doc path (untitled) -> nothing to resolve against; return unchanged
   // (the link is broken either way, but never fabricate a path).
   if (docPath === null) return src
   const dir = docPath.slice(0, docPath.lastIndexOf('/'))
-  return convertFileSrc(`${dir}/${src}`)
+  return convertFileSrc(joinRelative(dir, src))
 }

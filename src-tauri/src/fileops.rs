@@ -382,10 +382,12 @@ pub fn save_pasted_image(
 ) -> Result<String, String> {
     let (name, abs) = save_pasted_image_impl(allowed.inner(), &doc_path, &data_b64, &ext)?;
     // Runtime asset-protocol grant so convertFileSrc URLs for this exact file
-    // render in the webview (the config scope stays empty -- grants are
-    // per-file, at write time). Best-effort: a failed grant only degrades
-    // display of the (already written, already returned) image, so it must
-    // not turn a successful save into an error.
+    // render in the webview (the config scope stays empty -- grants are issued
+    // per pasted file here and per opened directory in the dialog/workspace
+    // commands, so this one is redundant whenever the doc's parent dir is
+    // already granted; kept as belt-and-braces). Best-effort: a failed grant
+    // only degrades display of the (already written, already returned) image,
+    // so it must not turn a successful save into an error.
     if let Err(e) = app.asset_protocol_scope().allow_file(&abs) {
         log::warn!("could not allow pasted image in asset scope: {e}");
     }

@@ -58,6 +58,18 @@ impl OpenedFiles {
     }
 }
 
+/// Best-effort recursive asset-protocol grant for `dir`, so convertFileSrc
+/// URLs beneath it render in the webview. Display-channel only: `asset:`
+/// appears solely in the CSP's img-src, while read/write IPC still enforces
+/// exact grants via `AllowedPaths::ensure` — the allowlist trust boundary is
+/// unchanged. Mirrors save_pasted_image's posture: a failed grant merely
+/// degrades image display, so it must never fail the operation that granted.
+pub(crate) fn allow_asset_dir(app: &tauri::AppHandle, dir: &std::path::Path) {
+    if let Err(e) = app.asset_protocol_scope().allow_directory(dir, true) {
+        log::warn!("could not add {dir:?} to asset scope: {e}");
+    }
+}
+
 /// Handle to the File-menu "Read Only" CheckMenuItem. The app menu is
 /// app-global (one menu bar for all windows), and `Menu::get` doesn't reach
 /// nested items, so the item is stashed here at menu-build time. The frontend
@@ -71,9 +83,21 @@ pub struct ReadonlyMenuItem(pub tauri::menu::CheckMenuItem<tauri::Wry>);
 /// The frontend calls this on mount (cold start) and whenever a `file:opened`
 /// event fires (already-running app). Draining guarantees each entry is
 /// delivered exactly once regardless of ordering.
+///
+/// Each drained entry's parent directory also gets a recursive asset-scope
+/// grant so the doc's relative image references render. Drain time is the
+/// earliest uniform point with an AppHandle for BOTH delivery routes (macOS
+/// `Opened` events and argv files granted in `run()` pre-Builder), and
+/// rendering always happens after the drain.
 #[tauri::command]
-fn take_opened_files(state: State<'_, OpenedFiles>) -> Vec<OpenedEntry> {
-    state.take_all()
+fn take_opened_files(app: tauri::AppHandle, state: State<'_, OpenedFiles>) -> Vec<OpenedEntry> {
+    let entries = state.take_all();
+    for e in &entries {
+        if let Some(dir) = std::path::Path::new(&e.path).parent() {
+            allow_asset_dir(&app, dir);
+        }
+    }
+    entries
 }
 
 /// Sync the File-menu "Read Only" check mark to the doc store. The

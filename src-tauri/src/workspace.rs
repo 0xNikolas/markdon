@@ -175,7 +175,10 @@ pub fn restore_workspace(
         return Ok(None);
     };
     match allowed.allow_root(Path::new(&root)) {
-        Ok(canon) => Ok(Some(build_workspace(&canon)?)),
+        Ok(canon) => {
+            crate::allow_asset_dir(&app, &canon);
+            Ok(Some(build_workspace(&canon)?))
+        }
         Err(_) => {
             let _ = fs::remove_file(&file);
             Ok(None)
@@ -241,13 +244,17 @@ pub struct StartupHandoff {
 /// fall back to `restore_workspace` and silently adopt the SPAWNER's folder.
 #[tauri::command]
 pub fn take_startup_workspace(
+    app: AppHandle,
     startup: State<'_, crate::launch::StartupWorkspace>,
     allowed: State<'_, AllowedPaths>,
 ) -> Result<StartupHandoff, String> {
     let suppress_restore = startup.suppress_restore();
     let workspace = match startup.take() {
         Some(dir) => match allowed.allow_root(&dir) {
-            Ok(canon) => Some(build_workspace(&canon)?),
+            Ok(canon) => {
+                crate::allow_asset_dir(&app, &canon);
+                Some(build_workspace(&canon)?)
+            }
             Err(_) => None,
         },
         None => None,

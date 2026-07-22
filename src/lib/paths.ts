@@ -22,6 +22,27 @@ export function rewritePrefix(path: string, oldPrefix: string, newPrefix: string
 }
 
 /**
+ * Resolve a relative POSIX path `rel` against absolute directory `dir` into a
+ * normalized absolute path: '' and '.' segments are dropped, '..' pops the
+ * accumulated segments (clamping at '/'). Deterministic normalization matters
+ * because the asset-protocol scope glob-matches the literal path when the
+ * target file does not exist — an un-normalized `dir/./x.png` would be
+ * fragile there. POSIX-only, like every path in this module.
+ */
+export function joinRelative(dir: string, rel: string): string {
+  const out = dir.split('/').filter((s) => s !== '')
+  for (const seg of rel.split('/')) {
+    if (seg === '' || seg === '.') continue
+    if (seg === '..') {
+      out.pop() // already-empty pop clamps at '/'
+    } else {
+      out.push(seg)
+    }
+  }
+  return '/' + out.join('/')
+}
+
+/**
  * Every directory strictly between `root` and `path` (exclusive of both),
  * ordered outermost first — e.g. `/ws` + `/ws/a/b/c.md` -> `/ws/a`, `/ws/a/b`.
  * Segment-safe: a path outside `root` (including a sibling that merely shares

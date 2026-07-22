@@ -47,8 +47,10 @@ pub async fn open_file_dialog(
     app: AppHandle,
     allowed: State<'_, AllowedPaths>,
 ) -> Result<Option<OpenedFile>, String> {
+    let dialog_app = app.clone();
     let picked = tauri::async_runtime::spawn_blocking(move || {
-        app.dialog()
+        dialog_app
+            .dialog()
             .file()
             .add_filter("Markdown", &["md", "markdown"])
             .blocking_pick_file()
@@ -59,6 +61,12 @@ pub async fn open_file_dialog(
     let path = to_path_string(file)?;
     let content = crate::commands::read_file_impl(&path)?;
     allowed.allow(&path);
+    // Asset (display-only) grant for the picked file's directory so relative
+    // image references in the doc render; the read/write allowlist above stays
+    // exact-file. Same trust anchor as a workspace pick: a real user dialog.
+    if let Some(dir) = std::path::Path::new(&path).parent() {
+        crate::allow_asset_dir(&app, dir);
+    }
     Ok(Some(OpenedFile { path, content }))
 }
 
@@ -73,8 +81,9 @@ pub async fn save_file_dialog(
     app: AppHandle,
     allowed: State<'_, AllowedPaths>,
 ) -> Result<Option<String>, String> {
+    let dialog_app = app.clone();
     let picked = tauri::async_runtime::spawn_blocking(move || {
-        let mut b = app.dialog().file();
+        let mut b = dialog_app.dialog().file();
         for f in effective_filters(filters) {
             let exts: Vec<&str> = f.extensions.iter().map(String::as_str).collect();
             b = b.add_filter(f.name, &exts);
@@ -95,6 +104,11 @@ pub async fn save_file_dialog(
     let Some(file) = picked else { return Ok(None) };
     let path = to_path_string(file)?;
     allowed.allow(&path);
+    // A Save As establishes a new doc directory whose pre-existing relative
+    // image references should render — display-only grant, like open.
+    if let Some(dir) = std::path::Path::new(&path).parent() {
+        crate::allow_asset_dir(&app, dir);
+    }
     Ok(Some(path))
 }
 
@@ -118,6 +132,9 @@ pub async fn open_workspace_dialog(
     };
     let path = to_path_string(folder)?;
     let canon = allowed.allow_root(std::path::Path::new(&path))?;
+    // Recursive asset (display-only) grant mirroring the allowlist root: any
+    // doc in the workspace can render its relative image references.
+    crate::allow_asset_dir(&app, &canon);
     Ok(Some(crate::workspace::open_result(&app, &canon)?))
 }
 

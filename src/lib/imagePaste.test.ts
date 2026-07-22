@@ -89,18 +89,24 @@ describe('uploadPastedImage', () => {
 })
 
 describe('resolveImageSrc', () => {
-  it('passes self-describing URLs through verbatim', () => {
+  it('passes scheme’d URLs through verbatim', () => {
     for (const src of [
       'https://example.com/a.png',
       'data:image/png;base64,AAAA',
       'blob:mock-url',
       'asset://localhost/x.png',
-      '/abs/path/x.png',
       '',
     ]) {
       expect(resolveImageSrc(src, '/ws/note.md')).toBe(src)
     }
     expect(convertFileSrc).not.toHaveBeenCalled()
+  })
+
+  it('routes an absolute path through convertFileSrc (verbatim would be origin-relative)', () => {
+    expect(resolveImageSrc('/abs/path/x.png', '/ws/note.md')).toBe(
+      'asset://localhost//abs/path/x.png',
+    )
+    expect(convertFileSrc).toHaveBeenCalledWith('/abs/path/x.png')
   })
 
   it('resolves a bare relative name against the doc parent dir via convertFileSrc', () => {
@@ -112,6 +118,20 @@ describe('resolveImageSrc', () => {
 
   it('resolves a relative subdirectory link too', () => {
     expect(resolveImageSrc('img/x.png', '/ws/note.md')).toBe('asset://localhost//ws/img/x.png')
+  })
+
+  it('normalizes ./ prefixes instead of emitting dir/./x.png', () => {
+    expect(resolveImageSrc('./diagram.png', '/ws/notes/note.md')).toBe(
+      'asset://localhost//ws/notes/diagram.png',
+    )
+    expect(convertFileSrc).toHaveBeenCalledWith('/ws/notes/diagram.png')
+  })
+
+  it('resolves ../ links against the doc parent dir deterministically', () => {
+    expect(resolveImageSrc('../img/x.png', '/ws/notes/note.md')).toBe(
+      'asset://localhost//ws/img/x.png',
+    )
+    expect(convertFileSrc).toHaveBeenCalledWith('/ws/img/x.png')
   })
 
   it('returns a relative name unchanged when the doc is untitled', () => {
