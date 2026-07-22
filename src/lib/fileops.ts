@@ -7,8 +7,6 @@ import { openList, retargetOpen, removeOpenSubtree } from './openList'
 import { readonlyMemory } from './readonlyMemory'
 import { isSelfOrDescendant } from './paths'
 
-export { isSelfOrDescendant }
-
 /**
  * Sidebar file-operations state and the app-internal file clipboard, plus the
  * command wrappers that drive the Rust file-ops backend. The backend re-derives

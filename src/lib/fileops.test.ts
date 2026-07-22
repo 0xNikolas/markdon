@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { get } from 'svelte/store'
+import { isSelfOrDescendant } from './paths'
 
 const invoke = vi.fn()
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
@@ -13,7 +14,6 @@ import {
   folderPaths,
   folderRows,
   pasteTargetDir,
-  isSelfOrDescendant,
   selection,
   focused,
   clearSelection,

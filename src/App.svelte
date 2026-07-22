@@ -51,9 +51,12 @@
   // Run `action` immediately if the document is clean; otherwise defer it behind
   // the discard-confirm modal (the 'discard' overlay) so unsaved edits are never
   // silently lost. Guards New, Open, and window close uniformly. openOverlay
-  // refuses if any overlay is already up; every guarded() call site is reached
-  // only when none is (applyRevert closes History first), so the action is never
-  // dropped.
+  // refuses if any overlay is already up: for the gated menu paths (goto,
+  // history, readonly) that can't happen, and for the ungated ones (Cmd+N,
+  // Cmd+O, window close while e.g. Settings is open on a dirty doc) the action
+  // deliberately no-ops — the buffer is left untouched, which is the safe
+  // replacement for the old behavior of stacking the discard modal invisibly
+  // behind the open overlay.
   function guarded(action: () => void) {
     if (isDirty(get(doc))) openOverlay({ kind: 'discard', action })
     else action()

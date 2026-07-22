@@ -2,7 +2,8 @@
   import { focusTrap, dialogDismissHandlers } from './lib/focusTrap'
   import { portal } from './lib/portal'
   import { workspace } from './lib/workspace'
-  import { isSelfOrDescendant, folderRows } from './lib/fileops'
+  import { isSelfOrDescendant } from './lib/paths'
+  import { folderRows } from './lib/fileops'
 
   interface Props {
     /** Paths being moved — used to disable invalid destinations. */
