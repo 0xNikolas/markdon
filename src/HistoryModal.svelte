@@ -13,13 +13,13 @@
     type HistoryEntry,
   } from './lib/history'
 
-  // File History modal (task 24). Left: the version list, newest-first. Right: a
+  // File History modal. Left: the version list, newest-first. Right: a
   // read-only render of the selected version. Footer reverts the selected version
   // INTO THE BUFFER as unsaved changes (App.svelte's applyRevert routes through
   // the discard guard); disk truth is untouched until the user saves.
   interface Props {
     path: string | null
-    // Read-only docs (task 25): revert implies edit intent, so the Revert
+    // Read-only docs: revert implies edit intent, so the Revert
     // button is disabled while the buffer is locked (App.svelte drives this
     // from $doc.readonly). Viewing history stays allowed.
     readonly?: boolean

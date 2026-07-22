@@ -47,7 +47,7 @@ export function reloadFromDisk(content: string): void {
   if (current.path === null) return
   openDoc(current.path, content, current.readonly)
   // Record the adopted on-disk version so an external overwrite is recoverable
-  // from File History (task 24). Best-effort; 'keep mine' dismissals record
+  // from File History. Best-effort; 'keep mine' dismissals record
   // nothing. Rust re-reads the file, so passing the path is enough.
   void recordExternal(current.path)
   conflict.set(null)

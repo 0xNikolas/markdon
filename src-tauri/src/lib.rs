@@ -44,7 +44,7 @@ impl OpenedFiles {
     }
 }
 
-/// Handle to the File-menu "Read Only" CheckMenuItem (task 25). The app menu is
+/// Handle to the File-menu "Read Only" CheckMenuItem. The app menu is
 /// app-global (one menu bar for all windows), and `Menu::get` doesn't reach
 /// nested items, so the item is stashed here at menu-build time. The frontend
 /// pushes the checked state from the doc store — the single source of truth —
@@ -61,7 +61,7 @@ fn take_opened_files(state: State<'_, OpenedFiles>) -> Vec<String> {
     state.take_all()
 }
 
-/// Sync the File-menu "Read Only" check mark to the doc store (task 25). The
+/// Sync the File-menu "Read Only" check mark to the doc store. The
 /// frontend calls this on mount and whenever `$doc.readonly` changes, so the
 /// store stays the single source of truth: Finder read-only opens, the banner's
 /// "Enable editing", and the manual toggle all flow through the same store
@@ -143,7 +143,7 @@ pub fn run() {
             let (menu, readonly_item) = menu::build(app)?;
             app.set_menu(menu)?;
             // Stash the "Read Only" CheckMenuItem so set_readonly_menu_state can
-            // drive its checked state from the doc store (task 25).
+            // drive its checked state from the doc store.
             app.manage(ReadonlyMenuItem(readonly_item));
             app.on_menu_event(|app_handle, event| {
                 // Menu item ids ARE the event names (e.g. "menu:open"). An app-

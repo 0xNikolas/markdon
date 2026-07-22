@@ -1,7 +1,7 @@
 // The ProseMirror wiring for in-document search. Imports ONLY from
 // '@milkdown/kit/prose/*' and '@milkdown/kit/utils' -- never 'prosemirror-*'
 // directly -- so `Plugin`/`Decoration`/etc. are the exact instances Milkdown
-// itself uses (see spec-search.json's verified re-export chain).
+// itself uses, not a second, incompatible copy of the same classes.
 import { Plugin, PluginKey } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import type { Node } from '@milkdown/kit/prose/model'

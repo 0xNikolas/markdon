@@ -24,11 +24,10 @@ export interface Settings {
   autoCloseBrackets: boolean
   exportFormat: 'html' | 'md' | 'pdf'
   /**
-   * Where a newly opened file lands (task 21). 'tab' = MODE A, add to the
-   * sidebar's Open Files list in this window (today's behavior). 'window' =
-   * MODE B, spawn a second app window — Stage 2 only; until it lands,
-   * `openInPreferredTarget` (files.ts) falls back to in-place for both
-   * values, so the preference is safe to expose early.
+   * Where a newly opened file lands. 'tab' = MODE A, add to the sidebar's
+   * Open Files list in this window (today's behavior). 'window' = MODE B,
+   * spawn a second app window via `openInPreferredTarget` (files.ts) —
+   * falling back to opening in-place only if the spawn itself fails.
    */
   openMode: 'tab' | 'window'
 }
@@ -90,10 +89,9 @@ export function parseSettings(raw: string | null): Settings {
 }
 
 /**
- * Map a font-family id to its CSS stack. Deviation from spec-settings.json:
- * the repo's existing sans stack token is `--font-ui` (theme/shell/header
- * already use it), not `--font-sans` as the spec names it — reality wins,
- * the value is identical either way.
+ * Map a font-family id to its CSS stack. Reuses the existing `--font-ui`
+ * sans stack token (theme/shell/header already use it) rather than
+ * introducing a second, redundant token for the same value.
  */
 export function fontStack(f: Settings['fontFamily']): string {
   if (f === 'geist-mono') return 'var(--font-mono)'

@@ -76,7 +76,7 @@ pub fn watch_file(
         if concerns_target {
             // Route to the owning window only. The target label is ALSO carried
             // in the payload so the frontend can defensively drop a delivery
-            // that leaked to the wrong webview (amendment wave6 #8).
+            // that leaked to the wrong webview.
             let _ = app.emit_to(
                 EventTarget::webview_window(&cb_label),
                 "file:external-change",

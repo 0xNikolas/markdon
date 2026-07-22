@@ -38,8 +38,8 @@ export async function open(): Promise<void> {
 }
 
 /**
- * Single choke-point for "open `path`, honoring the openMode preference"
- * (task 21). MODE A ('tab', the default) opens in-place via the caller-supplied
+ * Single choke-point for "open `path`, honoring the openMode preference".
+ * MODE A ('tab', the default) opens in-place via the caller-supplied
  * `openInPlace` — the same guarded `openPath()` App.svelte already used. MODE B
  * ('window') spawns a second app window to host `path` and leaves the focused
  * window's own doc untouched. If spawning fails (e.g. the command is somehow
@@ -73,7 +73,7 @@ export async function save(): Promise<void> {
   try {
     await invoke('write_file', { path: state.path, contents: state.content })
     markSaved(state.path, state.content)
-    // Best-effort File History snapshot (task 24): never awaited into the save
+    // Best-effort File History snapshot: never awaited into the save
     // outcome, errors swallowed inside recordSave — a history failure must never
     // turn a good save into a reported failure.
     void recordSave(state.path)

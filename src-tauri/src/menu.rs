@@ -4,7 +4,7 @@ use tauri::menu::{
 use tauri::{App, Wry};
 
 /// Builds the app menu and returns it alongside the "Read Only" CheckMenuItem
-/// handle (task 25). `Menu::get` only walks top-level submenus, not nested
+/// handle. `Menu::get` only walks top-level submenus, not nested
 /// items, so the readonly item can't be looked up by id after the fact — the
 /// caller stores this handle in managed state and drives its checked state from
 /// the doc store (the single source of truth) via `set_readonly_menu_state`.
@@ -105,8 +105,8 @@ mod tests {
     // it lazily with `.and_then(|s| s.parse().ok())` -- a bad string is
     // swallowed silently (no accelerator, no error), so `cargo build`/`cargo
     // test` alone wouldn't catch a typo'd accelerator. Parse the exact
-    // strings used above directly against muda to verify the amendment's
-    // "cargo build/test check" duty for CmdOrCtrl+,.
+    // strings used above directly against muda so a typo in CmdOrCtrl+,
+    // (or any other accelerator here) fails loudly instead of silently.
     use std::str::FromStr;
 
     #[test]

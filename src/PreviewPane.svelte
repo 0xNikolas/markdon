@@ -23,8 +23,8 @@
   let lastPushed = untrack(() => content)
   let timer: ReturnType<typeof setTimeout> | undefined
   // Export's HTML source while split mode is mounted -- registered once this
-  // pane's Crepe instance exists so export works in split mode too
-  // (amendments.md #5: Editor.svelte AND PreviewPane share the slot).
+  // pane's Crepe instance exists so export works in split mode too. Editor.svelte
+  // and PreviewPane both share the same export slot, one at a time.
   let source: (() => string) | undefined
   // Set in onDestroy; checked after `ready` resolves so a pane unmounted
   // mid-create (fast split-mode toggle) never registers a closure over an

@@ -2,7 +2,7 @@ import { writable, type Writable } from 'svelte/store'
 import { isSelfOrDescendant, rewritePrefix } from './paths'
 
 /**
- * The sidebar's "Open Files" list (task 21, MODE A / Stage 1): an ordered,
+ * The sidebar's "Open Files" list (MODE A): an ordered,
  * de-duplicated list of every opened document's PATH ONLY — never buffers.
  * The single-document model (doc.ts) is untouched: there is exactly one live
  * buffer, addressed by `$doc.path`. Switching to a list entry re-reads it

@@ -21,7 +21,7 @@
   --border: #e2e8f0;         /* hairline dividers (header/status bars) */
   --surface: #e2e8f0;        /* buttons / badges / code surfaces */
   --surface-border: transparent; /* dark-only border on primary buttons */
-  --fg-strong: #0f1729;      /* headings, wordmark, filename */
+  --fg-strong: #0f1729;      /* headings, filename, primary buttons */
   --fg: #1e293b;             /* body text (kept from dark-mode seam) */
   --fg-secondary: #334155;   /* secondary labels (status text, buttons) */
   --fg-muted: #64748b;       /* metadata, breadcrumb, mono clusters */

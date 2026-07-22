@@ -276,7 +276,7 @@
   {#if openFiles.length > 0}
     <!-- VS Code "Open Editors"-style strip: every opened document, in- or
          out-of-workspace, so there's one consistent surface for "what's on
-         screen" rather than the tree alone. Paths-only (task 21 Stage 1) --
+         screen" rather than the tree alone. Paths-only --
          the single-doc model is unchanged, this is just a switch list. -->
     <div class="header">
       <span class="label">Open Files</span>

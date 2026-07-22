@@ -59,8 +59,8 @@
     else action()
   }
 
-  // Push the read-only flag to the native File-menu "Read Only" check mark
-  // (task 25). The doc store is the single source of truth: Finder read-only
+  // Push the read-only flag to the native File-menu "Read Only" check mark.
+  // The doc store is the single source of truth: Finder read-only
   // opens, the banner's "Enable editing" button, and the manual toggle all
   // change $doc.readonly, and the onMount subscription funnels every change
   // through here. Also called directly when a toggle is refused/cancelled, to
@@ -72,7 +72,7 @@
     void invoke('set_readonly_menu_state', { checked }).catch(() => {})
   }
 
-  // File-menu "Read Only" toggle handler (task 25). Three cases off the store:
+  // File-menu "Read Only" toggle handler. Three cases off the store:
   //   - already read-only  -> lift it (identical to the banner's Enable editing)
   //   - editable + clean   -> enter read-only immediately
   //   - editable + dirty   -> route through the discard guard, entering
@@ -119,9 +119,9 @@
   }
 
   // Single entry point for opening a path from the sidebar (Open Files strip
-  // or Workspace tree alike) -- routes through openInPreferredTarget (task
-  // 21's tab/window choke-point; Stage 1 always opens in-place) wrapping the
-  // existing guarded openPath. A click on the already-active row is a no-op.
+  // or Workspace tree alike) -- routes through openInPreferredTarget (the
+  // tab/window choke-point) wrapping the existing guarded openPath. A click
+  // on the already-active row is a no-op.
   function handleOpenFile(path: string) {
     if (path === get(doc).path) return
     openInPreferredTarget(path, (p) => guarded(() => openPath(p)))
@@ -231,7 +231,7 @@
     // whichever window is focused at Finder-open time). Running both calls
     // unawaited let a freshly-spawned window steal a Finder-open meant for a
     // different window, or let the two hand-offs clobber each other with no
-    // error surfaced (wave6 risk register item 5). Awaiting the per-window
+    // error surfaced. Awaiting the per-window
     // hand-off FIRST, and only falling back to the global drain when this
     // window has no assignment of its own, makes the two mutually exclusive
     // instead of concurrent.
@@ -253,7 +253,7 @@
       }
       exportDocument()
     })
-    // Mirror $doc.readonly onto the native "Read Only" check mark (task 25).
+    // Mirror $doc.readonly onto the native "Read Only" check mark.
     // Fires on mount (seeding the check to the current state) and on every
     // readonly transition; gated on the flag actually changing so ordinary
     // keystroke-driven store updates don't spam the IPC bridge.
@@ -382,7 +382,7 @@
     closeOverlay()
     // A cancelled Read-Only toggle left $doc.readonly untouched, so the store
     // subscription won't fire — re-assert the check mark to undo muda's
-    // optimistic on-click flip (task 25). Idempotent/harmless for New/Open/
+    // optimistic on-click flip. Idempotent/harmless for New/Open/
     // close-cancel, where readonly didn't change either.
     syncReadonlyMenu(get(doc).readonly)
   }
@@ -432,7 +432,7 @@
     <!-- Always rendered, not gated on whether a workspace is open: Sidebar
          itself renders an empty-state panel when there's no folder yet, which
          teaches the feature and gives openWorkspace() a discoverable entry
-         point beyond the File menu (sidebar-fix, task 12). -->
+         point beyond the File menu. -->
     <Sidebar
       activePath={$doc.path}
       openFiles={$openList}

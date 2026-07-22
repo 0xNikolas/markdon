@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { writable, type Writable } from 'svelte/store'
 
 /**
- * File History (task 24): the app-managed local version store lives in Rust
+ * File History: the app-managed local version store lives in Rust
  * (src-tauri/src/history.rs). This module is the thin frontend surface — the
  * stores the HistoryModal renders from, best-effort record wrappers, and the
  * pure formatters (unit-tested) that turn Rust's raw ms/bytes into row labels.

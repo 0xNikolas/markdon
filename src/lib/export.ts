@@ -18,14 +18,11 @@ import { reportError } from './errors'
  * dialog. That OS dialog owns file naming/location, so the pdf path calls
  * neither save_file_dialog nor write_file.
  *
- * Deviation from spec-export.json: this repo's settings.ts (landed by the
- * settings feature) already owns exportFormat as the literal union
- * 'html' | 'md' under key 'markdon.settings.v1', not this spec's own
- * 'html' | 'markdown' / 'markdon.settings' proposal -- reality wins per the
- * amendments; this module imports Settings['exportFormat'] rather than
- * defining a parallel type, and never calls loadSettings/parseSettings
- * itself (settings.ts is already initialized once via main.ts's
- * initSettings()).
+ * This module imports Settings['exportFormat'] rather than defining a
+ * parallel type, since settings.ts already owns exportFormat as the
+ * canonical literal union under key 'markdon.settings.v1'. It never calls
+ * loadSettings/parseSettings itself -- settings.ts is already initialized
+ * once via main.ts's initSettings().
  */
 export type ExportFormat = Settings['exportFormat']
 
@@ -80,8 +77,7 @@ export function escapeHtml(s: string): string {
  * Wrap a serialized ProseMirror-HTML fragment into a standalone document
  * styled with the Figma-authoritative LIGHT tokens (the export is a static
  * artifact, not theme-aware) and the app's font stacks by name -- Geist
- * woff2 is deliberately not embedded (keeps exports small; documented
- * rejected alternative in spec-export.json).
+ * woff2 is deliberately not embedded, to keep exported files small.
  */
 export function buildExportHtml(title: string, bodyHtml: string): string {
   return `<!doctype html>
@@ -121,8 +117,7 @@ ${bodyHtml}
  * doc to HTML. Editor.svelte (WYSIWYG) and PreviewPane.svelte (split mode's
  * rendered pane) each register/unregister their own provider here after
  * `crepe.create()` -- whichever view mode is mounted supplies the source, so
- * export works in both (amendments.md #5). Module-level singleton slot,
- * same pattern as spec-search's EditorView registration.
+ * export works in both. Module-level singleton slot.
  */
 let htmlSource: (() => string) | null = null
 
@@ -151,9 +146,10 @@ function delay(ms: number): Promise<void> {
 /**
  * Bridge the registration gap during a split-mode toggle: the outgoing
  * view's htmlSource is unregistered synchronously (onDestroy), but the
- * incoming view only registers after its async crepe.create() resolves
- * (amendments.md #5's shared-slot mechanism, split across Editor.svelte and
- * PreviewPane.svelte). An export invoked in that window would otherwise see
+ * incoming view only registers after its async crepe.create() resolves --
+ * Editor.svelte and PreviewPane.svelte each own an independent Crepe
+ * instance and register into this shared slot on their own schedule. An
+ * export invoked in that window would otherwise see
  * `htmlSource === null` for a doc that is, from the user's perspective,
  * still open. Poll briefly instead of failing immediately; bounded so a
  * genuinely broken registration still surfaces reportError rather than
