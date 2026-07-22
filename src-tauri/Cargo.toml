@@ -23,7 +23,9 @@ tauri-build = { version = "2.6.3", features = [] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
-tauri = { version = "2.11.3", features = [] }
+# protocol-asset backs tauri.conf.json's assetProtocol (pasted images render
+# via convertFileSrc URLs; scope grants are runtime-only, per pasted file).
+tauri = { version = "2.11.3", features = ["protocol-asset"] }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
 notify = "6"
@@ -38,6 +40,10 @@ hex = "0.4"
 # NSFileManager.trashItem via the objc2 0.6 / objc2-foundation 0.3 stack already
 # vendored below for pdf.rs, so no new native-dependency family is introduced.
 trash = "5"
+# Decodes the pasted-image payload in fileops::save_pasted_image. Already a
+# transitive dep (Cargo.lock pins base64 0.22.1), promoted to direct — zero
+# lockfile churn.
+base64 = "0.22"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-window-state = "2"

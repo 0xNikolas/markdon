@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { getCurrentWindow } from '@tauri-apps/api/window'
-  import { listenScoped } from './lib/windowing'
+  import { listenScoped, setWindowTitle } from './lib/windowing'
   import { get } from 'svelte/store'
   import {
     doc,
@@ -15,10 +15,26 @@
     adoptNormalization,
   } from './lib/doc'
   import { recordRevert } from './lib/history'
-  import { open, save, saveAs, openPath, openInPreferredTarget } from './lib/files'
-  import { openList, removeOpen, neighbourAfterClose } from './lib/openList'
+  import {
+    open,
+    save,
+    saveAs,
+    openPath,
+    openInPreferredTarget,
+    openDrainedEntries,
+    type OpenedEntry,
+  } from './lib/files'
+  import {
+    openList,
+    previewPath,
+    pinOpen,
+    pinPreview,
+    removeOpen,
+    neighbourAfterClose,
+  } from './lib/openList'
   import { conflict, reloadFromDisk, dismissConflict, initFileSync } from './lib/fileSync'
   import { reportError } from './lib/errors'
+  import { logWarn } from './lib/logging'
   import { allowsNativeContextMenu } from './lib/contextMenu'
   import Editor from './Editor.svelte'
   import SplitView from './SplitView.svelte'
@@ -38,9 +54,10 @@
     isMacPlatform,
     isGotoLineFallbackKey,
     isFindReplaceFallbackKey,
+    windowTitle,
   } from './lib/ui'
   import { activeOverlay, openOverlay, closeOverlay, anyOverlayOpen } from './lib/overlay'
-  import { openWorkspace, initWorkspace } from './lib/workspace'
+  import { openWorkspace, closeWorkspace, initWorkspace } from './lib/workspace'
   import { exportDocument } from './lib/export'
   import { focusTrap, dialogDismissHandlers } from './lib/focusTrap'
 
@@ -58,8 +75,36 @@
   // replacement for the old behavior of stacking the discard modal invisibly
   // behind the open overlay.
   function guarded(action: () => void) {
+    // Every new guard cycle invalidates any remembered deferred-preview path
+    // (see pendingPreviewPath): the slot only ever describes the CURRENT
+    // discard overlay's deferred action, never a previous one's.
+    pendingPreviewPath = null
     if (isDirty(get(doc))) openOverlay({ kind: 'discard', action })
     else action()
+  }
+
+  // The path of a PREVIEW open currently deferred behind the discard overlay.
+  // Needed because the second click of a tree dblclick lands on the modal
+  // backdrop (the overlay mounted between the clicks), so the pin intent
+  // would otherwise be lost — the file would re-open as a mere preview after
+  // the prompt resolves. onBackdropDblClick uses it to upgrade the deferred
+  // action in place; cleared whenever the overlay resolves (discard/cancel)
+  // or a new guard cycle starts.
+  let pendingPreviewPath: string | null = null
+
+  // Dblclick on the discard backdrop while a preview open sits deferred:
+  // swap the deferred action to a PINNED in-place open of the same path —
+  // the second click that would have pinned it hit the backdrop instead.
+  // Gated on target === currentTarget so dblclicks inside the modal itself
+  // (e.g. on button text) never retarget the action.
+  function onBackdropDblClick(e: MouseEvent) {
+    if (e.target !== e.currentTarget) return
+    const p = pendingPreviewPath
+    if (p === null) return
+    pendingPreviewPath = null
+    activeOverlay.update((o) =>
+      o?.kind === 'discard' ? { kind: 'discard', action: () => openPath(p) } : o,
+    )
   }
 
   // Push the read-only flag to the native File-menu "Read Only" check mark.
@@ -72,7 +117,9 @@
   // won't fire, so we re-assert the real value). Menu-sync failure is
   // non-fatal — the check mark is cosmetic — so errors are swallowed.
   function syncReadonlyMenu(checked: boolean): void {
-    void invoke('set_readonly_menu_state', { checked }).catch(() => {})
+    void invoke('set_readonly_menu_state', { checked }).catch((e) =>
+      logWarn('readonly menu sync failed', e),
+    )
   }
 
   // File-menu "Read Only" toggle handler. Three cases off the store:
@@ -119,47 +166,88 @@
       return
     }
     edit(md)
+    promotePreviewOnEdit()
+  }
+
+  // VS Code pins a preview tab the moment it's modified: the italic slot only
+  // ever holds an unmodified glance. Runs after both editors' change paths
+  // (the WYSIWYG handler above and the split-view CodeMirror wrapper in the
+  // template); onEditorChange's adoptNormalization early-return never reaches
+  // it, so mount-time re-serialization can't pin anything.
+  function promotePreviewOnEdit() {
+    const s = get(doc)
+    if (get(previewPath) === s.path && isDirty(s)) pinPreview()
   }
 
   // Single entry point for opening a path from the sidebar (Open Files strip
-  // or Workspace tree alike) -- routes through openInPreferredTarget (the
-  // tab/window choke-point) wrapping the existing guarded openPath. A click
-  // on the already-active row is a no-op.
-  function handleOpenFile(path: string) {
-    if (path === get(doc).path) return
+  // or Workspace tree alike). A single click asks for a PREVIEW: always
+  // in-place regardless of openMode (a glance must never spawn a window),
+  // parked in the italic preview slot by openPath. A pinned open routes
+  // through openInPreferredTarget (the tab/window choke-point) unless
+  // `inPlace` forces this window — that is what the explicit "Open in New
+  // Tab" action means even under openMode:'window'. Re-activating the
+  // already-active doc without `preview` pins it: that is exactly the
+  // dblclick arriving after its own first click already previewed the file.
+  function handleOpenFile(path: string, opts: { preview?: boolean; inPlace?: boolean } = {}) {
+    if (path === get(doc).path) {
+      if (!opts.preview) pinOpen(path)
+      return
+    }
+    if (opts.preview) {
+      guarded(() => openPath(path, { preview: true }))
+      // Only when the guard actually deferred (dirty doc -> discard overlay up)
+      // is there a pin intent to protect; an immediate open needs no memory.
+      if (get(activeOverlay)?.kind === 'discard') pendingPreviewPath = path
+      return
+    }
+    if (opts.inPlace) {
+      guarded(() => openPath(path))
+      return
+    }
     openInPreferredTarget(path, (p) => guarded(() => openPath(p)))
   }
 
   // Sidebar Open Files close affordance. A non-active entry can never be
   // dirty (switching away from a file always resolves the dirty-guard
-  // first), so closing it is a bare list removal. Closing the active entry
-  // still runs the guard, then switches to the neighbour computed BEFORE
-  // removal (previous, else next, else null -> falls back to newDoc()).
+  // first), so closing it is a bare removal — from the pinned list, or by
+  // vacating the preview slot (the two are mutually exclusive by openPath's
+  // invariant). Closing the active entry (pinned or preview — a preview is a
+  // normal live doc) still runs the guard, then switches to the neighbour
+  // computed BEFORE removal (previous, else next, else null -> falls back to
+  // newDoc()). The preview path is never in openList, but it RENDERS as the
+  // last row (after every pinned one), so closing an active preview appends
+  // it for the lookup — its visual previous neighbour is the last pinned
+  // entry, not a blank new doc. Clearing state inside the guard keeps Cancel
+  // non-destructive.
   function onCloseFile(path: string) {
     if (path !== get(doc).path) {
-      openList.update((l) => removeOpen(l, path))
+      if (path === get(previewPath)) previewPath.set(null)
+      else openList.update((l) => removeOpen(l, path))
       return
     }
     guarded(() => {
-      const next = neighbourAfterClose(get(openList), path, get(doc).path)
+      const list = get(openList)
+      const lookup = path === get(previewPath) ? [...list, path] : list
+      const next = neighbourAfterClose(lookup, path, get(doc).path)
+      previewPath.update((pv) => (pv === path ? null : pv))
       openList.update((l) => removeOpen(l, path))
       if (next === null) newDoc()
       else openPath(next)
     })
   }
 
-  // Open a file the OS handed us via a .md file association (Finder double-click).
-  // Drains the Rust-side buffer and routes the first path through the openMode
-  // preference: MODE A opens it in-place (guarded, read-only like before); MODE
-  // B spawns a fresh window for it, leaving this (focused) window's doc alone.
-  // Called on mount (cold launch) and on each `file:opened` ping.
+  // Open the files the OS or a spawner handed us (.md association double-click,
+  // argv of a new instance). Drains the Rust-side buffer and routes the whole
+  // batch through openDrainedEntries: the first entry becomes the active doc
+  // (MODE A, guarded in-place) or its own window (MODE B); the rest surface
+  // without stealing activation. Each entry carries its OWN readonly flag from
+  // Rust — Finder opens keep the read-only safety net, argv files open
+  // editable — threaded into both the in-place openPath and the MODE B window
+  // hand-off (AssignedFile.readonly). Called on mount (cold launch) and on
+  // each `file:opened` ping.
   async function drainOpenedFiles() {
-    const paths = await invoke<string[]>('take_opened_files')
-    // readonly=true in BOTH modes: in-place opens pass it to openPath directly,
-    // and MODE B carries it through the window hand-off (AssignedFile.readonly)
-    // so the spawned window keeps the same Finder-open safety net.
-    if (paths.length > 0)
-      openInPreferredTarget(paths[0], (p) => guarded(() => openPath(p, true)), true)
+    const entries = await invoke<OpenedEntry[]>('take_opened_files')
+    openDrainedEntries(entries, (p, readonly) => guarded(() => openPath(p, { readonly })))
   }
 
   // A spawned document window (doc-N) drains the file it was created to host
@@ -176,7 +264,7 @@
     try {
       const assigned = await invoke<{ path: string; readonly: boolean } | null>('take_window_file')
       if (assigned) {
-        openPath(assigned.path, assigned.readonly)
+        openPath(assigned.path, { readonly: assigned.readonly })
         return true
       }
       return false
@@ -185,6 +273,12 @@
       return false
     }
   }
+
+  // One close-window action shared by the native close button (Rust
+  // intercepts CloseRequested and emits window:close-requested) and the
+  // File-menu Close Window item — both must resolve the dirty guard before
+  // the window is destroyed.
+  const closeThisWindow = () => guarded(() => getCurrentWindow().destroy())
 
   onMount(() => {
     const unsub = Promise.all([
@@ -224,8 +318,30 @@
       }),
       listenScoped('menu:settings', () => openOverlay({ kind: 'settings' })),
       listenScoped('menu:open_folder', () => openWorkspace()),
+      listenScoped('menu:close_folder', () => closeWorkspace()),
+      listenScoped('menu:close_tab', () => {
+        // Cmd+W closes the active entry (pinned or preview) through the same
+        // onCloseFile path as the strip's close button. On an untitled doc
+        // the "tab" being closed is the scratch buffer, NOT the window: while
+        // pinned tabs or a preview are still alive, dismiss the scratch
+        // (guarded — unsaved edits still prompt) and land back on the preview
+        // (kept as a preview, avoiding a stale italic row) or the last pinned
+        // entry. Only when nothing else is open does Cmd+W fall through to
+        // closing the window — that truly-empty case is the VS Code behavior.
+        const p = get(doc).path
+        if (p !== null) {
+          onCloseFile(p)
+          return
+        }
+        const pv = get(previewPath)
+        const pinned = get(openList)
+        if (pv !== null) guarded(() => openPath(pv, { preview: true }))
+        else if (pinned.length > 0) guarded(() => openPath(pinned[pinned.length - 1]))
+        else closeThisWindow()
+      }),
+      listenScoped('menu:close_window', closeThisWindow),
       listenScoped('menu:export', () => exportDocument()),
-      listenScoped('window:close-requested', () => guarded(() => getCurrentWindow().destroy())),
+      listenScoped('window:close-requested', closeThisWindow),
       listenScoped('file:opened', () => drainOpenedFiles()),
     ])
     // A spawned doc-N window (MODE B) is created to host exactly one file,
@@ -305,6 +421,19 @@
     if (shouldForceCloseFind($split, $searchUi.open)) closeFind()
   })
 
+  // Mirror the doc onto the native window title (Mission Control, Cmd-Tab,
+  // taskbar; macOS hides in-window title text via hiddenTitle). $doc updates on
+  // every keystroke, so gate the IPC on the computed title actually changing —
+  // it then fires only on filename changes and clean<->dirty flips.
+  let lastTitle = ''
+  $effect(() => {
+    const t = windowTitle($doc.path, isDirty($doc))
+    if (t !== lastTitle) {
+      lastTitle = t
+      setWindowTitle(t)
+    }
+  })
+
   // Esc closes the find bar even when focus is inside the editor (FindBar's
   // own onkeydown only sees Esc while its input is focused). Also a
   // Cmd/Ctrl+F fallback for platforms where the native menu accelerator
@@ -375,13 +504,17 @@
   }
 
   // Pull the deferred action off the discard overlay, close it, then run it.
+  // Both resolutions drop any remembered deferred-preview path — the overlay
+  // it described is gone either way (see pendingPreviewPath).
   function discard() {
     const o = get(activeOverlay)
     const action = o?.kind === 'discard' ? o.action : null
+    pendingPreviewPath = null
     closeOverlay()
     action?.()
   }
   function cancel() {
+    pendingPreviewPath = null
     closeOverlay()
     // A cancelled Read-Only toggle left $doc.readonly untouched, so the store
     // subscription won't fire — re-assert the check mark to undo muda's
@@ -439,6 +572,7 @@
     <Sidebar
       activePath={$doc.path}
       openFiles={$openList}
+      previewPath={$previewPath}
       onOpenFile={handleOpenFile}
       onCloseFile={onCloseFile}
       onNewFile={() => guarded(() => newDoc())}
@@ -464,11 +598,17 @@
       {/if}
       {#key $doc.loadId}
         {#if $split}
+          <!-- CodeMirror is byte-accurate (no adoptNormalization dance), but
+               its edits must promote a previewed doc just like the WYSIWYG
+               path's. -->
           <SplitView
             initialContent={$doc.content}
             content={$doc.content}
             readonly={$doc.readonly}
-            onChange={edit}
+            onChange={(md) => {
+              edit(md)
+              promotePreviewOnEdit()
+            }}
           />
         {:else}
           <Editor initialContent={$doc.content} readonly={$doc.readonly} onChange={onEditorChange} />
@@ -480,7 +620,8 @@
 </main>
 
 {#if $activeOverlay?.kind === 'discard'}
-  <div class="modal-backdrop">
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="modal-backdrop" ondblclick={onBackdropDblClick}>
     <div
       class="modal"
       role="dialog"

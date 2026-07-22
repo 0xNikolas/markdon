@@ -1,136 +1,28 @@
 import { invoke } from '@tauri-apps/api/core'
-import { get, writable, type Writable } from 'svelte/store'
+import { get } from 'svelte/store'
 import { retargetPath, detachIfAffected } from './doc'
 import { reportError, reportNotice } from './errors'
-import { workspace, refreshWorkspace, type WorkspaceDir } from './workspace'
-import { openList, retargetOpen, removeOpenSubtree } from './openList'
+import { workspace, refreshWorkspace } from './workspace'
+import {
+  openList,
+  previewPath,
+  retargetOpen,
+  retargetPreview,
+  removeOpenSubtree,
+  clearPreviewInSubtree,
+} from './openList'
 import { readonlyMemory } from './readonlyMemory'
 import { isSelfOrDescendant } from './paths'
+import { selection, focused, clipboard } from './fileOpsState'
+import { pasteTargetDir, folderPaths } from './fileTree'
 
 /**
- * Sidebar file-operations state and the app-internal file clipboard, plus the
- * command wrappers that drive the Rust file-ops backend. The backend re-derives
- * all trust from the allowlist, so these paths are UI convenience only — never a
+ * The command wrappers that drive the Rust file-ops backend, plus the
+ * high-level operations that keep the doc, Open Files strip, and sidebar
+ * state consistent around each mutation. The backend re-derives all trust
+ * from the allowlist, so these paths are UI convenience only — never a
  * security boundary.
  */
-
-/** Currently selected row paths (files or folders). Cut/Copy/Delete act on this. */
-export const selection: Writable<Set<string>> = writable(new Set())
-
-/** The focused row — the anchor for Paste's target and single-select ops. */
-export const focused: Writable<string | null> = writable(null)
-
-export interface Clipboard {
-  mode: 'cut' | 'copy'
-  paths: string[]
-}
-
-/** App-internal file clipboard. `null` disables Paste. */
-export const clipboard: Writable<Clipboard | null> = writable(null)
-
-/**
- * Reset selection/focus/clipboard. Every path they hold is only meaningful
- * inside the workspace it was captured in, so a switch to a different root
- * (Open Folder, or the launch-time restore) must drop them — otherwise a Cut
- * from the old workspace can be Pasted into the new one, silently moving a
- * file across workspaces, and a stale `focused` misdirects New File.
- */
-export function clearFileOpsState(): void {
-  selection.set(new Set())
-  focused.set(null)
-  clipboard.set(null)
-}
-
-// Clear file-ops state whenever the open workspace's root changes — including
-// the very first adopt (openWorkspace, refreshWorkspace, restoreWorkspace all
-// funnel through `workspace.set` in workspace.ts's `adopt`). A same-root
-// update (e.g. refreshWorkspace re-walking the tree) must NOT clear, so the
-// selection survives an ordinary refresh.
-let lastRoot: string | null = get(workspace).root
-workspace.subscribe((s) => {
-  if (s.root === lastRoot) return
-  lastRoot = s.root
-  clearFileOpsState()
-})
-
-// -- pure helpers (unit-tested) ----------------------------------------------
-
-/**
- * Paths of every currently-visible row, in display order: a folder's children
- * are included only when the folder is expanded (absent/false in `collapsed`).
- * The root node itself is not a row. Used for Select All so it honors what the
- * user can actually see.
- */
-export function visibleRowPaths(
-  tree: WorkspaceDir | null,
-  collapsed: Record<string, boolean>,
-): string[] {
-  if (tree === null) return []
-  const out: string[] = []
-  const walk = (d: WorkspaceDir): void => {
-    for (const sub of d.dirs) {
-      out.push(sub.path)
-      if (!collapsed[sub.path]) walk(sub)
-    }
-    for (const f of d.files) out.push(f.path)
-  }
-  walk(tree)
-  return out
-}
-
-export interface FolderRow {
-  path: string
-  label: string
-  depth: number
-}
-
-/**
- * Flatten the tree into the workspace root plus every folder, in display order,
- * for the Move-to picker. The root is depth 0; nested folders indent from there.
- */
-export function folderRows(tree: WorkspaceDir | null): FolderRow[] {
-  if (tree === null) return []
-  const rows: FolderRow[] = [{ path: tree.path, label: tree.name, depth: 0 }]
-  const walk = (d: WorkspaceDir, depth: number): void => {
-    for (const sub of d.dirs) {
-      rows.push({ path: sub.path, label: sub.name, depth })
-      walk(sub, depth + 1)
-    }
-  }
-  walk(tree, 1)
-  return rows
-}
-
-/** All directory paths in the tree, including the root — the set of valid paste targets. */
-export function folderPaths(tree: WorkspaceDir | null): Set<string> {
-  const set = new Set<string>()
-  if (tree === null) return set
-  set.add(tree.path)
-  const walk = (d: WorkspaceDir): void => {
-    for (const sub of d.dirs) {
-      set.add(sub.path)
-      walk(sub)
-    }
-  }
-  walk(tree)
-  return set
-}
-
-/**
- * Resolve the directory a Paste lands in: the focused folder if a folder is
- * focused; otherwise the focused file's parent; otherwise the workspace root.
- * Returns `null` only when nothing sensible is available.
- */
-export function pasteTargetDir(
-  focusedPath: string | null,
-  folderSet: Set<string>,
-  root: string | null,
-): string | null {
-  if (focusedPath === null) return root
-  if (folderSet.has(focusedPath)) return focusedPath
-  const parent = focusedPath.split('/').slice(0, -1).join('/')
-  return parent || root
-}
 
 // -- command wrappers ---------------------------------------------------------
 
@@ -154,35 +46,6 @@ export function duplicateEntry(path: string): Promise<string> {
 }
 export function deleteEntries(paths: string[]): Promise<void> {
   return invoke('delete_entries', { paths })
-}
-
-// -- selection / clipboard mutators -------------------------------------------
-
-/** Single-select a row and make it the focus anchor. */
-export function focusRow(path: string): void {
-  focused.set(path)
-  selection.set(new Set([path]))
-}
-
-/** Deselect everything: empty-space click in the sidebar (spec 2026-07-21). */
-export function clearSelection(): void {
-  selection.set(new Set())
-  focused.set(null)
-}
-
-/** Snapshot the current selection into the clipboard as a cut or copy. */
-export function cutSelection(): void {
-  const paths = [...get(selection)]
-  if (paths.length > 0) clipboard.set({ mode: 'cut', paths })
-}
-export function copySelection(): void {
-  const paths = [...get(selection)]
-  if (paths.length > 0) clipboard.set({ mode: 'copy', paths })
-}
-
-/** Select every visible row (Select All). */
-export function selectVisible(tree: WorkspaceDir | null, collapsed: Record<string, boolean>): void {
-  selection.set(new Set(visibleRowPaths(tree, collapsed)))
 }
 
 // -- high-level operations (backend + doc-consistency + refresh) --------------
@@ -217,6 +80,7 @@ export async function performRename(path: string, newName: string): Promise<void
     const p = await renameEntry(path, newName)
     retargetPath(path, p) // follow the open doc if it (or an ancestor) moved
     openList.update((l) => retargetOpen(l, path, p)) // keep the Open Files strip in sync
+    previewPath.update((pv) => retargetPreview(pv, path, p)) // …and its preview row
     await refreshWorkspace()
     afterMutation([p])
   } catch (e) {
@@ -246,6 +110,7 @@ export async function performMove(paths: string[], destDir: string): Promise<voi
       const p = await moveEntry(src, destDir)
       retargetPath(src, p)
       openList.update((l) => retargetOpen(l, src, p))
+      previewPath.update((pv) => retargetPreview(pv, src, p))
       moved.push(p)
     }
   } catch (e) {
@@ -283,6 +148,7 @@ export async function paste(): Promise<void> {
         const p = await moveEntry(src, dir)
         retargetPath(src, p)
         openList.update((l) => retargetOpen(l, src, p))
+        previewPath.update((pv) => retargetPreview(pv, src, p))
         results.push(p)
         movedCount++
       }
@@ -326,6 +192,8 @@ export async function performDelete(paths: string[]): Promise<void> {
   // resurrect its stale readonly mark if re-created at the same path (DEFECT A3).
   readonlyMemory.forget(paths)
   openList.update((l) => paths.reduce((acc, p) => removeOpenSubtree(acc, p), l))
+  // A previewed file inside any trashed subtree is just as dead as a pinned one.
+  previewPath.update((pv) => paths.reduce((acc, p) => clearPreviewInSubtree(acc, p), pv))
   // Drop a clipboard that pointed at anything just trashed.
   const cb = get(clipboard)
   if (cb !== null && cb.paths.some((cp) => paths.some((p) => isSelfOrDescendant(cp, p)))) {

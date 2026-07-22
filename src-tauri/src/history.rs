@@ -28,7 +28,14 @@ use tauri::{AppHandle, Manager, State};
 use crate::allowlist::AllowedPaths;
 
 /// Per-canonical-path lock guarding `record_snapshot`'s read-modify-write of a
-/// bucket's `index.json` (load_index -> mutate -> write_index). Without this,
+/// bucket's `index.json` (load_index -> mutate -> write_index). Per-PROCESS
+/// only, deliberately: two app INSTANCES snapshotting the same file can still
+/// race the index and drop one entry (its `<ts>.md` is orphaned, never
+/// corrupted — `atomic_write` and the tolerant `load_index` see to that).
+/// A cross-process flock isn't worth the platform-specific machinery for a
+/// worst case of one lost history entry.
+///
+/// Within one process the lock is load-bearing: without it,
 /// two `record_history` invocations racing for the SAME file (a fast double
 /// save, or a save overlapping a recordExternal/recordRevert call) can each
 /// load the same stale index and append independently; the later
@@ -199,7 +206,9 @@ pub(crate) fn prune(entries: &mut Vec<Entry>, now_ms: u64) -> Vec<Entry> {
 /// Write via temp file + rename so a crash mid-write never leaves a truncated
 /// snapshot or index. Replicates commands.rs's atomic pattern (NOT its guarded
 /// write_file wrapper, which would reject the store's internal paths).
-fn atomic_write(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+/// `pub(crate)` so prefs.rs reuses it for the settings file instead of
+/// duplicating the tempfile+persist dance.
+pub(crate) fn atomic_write(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     let dir = match path.parent() {
         Some(p) if !p.as_os_str().is_empty() => p,
         _ => Path::new("."),

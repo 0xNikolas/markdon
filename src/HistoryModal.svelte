@@ -3,6 +3,7 @@
   import Icon from './Icon.svelte'
   import ReadonlyMarkdown from './ReadonlyMarkdown.svelte'
   import { closeOverlay } from './lib/overlay'
+  import { logWarn } from './lib/logging'
   import { focusTrap, dialogDismissHandlers } from './lib/focusTrap'
   import {
     loadVersions,
@@ -46,6 +47,7 @@
       if (list.length > 0) await select(list[0].id)
     } catch (e) {
       loadError = `Could not load history: ${String(e)}`
+      logWarn('history modal load failed', e)
     } finally {
       loading = false
     }
@@ -60,6 +62,7 @@
     } catch (e) {
       selectedContent = ''
       loadError = `Could not read this version: ${String(e)}`
+      logWarn('history version read failed', e)
     }
   }
 

@@ -54,6 +54,29 @@ export function readonlyExt(ro: boolean): Extension {
   return ro ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []
 }
 
+// WebKit hangs indefinitely (hard freeze, Force Quit territory) laying out a
+// single multi-megabyte line the moment CodeMirror mounts one -- measured
+// boundary: a 500K-char line renders fine, 1M+ freezes, and a bare CM with
+// zero extensions already freezes, so no extension tweak can fix it. 100K
+// leaves a wide margin below the freeze floor and no real markdown line comes
+// close; the only realistic offender is an inlined data: URI image.
+export const LONG_LINE_LIMIT = 100_000
+
+/** Length of the longest line in `text`. Single indexOf('\n') scan -- no
+ * split(), which would materialize a copy of a multi-MB document just to
+ * measure it. A '\r' before the '\n' (CRLF) counts toward the length; that
+ * one-char inflation is irrelevant at the 100K threshold. Pure. */
+export function maxLineLength(text: string): number {
+  let max = 0
+  let start = 0
+  for (;;) {
+    const nl = text.indexOf('\n', start)
+    if (nl === -1) return Math.max(max, text.length - start)
+    if (nl - start > max) max = nl - start
+    start = nl + 1
+  }
+}
+
 /** Ln/Col of the primary selection head: line 1-based, col 0-based (matches
  * the design literals "Ln 1, Col 0" / "Ln 14, Col 42"). Pure over the state. */
 export function cursorAt(state: EditorState): CursorPos {

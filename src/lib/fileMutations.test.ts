@@ -1,59 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { get } from 'svelte/store'
 import { isSelfOrDescendant } from './paths'
-
-const invoke = vi.fn()
-vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
-// workspace.ts pulls in window (onFocusChanged) at import; stub so it loads.
-vi.mock('@tauri-apps/api/window', () => ({
-  getCurrentWindow: () => ({ onFocusChanged: () => Promise.resolve(() => {}) }),
-}))
-
-import {
-  visibleRowPaths,
-  folderPaths,
-  folderRows,
-  pasteTargetDir,
-  selection,
-  focused,
-  clearSelection,
-  clipboard,
-  focusRow,
-  cutSelection,
-  copySelection,
-  paste,
-  performDelete,
-  performRename,
-  performMove,
-} from './fileops'
-import { type WorkspaceDir, workspace } from './workspace'
+import { invoke } from './test-support/tauriMocks'
+import { dir, tree } from './test-support/workspaceFixtures'
+import { paste, performDelete, performRename, performMove } from './fileMutations'
+import { selection, focused, clipboard, focusRow, cutSelection, copySelection } from './fileOpsState'
+import { workspace } from './workspace'
 import { doc, openDoc, newDoc, isDirty, resetReadonlyMemory } from './doc'
 import { notice, errorMessage } from './errors'
-import { openList } from './openList'
-
-const dir = (name: string, path: string, dirs: WorkspaceDir[] = [], files = []): WorkspaceDir => ({
-  name,
-  path,
-  dirs,
-  files,
-  truncated: false,
-})
-
-// /ws
-//   docs/           (expanded)
-//     note.md
-//   img/            (collapsed)
-//     logo.svg
-//   readme.md
-const tree: WorkspaceDir = dir(
-  'ws',
-  '/ws',
-  [
-    dir('docs', '/ws/docs', [], [{ name: 'note.md', path: '/ws/docs/note.md' }] as never),
-    dir('img', '/ws/img', [], [{ name: 'logo.svg', path: '/ws/img/logo.svg' }] as never),
-  ],
-  [{ name: 'readme.md', path: '/ws/readme.md' }] as never,
-)
+import { openList, previewPath } from './openList'
 
 beforeEach(() => {
   invoke.mockReset()
@@ -66,97 +21,15 @@ beforeEach(() => {
   notice.set(null)
   errorMessage.set(null)
   openList.set([])
+  previewPath.set(null)
 })
 
-describe('visibleRowPaths', () => {
-  it('lists visible rows in display order, honoring the collapsed map', () => {
-    // img is collapsed -> its child logo.svg is excluded.
-    expect(visibleRowPaths(tree, { '/ws/img': true })).toEqual([
-      '/ws/docs',
-      '/ws/docs/note.md',
-      '/ws/img',
-      '/ws/readme.md',
-    ])
-  })
-
-  it('includes a collapsed subtree once expanded', () => {
-    expect(visibleRowPaths(tree, {})).toContain('/ws/img/logo.svg')
-  })
-
-  it('returns [] for a null tree', () => {
-    expect(visibleRowPaths(null, {})).toEqual([])
-  })
-})
-
-describe('folderPaths', () => {
-  it('collects every directory path including the root', () => {
-    expect(folderPaths(tree)).toEqual(new Set(['/ws', '/ws/docs', '/ws/img']))
-  })
-})
-
-describe('folderRows', () => {
-  it('lists the root then every folder with indentation depth', () => {
-    expect(folderRows(tree)).toEqual([
-      { path: '/ws', label: 'ws', depth: 0 },
-      { path: '/ws/docs', label: 'docs', depth: 1 },
-      { path: '/ws/img', label: 'img', depth: 1 },
-    ])
-  })
-
-  it('returns [] for a null tree', () => {
-    expect(folderRows(null)).toEqual([])
-  })
-})
-
-describe('pasteTargetDir', () => {
-  const folders = new Set(['/ws', '/ws/docs', '/ws/img'])
-
-  it('uses the focused folder directly', () => {
-    expect(pasteTargetDir('/ws/docs', folders, '/ws')).toBe('/ws/docs')
-  })
-  it("uses a focused file's parent", () => {
-    expect(pasteTargetDir('/ws/docs/note.md', folders, '/ws')).toBe('/ws/docs')
-  })
-  it('falls back to the workspace root when nothing is focused', () => {
-    expect(pasteTargetDir(null, folders, '/ws')).toBe('/ws')
-  })
-})
-
+// Pins the paths.ts predicate performDelete leans on for clipboard pruning.
 describe('isSelfOrDescendant', () => {
   it('matches the folder itself and descendants, segment-safely', () => {
     expect(isSelfOrDescendant('/ws/docs', '/ws/docs')).toBe(true)
     expect(isSelfOrDescendant('/ws/docs/note.md', '/ws/docs')).toBe(true)
     expect(isSelfOrDescendant('/ws/docs2/note.md', '/ws/docs')).toBe(false)
-  })
-})
-
-describe('workspace root changes clear file-ops state', () => {
-  it('resets selection, focused, and clipboard when the root changes', () => {
-    focusRow('/ws/docs/note.md')
-    cutSelection()
-    expect(get(selection).size).toBe(1)
-    expect(get(focused)).toBe('/ws/docs/note.md')
-    expect(get(clipboard)).not.toBeNull()
-
-    // A different workspace is opened (Open Folder / restore) -- same shape
-    // of update `adopt()` performs in workspace.ts.
-    workspace.set({ root: '/other', tree: dir('other', '/other') })
-
-    expect(get(selection).size).toBe(0)
-    expect(get(focused)).toBeNull()
-    expect(get(clipboard)).toBeNull()
-  })
-
-  it('does not clear on a same-root refresh (e.g. refreshWorkspace)', () => {
-    focusRow('/ws/docs/note.md')
-    cutSelection()
-
-    // Same root, new tree object -- what refreshWorkspace's adopt() does.
-    workspace.set({ root: '/ws', tree: dir('ws', '/ws') })
-
-    expect(get(selection).size).toBe(1)
-    expect(get(focused)).toBe('/ws/docs/note.md')
-    expect(get(clipboard)).not.toBeNull()
   })
 })
 
@@ -250,6 +123,30 @@ describe('performRename keeps the Open Files strip in sync', () => {
   })
 })
 
+describe('performRename keeps the preview row in sync', () => {
+  it('retargets a previewed file on a rename', async () => {
+    openDoc('/ws/readme.md', '# hi')
+    previewPath.set('/ws/readme.md')
+    invoke.mockResolvedValueOnce('/ws/guide.md').mockResolvedValueOnce({ root: '/ws', tree })
+    await performRename('/ws/readme.md', 'guide.md')
+    expect(get(previewPath)).toBe('/ws/guide.md')
+  })
+
+  it('follows a renamed ancestor folder of the preview', async () => {
+    previewPath.set('/ws/docs/note.md')
+    invoke.mockResolvedValueOnce('/ws/pages').mockResolvedValueOnce({ root: '/ws', tree })
+    await performRename('/ws/docs', 'pages')
+    expect(get(previewPath)).toBe('/ws/pages/note.md')
+  })
+
+  it('leaves an unrelated preview untouched', async () => {
+    previewPath.set('/ws/docs/note.md')
+    invoke.mockResolvedValueOnce('/ws/guide.md').mockResolvedValueOnce({ root: '/ws', tree })
+    await performRename('/ws/readme.md', 'guide.md')
+    expect(get(previewPath)).toBe('/ws/docs/note.md')
+  })
+})
+
 describe('performMove keeps the Open Files strip in sync', () => {
   it('retargets a moved entry to its destination path', async () => {
     openDoc('/ws/readme.md', '# hi')
@@ -258,6 +155,14 @@ describe('performMove keeps the Open Files strip in sync', () => {
     await performMove(['/ws/readme.md'], '/ws/docs')
     expect(get(openList)).toEqual(['/ws/docs/readme.md'])
     expect(get(doc).path).toBe('/ws/docs/readme.md')
+  })
+
+  it('retargets a moved previewed file too', async () => {
+    openDoc('/ws/readme.md', '# hi')
+    previewPath.set('/ws/readme.md')
+    invoke.mockResolvedValueOnce('/ws/docs/readme.md').mockResolvedValueOnce({ root: '/ws', tree })
+    await performMove(['/ws/readme.md'], '/ws/docs')
+    expect(get(previewPath)).toBe('/ws/docs/readme.md')
   })
 })
 
@@ -271,6 +176,17 @@ describe('cut-paste keeps the Open Files strip in sync', () => {
     focused.set('/ws')
     await paste()
     expect(get(openList)).toEqual(['/ws/note.md'])
+  })
+
+  it('retargets a cut-pasted previewed file', async () => {
+    openDoc('/ws/docs/note.md', '# note')
+    previewPath.set('/ws/docs/note.md')
+    focusRow('/ws/docs/note.md')
+    cutSelection()
+    invoke.mockResolvedValueOnce('/ws/note.md').mockResolvedValueOnce({ root: '/ws', tree })
+    focused.set('/ws')
+    await paste()
+    expect(get(previewPath)).toBe('/ws/note.md')
   })
 })
 
@@ -341,6 +257,34 @@ describe('performDelete', () => {
     expect(get(openList)).toEqual(['/ws/readme.md', '/ws/img/logo.svg'])
   })
 
+  it('clears the preview row when the previewed file is trashed directly', async () => {
+    previewPath.set('/ws/readme.md')
+    invoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce({ root: '/ws', tree })
+    await performDelete(['/ws/readme.md'])
+    expect(get(previewPath)).toBeNull()
+  })
+
+  it('clears the preview row when it falls inside a trashed subtree', async () => {
+    previewPath.set('/ws/docs/note.md')
+    invoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce({ root: '/ws', tree })
+    await performDelete(['/ws/docs'])
+    expect(get(previewPath)).toBeNull()
+  })
+
+  it('leaves an unrelated preview row alone (segment-safe: /ws/docs2 vs /ws/docs)', async () => {
+    previewPath.set('/ws/docs2/note.md')
+    invoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce({ root: '/ws', tree })
+    await performDelete(['/ws/docs'])
+    expect(get(previewPath)).toBe('/ws/docs2/note.md')
+  })
+
+  it('leaves the preview untouched when the backend rejects', async () => {
+    previewPath.set('/ws/readme.md')
+    invoke.mockRejectedValueOnce('denied').mockResolvedValueOnce({ root: '/ws', tree })
+    await performDelete(['/ws/readme.md'])
+    expect(get(previewPath)).toBe('/ws/readme.md')
+  })
+
   it('leaves the Open Files strip untouched when the backend rejects', async () => {
     openDoc('/ws/other.md', '# other')
     openList.set(['/ws/readme.md'])
@@ -370,15 +314,5 @@ describe('performDelete', () => {
     await performDelete(['/ws/docs'])
     openDoc('/ws/docs/note.md', '# recreated')
     expect(get(doc).readonly).toBe(false)
-  })
-})
-
-describe('clearSelection', () => {
-  it('empties the selection and drops the focus anchor', () => {
-    selection.set(new Set(['/ws/a.md', '/ws/b.md']))
-    focused.set('/ws/a.md')
-    clearSelection()
-    expect(get(selection).size).toBe(0)
-    expect(get(focused)).toBeNull()
   })
 })

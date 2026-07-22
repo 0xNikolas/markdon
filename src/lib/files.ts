@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { get } from 'svelte/store'
 import { doc, openDoc, markSaved } from './doc'
 import { reportError } from './errors'
-import { openList, addOpen } from './openList'
+import { openList, previewPath, pinOpen } from './openList'
 import { recordSave } from './history'
 import { settings } from './settings'
 
@@ -11,11 +11,33 @@ interface OpenedFile {
   content: string
 }
 
-export async function openPath(path: string, readonly = false): Promise<void> {
+/** One drained OpenedFiles entry (mirrors Rust `OpenedEntry` in lib.rs):
+    Finder/OS-association opens arrive readonly, argv hand-offs editable. */
+export interface OpenedEntry {
+  path: string
+  readonly: boolean
+}
+
+/**
+ * Load `path` into the single doc buffer. A `preview` open (sidebar single
+ * click) keeps the path OUT of `openList` and parks it in the preview slot
+ * instead — unless the path is already pinned, in which case previewing it is
+ * meaningless and it stays a plain (pinned) open. A pinned open of the
+ * currently-previewed path promotes it (pin-on-reopen). `readonly` keeps the
+ * Finder/OS-association safety net (banner + "Enable editing").
+ */
+export async function openPath(
+  path: string,
+  opts: { preview?: boolean; readonly?: boolean } = {},
+): Promise<void> {
   try {
     const content = await invoke<string>('read_file', { path })
-    openDoc(path, content, readonly)
-    openList.update((l) => addOpen(l, path))
+    openDoc(path, content, opts.readonly ?? false)
+    if (opts.preview && !get(openList).includes(path)) {
+      previewPath.set(path) // replaces any previous preview — VS Code behavior
+    } else {
+      pinOpen(path)
+    }
   } catch (e) {
     reportError(`Could not open file: ${String(e)}`)
   }
@@ -30,7 +52,7 @@ export async function open(): Promise<void> {
     // pick (re-read there); 'tab' opens the already-loaded content in place.
     openInPreferredTarget(picked.path, (p) => {
       openDoc(p, picked.content)
-      openList.update((l) => addOpen(l, p))
+      pinOpen(p) // dialog opens are always pinned; drop a stale preview of the same path
     })
   } catch (e) {
     reportError(`Could not open file: ${String(e)}`)
@@ -57,13 +79,55 @@ export function openInPreferredTarget(
   readonly = false,
 ): void {
   if (get(settings).openMode === 'window') {
-    invoke('open_document_window', { path, readonly }).catch((e) => {
+    spawnDocumentWindow(path, readonly).catch((e) => {
       reportError(`Could not open a new window: ${String(e)}`)
       openInPlace(path)
     })
     return
   }
   openInPlace(path)
+}
+
+/** The raw spawn both window-open paths share; callers own error handling. */
+function spawnDocumentWindow(path: string, readonly: boolean): Promise<void> {
+  return invoke('open_document_window', { path, readonly })
+}
+
+/**
+ * Route a whole drained OpenedFiles batch (Finder opens / argv files), so a
+ * multi-file drop never silently loses everything after the first entry. The
+ * FIRST entry behaves exactly like a single open: through
+ * `openInPreferredTarget` with the caller's `openFirstInPlace` closure as the
+ * in-place path — it becomes the active doc (MODE A) or spawns its own window
+ * (MODE B). Every REMAINING entry must still surface without stealing
+ * activation, and `openInPreferredTarget(path, pinOpen, readonly)` does both
+ * modes in one call: MODE B gives each file its own window (honoring its
+ * per-entry readonly), MODE A pins it into the Open Files strip only —
+ * paths-only, no read needed — and a MODE B spawn failure degrades to that
+ * same visible pinned row instead of clobbering the active doc.
+ */
+export function openDrainedEntries(
+  entries: OpenedEntry[],
+  openFirstInPlace: (path: string, readonly: boolean) => void,
+): void {
+  const [first, ...rest] = entries
+  if (first === undefined) return
+  openInPreferredTarget(first.path, (p) => openFirstInPlace(p, first.readonly), first.readonly)
+  for (const entry of rest) openInPreferredTarget(entry.path, pinOpen, entry.readonly)
+}
+
+/**
+ * Explicit "Open in New Window" (context menu): always spawns, regardless of
+ * the openMode preference — that is the whole point of the action. Unlike
+ * `openInPreferredTarget` there is no in-place fallback (the user asked for a
+ * window, not for this window's doc to change), so a failure only reports.
+ */
+export async function openInNewWindow(path: string): Promise<void> {
+  try {
+    await spawnDocumentWindow(path, false)
+  } catch (e) {
+    reportError(`Could not open a new window: ${String(e)}`)
+  }
 }
 
 export async function save(): Promise<void> {
@@ -92,7 +156,10 @@ export async function saveAs(): Promise<void> {
     await invoke('write_file', { path: selected, contents: state.content })
     markSaved(selected, state.content)
     void recordSave(selected) // best-effort history snapshot (see save())
-    openList.update((l) => addOpen(l, selected))
+    pinOpen(selected)
+    // The buffer now lives at `selected`; a preview row still pointing at the
+    // doc's OLD path would be a dead row (its buffer just moved away).
+    previewPath.update((p) => (p === state.path ? null : p))
   } catch (e) {
     reportError(`Could not save file: ${String(e)}`)
   }

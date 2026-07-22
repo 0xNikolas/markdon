@@ -1,6 +1,7 @@
 <script lang="ts">
   import { focusTrap, dialogDismissHandlers } from './lib/focusTrap'
   import { portal } from './lib/portal'
+  import { leafNameError } from './lib/fileTree'
 
   interface Props {
     title: string
@@ -26,15 +27,10 @@
   let value = $state(initial)
   let inputEl = $state<HTMLInputElement>()
 
-  // A leaf name only — mirrors the backend's valid_leaf_name gate so the user
-  // gets immediate feedback rather than a round-trip error banner.
-  let invalid = $derived(
-    value.trim() === '' ||
-      value === '.' ||
-      value === '..' ||
-      value.includes('/') ||
-      value.includes('\\'),
-  )
+  // A leaf name only — leafNameError mirrors the backend's valid_leaf_name
+  // gate so the user gets immediate feedback rather than a round-trip error
+  // banner. Shared with the sidebar's inline rename.
+  let invalid = $derived(leafNameError(value) !== null)
 
   $effect(() => {
     // Preselect the stem so typing replaces the name but keeps the extension.

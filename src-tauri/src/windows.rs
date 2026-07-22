@@ -129,8 +129,18 @@ pub fn wire_window(window: &WebviewWindow, app: &AppHandle) {
             // Belt-and-braces: the plugin normally persists on RunEvent::Exit,
             // which still fires after the frontend calls window.destroy(), but
             // saving here makes persistence independent of exit handling.
+            // Gated on the runtime handoff signal because a handed-off
+            // instance has NO window-state plugin registered (see lib.rs): it
+            // must not clobber the primary instance's shared geometry file,
+            // and save_window_state PANICS when the plugin is absent — the
+            // gate is mandatory, not cosmetic.
             #[cfg(desktop)]
-            let _ = app_close.save_window_state(StateFlags::all());
+            if !app_close
+                .state::<crate::launch::StartupWorkspace>()
+                .suppress_restore()
+            {
+                let _ = app_close.save_window_state(StateFlags::all());
+            }
             // Route to the closing window ONLY (+ carry its label in the payload
             // as defensive insurance the frontend can filter on).
             let _ = app_close.emit_to(
@@ -216,6 +226,33 @@ pub fn open_document_window(
             Err(e)
         }
     }
+}
+
+/// Spawn a brand-NEW app process to host `path`, passed as a positional argv
+/// arg. Unlike `open_document_window` (same process, doc-N window), the child
+/// is a fully independent instance: its argv parsing (launch.rs) grants the
+/// file in the child's own allowlist and seeds it into `OpenedFiles` with
+/// `readonly: false` (an explicit user hand-off, not an OS association), so
+/// the child's normal drain flow opens it pinned and editable. This end only
+/// re-`ensure`s the already-granted path — same non-widening rule as
+/// open_document_window. Dropping the Child handle would NOT detach it — the
+/// exited child would linger as a zombie until waited on — so a throwaway
+/// thread reaps it; the thread never influences the child's lifetime.
+#[tauri::command]
+pub fn open_file_new_instance(
+    path: String,
+    allowed: State<'_, allowlist::AllowedPaths>,
+) -> Result<(), String> {
+    allowed.ensure(&path)?;
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let mut child = std::process::Command::new(exe)
+        .arg(&path)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 #[cfg(test)]

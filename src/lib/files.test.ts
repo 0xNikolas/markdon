@@ -5,15 +5,24 @@ const invoke = vi.fn()
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
 
 import { doc, newDoc, edit, isDirty, openDoc, docWith } from './doc'
-import { open, save, saveAs, openPath, openInPreferredTarget } from './files'
+import {
+  open,
+  save,
+  saveAs,
+  openPath,
+  openInPreferredTarget,
+  openInNewWindow,
+  openDrainedEntries,
+} from './files'
 import { errorMessage } from './errors'
-import { openList } from './openList'
+import { openList, previewPath } from './openList'
 import { settings, DEFAULTS } from './settings'
 
 beforeEach(() => {
   invoke.mockReset()
   newDoc()
   openList.set([])
+  previewPath.set(null)
   settings.set({ ...DEFAULTS }) // openMode: 'tab' (MODE A) unless a test opts in
 })
 
@@ -52,6 +61,61 @@ describe('openPath', () => {
     invoke.mockRejectedValue('nope')
     await openPath('/tmp/missing.md')
     expect(get(openList)).toEqual([])
+  })
+})
+
+describe('openPath preview semantics', () => {
+  it('a preview open loads the doc, sets previewPath, and does NOT pin', async () => {
+    invoke.mockResolvedValue('# peek')
+    await openPath('/tmp/a.md', { preview: true })
+    expect(get(doc).path).toBe('/tmp/a.md')
+    expect(get(previewPath)).toBe('/tmp/a.md')
+    expect(get(openList)).toEqual([])
+  })
+
+  it('a new preview replaces the old one (only ever one italic row)', async () => {
+    invoke.mockResolvedValue('# body')
+    await openPath('/tmp/a.md', { preview: true })
+    await openPath('/tmp/b.md', { preview: true })
+    expect(get(previewPath)).toBe('/tmp/b.md')
+    expect(get(openList)).toEqual([])
+  })
+
+  it('a pinned open of the previewed path promotes it (pin-on-reopen)', async () => {
+    invoke.mockResolvedValue('# body')
+    await openPath('/tmp/a.md', { preview: true })
+    await openPath('/tmp/a.md')
+    expect(get(openList)).toEqual(['/tmp/a.md'])
+    expect(get(previewPath)).toBeNull()
+  })
+
+  it('preview-opening an already-pinned path stays pinned (no demotion)', async () => {
+    invoke.mockResolvedValue('# body')
+    await openPath('/tmp/a.md')
+    await openPath('/tmp/a.md', { preview: true })
+    expect(get(openList)).toEqual(['/tmp/a.md'])
+    expect(get(previewPath)).toBeNull()
+  })
+
+  it('a pinned open of a DIFFERENT path leaves an unrelated preview alone', async () => {
+    invoke.mockResolvedValue('# body')
+    await openPath('/tmp/peek.md', { preview: true })
+    await openPath('/tmp/other.md')
+    expect(get(previewPath)).toBe('/tmp/peek.md')
+    expect(get(openList)).toEqual(['/tmp/other.md'])
+  })
+
+  it('leaves the preview slot untouched when the read fails', async () => {
+    invoke.mockRejectedValue('nope')
+    await openPath('/tmp/missing.md', { preview: true })
+    expect(get(previewPath)).toBeNull()
+  })
+
+  it('threads readonly through a preview open', async () => {
+    invoke.mockResolvedValue('# RO peek')
+    await openPath('/tmp/ro.md', { preview: true, readonly: true })
+    expect(get(doc).readonly).toBe(true)
+    expect(get(previewPath)).toBe('/tmp/ro.md')
   })
 })
 
@@ -153,6 +217,27 @@ describe('saveAs', () => {
     await saveAs()
     expect(get(openList)).toEqual(['/tmp/new.md'])
   })
+
+  it("clears a preview that pointed at the doc's old path (the buffer moved away)", async () => {
+    openDoc('/tmp/peek.md', '# peek')
+    previewPath.set('/tmp/peek.md')
+    invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === 'save_file_dialog' ? '/tmp/copy.md' : undefined,
+    )
+    await saveAs()
+    expect(get(previewPath)).toBeNull()
+    expect(get(openList)).toEqual(['/tmp/copy.md'])
+  })
+
+  it('leaves an unrelated preview alone', async () => {
+    openDoc('/tmp/a.md', '# a')
+    previewPath.set('/tmp/other-peek.md')
+    invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === 'save_file_dialog' ? '/tmp/copy.md' : undefined,
+    )
+    await saveAs()
+    expect(get(previewPath)).toBe('/tmp/other-peek.md')
+  })
 })
 
 describe('openInPreferredTarget', () => {
@@ -214,6 +299,95 @@ describe('openInPreferredTarget', () => {
   })
 })
 
+describe('openDrainedEntries', () => {
+  const entry = (path: string, readonly = false) => ({ path, readonly })
+
+  it('is a no-op on an empty drain', () => {
+    openDrainedEntries([], () => {})
+    expect(invoke).not.toHaveBeenCalled()
+    expect(get(openList)).toEqual([])
+  })
+
+  it("MODE A ('tab'): the first entry opens in place and becomes active; the rest pin without stealing activation", async () => {
+    invoke.mockResolvedValue('# body')
+    openDrainedEntries([entry('/a.md'), entry('/b.md'), entry('/c.md')], (p, readonly) =>
+      openPath(p, { readonly }),
+    )
+    await vi.waitFor(() => expect(get(doc).path).toBe('/a.md'))
+    // Every drained path surfaces in the strip — nothing after the first is lost.
+    expect([...get(openList)].sort()).toEqual(['/a.md', '/b.md', '/c.md'])
+    expect(get(doc).path).toBe('/a.md')
+  })
+
+  it('MODE A: threads the first entry\'s OWN readonly flag into the in-place closure', async () => {
+    invoke.mockResolvedValue('# finder open')
+    openDrainedEntries([entry('/finder.md', true)], (p, readonly) => openPath(p, { readonly }))
+    await vi.waitFor(() => expect(get(doc).path).toBe('/finder.md'))
+    expect(get(doc).readonly).toBe(true)
+  })
+
+  it('MODE A: an argv (editable) first entry opens editable — never hardcoded readonly', async () => {
+    invoke.mockResolvedValue('# argv open')
+    openDrainedEntries([entry('/argv.md', false)], (p, readonly) => openPath(p, { readonly }))
+    await vi.waitFor(() => expect(get(doc).path).toBe('/argv.md'))
+    expect(get(doc).readonly).toBe(false)
+  })
+
+  it("MODE B ('window'): every entry gets its own window, each honoring its per-entry readonly", () => {
+    settings.set({ ...DEFAULTS, openMode: 'window' })
+    invoke.mockResolvedValue(undefined)
+    const inPlace: string[] = []
+    openDrainedEntries(
+      [entry('/finder.md', true), entry('/argv.md', false)],
+      (p) => inPlace.push(p),
+    )
+    expect(invoke).toHaveBeenCalledWith('open_document_window', {
+      path: '/finder.md',
+      readonly: true,
+    })
+    expect(invoke).toHaveBeenCalledWith('open_document_window', {
+      path: '/argv.md',
+      readonly: false,
+    })
+    // The focused window's own doc/list stay untouched in window mode.
+    expect(inPlace).toEqual([])
+    expect(get(openList)).toEqual([])
+  })
+
+  it('MODE B: a failed spawn of a REST entry degrades to a pinned strip row, not an in-place open', async () => {
+    settings.set({ ...DEFAULTS, openMode: 'window' })
+    invoke.mockRejectedValue('no window config to clone')
+    const inPlace: string[] = []
+    openDrainedEntries([entry('/a.md'), entry('/b.md')], (p) => inPlace.push(p))
+    // First entry falls back to the caller's in-place closure; the rest pin.
+    await vi.waitFor(() => expect(inPlace).toEqual(['/a.md']))
+    await vi.waitFor(() => expect(get(openList)).toEqual(['/b.md']))
+  })
+})
+
+describe('openInNewWindow', () => {
+  it("spawns a doc window regardless of openMode ('tab' here) and never readonly", async () => {
+    invoke.mockResolvedValue(undefined)
+    await openInNewWindow('/tmp/a.md')
+    expect(invoke).toHaveBeenCalledWith('open_document_window', {
+      path: '/tmp/a.md',
+      readonly: false,
+    })
+    // Explicit window opens leave this window's doc/list/preview untouched.
+    expect(get(doc).path).toBeNull()
+    expect(get(openList)).toEqual([])
+    expect(get(previewPath)).toBeNull()
+  })
+
+  it('reports a spawn failure without any in-place fallback', async () => {
+    errorMessage.set(null)
+    invoke.mockRejectedValue('no window config to clone')
+    await openInNewWindow('/tmp/a.md')
+    expect(get(errorMessage)).toContain('Could not open a new window')
+    expect(get(doc).path).toBeNull() // the user asked for a window, not this one
+  })
+})
+
 describe('error handling', () => {
   it('reports an error when read_file rejects', async () => {
     errorMessage.set(null)
@@ -235,7 +409,7 @@ describe('error handling', () => {
 describe('readonly', () => {
   it('openPath threads the readonly flag into the store', async () => {
     invoke.mockResolvedValue('# RO')
-    await openPath('/tmp/ro.md', true)
+    await openPath('/tmp/ro.md', { readonly: true })
     expect(get(doc).readonly).toBe(true)
   })
 

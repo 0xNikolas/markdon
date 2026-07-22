@@ -175,12 +175,94 @@ pub fn restore_workspace(
         return Ok(None);
     };
     match allowed.allow_root(Path::new(&root)) {
-        Ok(canon) => Ok(Some(build_workspace(&canon)?)),
+        Ok(canon) => {
+            crate::allow_asset_dir(&app, &canon, true);
+            Ok(Some(build_workspace(&canon)?))
+        }
         Err(_) => {
             let _ = fs::remove_file(&file);
             Ok(None)
         }
     }
+}
+
+/// Delete the persisted pointer, but only when this instance actually OWNS it:
+/// the pointer file is shared by every running instance, and an instance whose
+/// folder was never persisted (spawned with `--workspace`, which deliberately
+/// skips persistence) closing its folder must not delete the pointer some
+/// OTHER instance saved. `root` is compared against the persisted value —
+/// mismatch, missing, or corrupt pointer is a successful no-op, as is a file
+/// vanishing between the read and the remove. Takes `&Path` so it is testable
+/// without an AppHandle.
+pub(crate) fn close_if_owned(file: &Path, root: &str) -> Result<(), String> {
+    if load_last_root(file).as_deref() != Some(root) {
+        return Ok(());
+    }
+    match fs::remove_file(file) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Forget the persisted last-workspace pointer so the next launch starts
+/// folder-less. Only the pointer is deleted — the in-memory allowlist grant is
+/// deliberately kept, because files from the closed folder may still be open
+/// (VS Code behavior) and must stay readable/savable until the app exits.
+/// A missing pointer file is success, not an error: closing twice is a no-op.
+///
+/// `root` (the closing instance's current workspace) is used ONLY to prove
+/// ownership of the pointer — see `close_if_owned` — never to mint a grant or
+/// touch the filesystem beyond the Rust-owned pointer file, so accepting it
+/// from the webview does not weaken the allowlist invariant.
+#[tauri::command]
+pub fn close_workspace(root: String, app: AppHandle) -> Result<(), String> {
+    let file = state_file(&app)?;
+    close_if_owned(&file, &root)
+}
+
+/// What a launch hand-off resolved to: the adopted workspace (if any) plus
+/// whether the ordinary restore must be skipped. The two are separate on
+/// purpose — `workspace: None` alone cannot distinguish "cold launch, go
+/// restore" from "handed-off child whose dir vanished (or that carried only
+/// files), start folder-less". Field names serialize verbatim, matching every
+/// other payload in this codebase (no serde renames).
+#[derive(Serialize)]
+pub struct StartupHandoff {
+    pub workspace: Option<Workspace>,
+    pub suppress_restore: bool,
+}
+
+/// Adopt the workspace this process was launched with (`--workspace <dir>` in
+/// argv, stashed in `StartupWorkspace` by `run()`). Take-once: a re-mount gets
+/// `workspace: None`. Grants + walks exactly like restore, but deliberately
+/// does NOT persist to workspace.json — the spawned instance must not clobber
+/// the restore pointer of the instance that spawned it. Fail-softs to
+/// `workspace: None` if the dir vanished before launch finished — but the
+/// accompanying `suppress_restore` (true for every handed-off launch, even
+/// files-only ones) still tells the frontend to start folder-less rather than
+/// fall back to `restore_workspace` and silently adopt the SPAWNER's folder.
+#[tauri::command]
+pub fn take_startup_workspace(
+    app: AppHandle,
+    startup: State<'_, crate::launch::StartupWorkspace>,
+    allowed: State<'_, AllowedPaths>,
+) -> Result<StartupHandoff, String> {
+    let suppress_restore = startup.suppress_restore();
+    let workspace = match startup.take() {
+        Some(dir) => match allowed.allow_root(&dir) {
+            Ok(canon) => {
+                crate::allow_asset_dir(&app, &canon, true);
+                Some(build_workspace(&canon)?)
+            }
+            Err(_) => None,
+        },
+        None => None,
+    };
+    Ok(StartupHandoff {
+        workspace,
+        suppress_restore,
+    })
 }
 
 #[cfg(test)]
@@ -316,6 +398,44 @@ mod tests {
     fn load_of_missing_file_is_none() {
         let dir = tempdir().unwrap();
         assert_eq!(load_last_root(&dir.path().join("nope.json")), None);
+    }
+
+    #[test]
+    fn close_if_owned_removes_the_pointer_it_owns() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("workspace.json");
+        save_last_root(&file, "/ws/f1").unwrap();
+        close_if_owned(&file, "/ws/f1").unwrap();
+        assert!(!file.exists(), "owned pointer is deleted");
+    }
+
+    #[test]
+    fn close_if_owned_leaves_another_instances_pointer_alone() {
+        // Instance B (spawned with --workspace /ws/f2, never persisted) closing
+        // its folder must not delete instance A's /ws/f1 pointer.
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("workspace.json");
+        save_last_root(&file, "/ws/f1").unwrap();
+        close_if_owned(&file, "/ws/f2").unwrap();
+        assert_eq!(load_last_root(&file).as_deref(), Some("/ws/f1"));
+    }
+
+    #[test]
+    fn close_if_owned_with_no_pointer_is_ok() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("workspace.json");
+        assert_eq!(close_if_owned(&file, "/ws/f1"), Ok(()));
+    }
+
+    #[test]
+    fn close_if_owned_with_a_corrupt_pointer_is_a_no_op() {
+        // A pointer nobody can prove ownership of is left for the instance
+        // that can (or for restore_workspace to clean up).
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("workspace.json");
+        fs::write(&file, "not json at all").unwrap();
+        assert_eq!(close_if_owned(&file, "/ws/f1"), Ok(()));
+        assert!(file.exists());
     }
 
     #[test]

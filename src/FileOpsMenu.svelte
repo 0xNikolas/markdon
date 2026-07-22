@@ -2,6 +2,9 @@
   export type FileOpAction =
     | 'new-file'
     | 'new-folder'
+    | 'open-tab'
+    | 'open-window'
+    | 'open-instance'
     | 'rename'
     | 'duplicate'
     | 'move'
@@ -10,12 +13,14 @@
     | 'paste'
     | 'delete'
     | 'select-all'
+    | 'close-folder'
 </script>
 
 <script lang="ts">
   import { tick } from 'svelte'
-  import { selection, clipboard } from './lib/fileops'
-  import { workspace } from './lib/workspace'
+  import { selection, clipboard } from './lib/fileOpsState'
+  import { folderPaths } from './lib/fileTree'
+  import { workspace, isMarkdownFile } from './lib/workspace'
   import { clampMenuPosition } from './lib/sidebarMenu'
 
   interface Props {
@@ -33,6 +38,16 @@
   let hasRoot = $derived($workspace.root !== null)
   let canPaste = $derived($clipboard !== null)
 
+  // The Open in New Tab/Window/Instance trio only ever acts on ONE openable
+  // document: enablement mirrors Rename's single-selection honesty, plus "is
+  // actually a markdown file" — folders and context-only files never open.
+  let singleMarkdownFile = $derived.by(() => {
+    if ($selection.size !== 1) return false
+    const p = [...$selection][0]
+    if (folderPaths($workspace.tree).has(p)) return false
+    return isMarkdownFile(p.split('/').filter(Boolean).pop() ?? '')
+  })
+
   interface Item {
     action: FileOpAction
     label: string
@@ -45,6 +60,9 @@
   let items = $derived<Item[]>([
     { action: 'new-file', label: 'New File', enabled: hasRoot },
     { action: 'new-folder', label: 'New Folder', enabled: hasRoot },
+    { action: 'open-tab', label: 'Open in New Tab', enabled: singleMarkdownFile, group: true },
+    { action: 'open-window', label: 'Open in New Window', enabled: singleMarkdownFile },
+    { action: 'open-instance', label: 'Open in New Instance', enabled: singleMarkdownFile },
     { action: 'rename', label: 'Rename…', enabled: count === 1, group: true },
     { action: 'duplicate', label: 'Duplicate', enabled: count >= 1 },
     { action: 'move', label: 'Move to…', enabled: count >= 1 },
@@ -53,6 +71,7 @@
     { action: 'paste', label: 'Paste', enabled: canPaste },
     { action: 'delete', label: 'Delete', enabled: count >= 1, danger: true, group: true },
     { action: 'select-all', label: 'Select All', enabled: hasRows, group: true },
+    { action: 'close-folder', label: 'Close Folder', enabled: hasRoot, group: true },
   ])
 
   let menuEl: HTMLDivElement

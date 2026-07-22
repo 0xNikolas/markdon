@@ -1,9 +1,18 @@
+import { invoke } from '@tauri-apps/api/core'
 import { writable, type Writable } from 'svelte/store'
 import { themePref, type ThemePref } from './theme'
 
 /**
- * Versioned preferences store, persisted as JSON under localStorage key
- * `markdon.settings.v1`. Owns theme (single writer of theme.ts's `themePref`
+ * Versioned preferences store. Source of truth is the Rust-owned per-app file
+ * `app_config_dir()/settings.json` (load_prefs/save_prefs commands), shared by
+ * every instance and window; localStorage key `markdon.settings.v1` is kept
+ * only as a synchronous boot CACHE so theme/typography stamp before first
+ * paint without a flash (initSettings runs pre-mount — see src/main.ts).
+ * localStorage is per-bundle-id and thus shared across instances too, but
+ * with no cross-process storage events it silently last-writer-wins; the file
+ * plus focus-triggered re-reads is what makes instances converge.
+ *
+ * Owns theme (single writer of theme.ts's `themePref`
  * after this feature — see initSettings), editor typography (stamped as
  * `--editor-*` CSS vars on <html>, consumed by both Crepe and the future
  * CodeMirror split pane), CodeMirror behavior opts (contract only until
@@ -101,7 +110,7 @@ export function fontStack(f: Settings['fontFamily']): string {
 
 export const settings: Writable<Settings> = writable({ ...DEFAULTS })
 
-/** DOM/storage touchpoints injected so initSettings is testable under node vitest. */
+/** DOM/storage/IPC touchpoints injected so initSettings is testable under node vitest. */
 export interface SettingsEnv {
   storage: {
     getItem(key: string): string | null
@@ -109,6 +118,12 @@ export interface SettingsEnv {
   }
   setVar: (name: string, value: string) => void
   setTheme: (theme: ThemePref) => void
+  /** Read the shared settings file; `null` means it doesn't exist yet. */
+  loadRemote: () => Promise<string | null>
+  /** Atomically replace the shared settings file. */
+  saveRemote: (json: string) => Promise<void>
+  /** Subscribe to window-focus; returns the remover. */
+  onFocus: (cb: () => void) => () => void
 }
 
 function realEnv(): SettingsEnv {
@@ -116,21 +131,41 @@ function realEnv(): SettingsEnv {
     storage: window.localStorage,
     setVar: (name, value) => document.documentElement.style.setProperty(name, value),
     setTheme: (theme) => themePref.set(theme),
+    loadRemote: () => invoke<string | null>('load_prefs'),
+    saveRemote: (json) => invoke('save_prefs', { json }),
+    onFocus: (cb) => {
+      window.addEventListener('focus', cb)
+      return () => window.removeEventListener('focus', cb)
+    },
   }
 }
 
 /**
- * Load + parse the persisted settings (seeding theme from the legacy
- * `markdon.themePref` key when settings are absent, preserving the
+ * Boot from the localStorage cache (synchronously, seeding theme from the
+ * legacy `markdon.themePref` key when settings are absent, preserving the
  * pre-settings status-bar choice with zero flash), then subscribe: every
- * change persists to storage, stamps the three `--editor-*` vars, and
- * pushes theme one-way into theme.ts's `themePref`.
+ * change stamps the three `--editor-*` vars, pushes theme one-way into
+ * theme.ts's `themePref`, refreshes the cache, and persists to the shared
+ * settings file. After boot, reconcile against that file: apply it if the
+ * user hasn't edited meanwhile, or seed it on first run (which is the whole
+ * localStorage->file migration). A window-focus re-read is what makes
+ * multiple instances — and multiple windows of one instance — converge.
  *
- * Re-entry-safe: calling this again unsubscribes the previous call's
- * listener before installing a new one, so the shared module-level
- * `settings` store never accumulates stacked subscribers (mirrors
- * theme.ts's initTheme). Returns a teardown function (unused in
- * production, used by tests to avoid cross-test leakage).
+ * Two guards from the shared-file design:
+ * - echo: applying a remote value pre-stamps `lastPersisted` with the
+ *   NORMALIZED serialization, so the resulting subscriber run never saves it
+ *   back (formatting drift would otherwise cause write storms);
+ * - stale overwrite: the async reconcile applies the remote value only while
+ *   the store still equals the boot snapshot — a user edit in between was
+ *   already persisted and wins.
+ *
+ * Re-entry-safe: calling this again tears down the previous call's
+ * subscriber and focus listener before installing new ones, so the shared
+ * module-level `settings` store never accumulates stacked subscribers
+ * (mirrors theme.ts's initTheme). The teardown also deactivates any
+ * still-in-flight loadRemote, so a late resolution can't apply into a
+ * re-initialized store. Returns the teardown (unused in production, used by
+ * tests to avoid cross-test leakage).
  */
 let activeUnsubscribe: (() => void) | null = null
 
@@ -142,10 +177,26 @@ export function initSettings(env: SettingsEnv = realEnv()): () => void {
     const legacy = env.storage.getItem(LEGACY_THEME_KEY)
     if (legacy === 'light' || legacy === 'dark') raw = JSON.stringify({ ...DEFAULTS, theme: legacy })
   }
-  settings.set(parseSettings(raw))
+  const boot = parseSettings(raw)
+  const bootRaw = JSON.stringify(boot)
+  /** Normalized serialization of the store's current value. */
+  let current = bootRaw
+  /**
+   * Last serialization persisted to (or applied FROM) the shared file; the
+   * subscriber skips saveRemote when it matches. Seeded with bootRaw so the
+   * initial subscriber run never pushes the possibly-stale cache over the
+   * file before the reconcile below has read it.
+   */
+  let lastPersisted: string | null = bootRaw
+  let active = true
+
+  settings.set(boot)
   const unsubscribe = settings.subscribe((s) => {
+    const serialized = JSON.stringify(s)
+    current = serialized
     try {
-      env.storage.setItem(SETTINGS_KEY, JSON.stringify(s))
+      // Unconditional (even on a remote apply): keeps the boot cache fresh.
+      env.storage.setItem(SETTINGS_KEY, serialized)
     } catch {
       /* quota/private mode */
     }
@@ -153,13 +204,60 @@ export function initSettings(env: SettingsEnv = realEnv()): () => void {
     env.setVar('--editor-font-size', `${s.fontSize}px`)
     env.setVar('--editor-line-height', String(s.lineHeight))
     env.setTheme(s.theme) // themePref.set — theme.ts stamps data-theme + native titlebar
+    if (serialized === lastPersisted) return // echo of a remote apply (or boot)
+    lastPersisted = serialized
+    // Best-effort: an IPC failure degrades to today's localStorage-only world.
+    void env.saveRemote(serialized).catch(() => {})
   })
 
-  activeUnsubscribe = unsubscribe
-  return () => {
-    unsubscribe()
-    if (activeUnsubscribe === unsubscribe) activeUnsubscribe = null
+  const applyRemote = (remoteRaw: string) => {
+    const normalized = JSON.stringify(parseSettings(remoteRaw))
+    if (normalized === current) return
+    lastPersisted = normalized // pre-stamp so the apply doesn't echo a save
+    settings.set(parseSettings(remoteRaw))
   }
+
+  // Reconcile the boot cache against the shared file.
+  void env
+    .loadRemote()
+    .then((remote) => {
+      if (!active) return
+      if (remote === null) {
+        // First run with no settings.json yet: seed it from the current
+        // settings — this IS the localStorage migration (keys stay as cache).
+        void env.saveRemote(current).catch(() => {})
+        return
+      }
+      // A user edit since boot was already persisted by the subscriber and
+      // must win over the possibly-older file content.
+      if (current !== bootRaw) return
+      applyRemote(remote)
+    })
+    .catch(() => {})
+
+  const offFocus = env.onFocus(() => {
+    const snapshot = current
+    void env
+      .loadRemote()
+      .then((remote) => {
+        if (!active || remote === null) return
+        // A user edit while this load was in flight was already persisted
+        // and must win over the possibly-older file content (same rule as
+        // the boot reconcile above).
+        if (current !== snapshot) return
+        applyRemote(remote)
+      })
+      .catch(() => {})
+  })
+
+  const teardown = () => {
+    active = false
+    offFocus()
+    unsubscribe()
+    if (activeUnsubscribe === teardown) activeUnsubscribe = null
+  }
+  activeUnsubscribe = teardown
+  return teardown
 }
 
 export function updateSetting<K extends SettingKey>(key: K, value: Settings[K]): void {

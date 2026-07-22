@@ -22,6 +22,7 @@ const {
   requestExport,
   fileBreadcrumb,
   isInsideRoot,
+  windowTitle,
   isGotoLineFallbackKey,
   isFindReplaceFallbackKey,
 } = await import('./ui')
@@ -148,6 +149,27 @@ describe('fileBreadcrumb', () => {
       crumbs: ['notes'],
       filename: 'secret.md',
     })
+  })
+})
+
+describe('windowTitle', () => {
+  it('shows "Untitled" for a null path', () => {
+    expect(windowTitle(null, false)).toBe('Untitled — Markdon')
+  })
+
+  it('shows the filename for a clean doc', () => {
+    expect(windowTitle('/ws/notes/a.md', false)).toBe('a.md — Markdon')
+  })
+
+  it('prefixes a bullet while the doc is dirty', () => {
+    expect(windowTitle('/ws/notes/a.md', true)).toBe('• a.md — Markdon')
+    expect(windowTitle(null, true)).toBe('• Untitled — Markdon')
+  })
+
+  it('falls back safely on trailing-slash and segment-less paths', () => {
+    // Mirrors fileBreadcrumb's segment filtering: empty segments never surface.
+    expect(windowTitle('/ws/notes/', false)).toBe('notes — Markdon')
+    expect(windowTitle('/', false)).toBe('Untitled — Markdon')
   })
 })
 

@@ -47,8 +47,10 @@ pub async fn open_file_dialog(
     app: AppHandle,
     allowed: State<'_, AllowedPaths>,
 ) -> Result<Option<OpenedFile>, String> {
+    let dialog_app = app.clone();
     let picked = tauri::async_runtime::spawn_blocking(move || {
-        app.dialog()
+        dialog_app
+            .dialog()
             .file()
             .add_filter("Markdown", &["md", "markdown"])
             .blocking_pick_file()
@@ -59,6 +61,14 @@ pub async fn open_file_dialog(
     let path = to_path_string(file)?;
     let content = crate::commands::read_file_impl(&path)?;
     allowed.allow(&path);
+    // Asset (display-only) grant for the picked file's directory so relative
+    // image references in the doc render; the read/write allowlist above stays
+    // exact-file. Same trust anchor as a workspace pick: a real user dialog.
+    // NON-recursive: picking one file must not open its whole subtree to the
+    // display channel (subdir refs resolve via resolve_image_asset instead).
+    if let Some(dir) = std::path::Path::new(&path).parent() {
+        crate::allow_asset_dir(&app, dir, false);
+    }
     Ok(Some(OpenedFile { path, content }))
 }
 
@@ -73,8 +83,9 @@ pub async fn save_file_dialog(
     app: AppHandle,
     allowed: State<'_, AllowedPaths>,
 ) -> Result<Option<String>, String> {
+    let dialog_app = app.clone();
     let picked = tauri::async_runtime::spawn_blocking(move || {
-        let mut b = app.dialog().file();
+        let mut b = dialog_app.dialog().file();
         for f in effective_filters(filters) {
             let exts: Vec<&str> = f.extensions.iter().map(String::as_str).collect();
             b = b.add_filter(f.name, &exts);
@@ -95,6 +106,12 @@ pub async fn save_file_dialog(
     let Some(file) = picked else { return Ok(None) };
     let path = to_path_string(file)?;
     allowed.allow(&path);
+    // A Save As establishes a new doc directory whose pre-existing relative
+    // image references should render — display-only grant, like open (and
+    // equally NON-recursive: same-directory refs only).
+    if let Some(dir) = std::path::Path::new(&path).parent() {
+        crate::allow_asset_dir(&app, dir, false);
+    }
     Ok(Some(path))
 }
 
@@ -118,7 +135,44 @@ pub async fn open_workspace_dialog(
     };
     let path = to_path_string(folder)?;
     let canon = allowed.allow_root(std::path::Path::new(&path))?;
+    // Recursive asset (display-only) grant mirroring the allowlist root: any
+    // doc in the workspace can render its relative image references. Recursion
+    // is justified here — the user explicitly picked this whole folder.
+    crate::allow_asset_dir(&app, &canon, true);
     Ok(Some(crate::workspace::open_result(&app, &canon)?))
+}
+
+/// Show the folder picker and, on a pick, hand the folder to a brand-NEW app
+/// process (`current_exe --workspace <dir>`) instead of adopting it here. Used
+/// when this instance already has a workspace open — VS Code semantics: a
+/// second folder gets its own instance. Deliberately no grant / no persist /
+/// no walk in THIS process: the child's argv parsing + `take_startup_workspace`
+/// do all of that in its own allowlist, and skipping persistence keeps the two
+/// instances from clobbering each other's restore pointer. Returns whether a
+/// folder was actually picked (false = cancelled), so the frontend can skip
+/// any "opened" UI on cancel. Dropping the spawned Child handle would NOT
+/// detach it — the exited child would linger as a zombie until waited on — so
+/// a throwaway thread reaps it; the thread never influences the child's
+/// lifetime.
+#[tauri::command]
+pub async fn pick_folder_new_instance(app: AppHandle) -> Result<bool, String> {
+    let picked =
+        tauri::async_runtime::spawn_blocking(move || app.dialog().file().blocking_pick_folder())
+            .await
+            .map_err(|e| e.to_string())?;
+    let Some(folder) = picked else {
+        return Ok(false);
+    };
+    let path = to_path_string(folder)?;
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let mut child = std::process::Command::new(exe)
+        .args(["--workspace", &path])
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(true)
 }
 
 #[cfg(test)]

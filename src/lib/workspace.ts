@@ -3,6 +3,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { get, writable, type Writable } from 'svelte/store'
 import { doc } from './doc'
 import { reportError } from './errors'
+import { logWarn } from './logging'
 import { workspaceName } from './ui'
 
 /** A file leaf in the workspace tree (mirrors Rust `WorkspaceFile`). */
@@ -64,16 +65,47 @@ function adopt(ws: Workspace): void {
 /**
  * Open the OS folder picker (Rust-side, so the pick is the only new allowlist
  * root). Cancelling is a no-op; the store and breadcrumb are only touched on a
- * real pick.
+ * real pick. With a folder ALREADY open, the pick instead spawns a whole new
+ * app instance for the chosen dir (VS Code's second window) — the current
+ * process neither adopts the folder nor gains a grant for it, keeping the two
+ * instances' allowlists and workspaces fully independent.
  */
 export async function openWorkspace(): Promise<void> {
   try {
+    if (get(workspace).root !== null) {
+      await invoke('pick_folder_new_instance')
+      return
+    }
     const ws = await invoke<Workspace | null>('open_workspace_dialog')
     if (ws === null) return // cancelled
     adopt(ws)
   } catch (e) {
     reportError(`Could not open workspace folder: ${String(e)}`)
   }
+}
+
+/**
+ * Close the open folder: delete the persisted restore pointer, then reset the
+ * store exactly inverse of `adopt` (root/tree null + breadcrumb). The current
+ * root rides along so Rust can prove ownership — the pointer file is shared
+ * by every running instance, and one whose folder was never persisted (a
+ * `--workspace` child) must not delete the pointer another instance saved;
+ * with no root there is nothing to close remotely at all. Open files and the
+ * doc stay as they are (VS Code behavior); selection/clipboard clear
+ * automatically via fileops.ts's workspace.subscribe hook. The local close
+ * happens even if deleting the pointer fails — a stale pointer only means the
+ * folder comes back on next launch, which beats a close button that does
+ * nothing.
+ */
+export async function closeWorkspace(): Promise<void> {
+  const root = get(workspace).root
+  try {
+    if (root !== null) await invoke('close_workspace', { root })
+  } catch (e) {
+    reportError(`Could not close folder: ${String(e)}`)
+  }
+  workspace.set({ root: null, tree: null })
+  workspaceName.set(null)
 }
 
 /**
@@ -101,19 +133,52 @@ export async function restoreWorkspace(): Promise<void> {
     const ws = await invoke<Workspace | null>('restore_workspace')
     if (ws === null) return
     adopt(ws)
-  } catch {
+  } catch (e) {
     // No workspace to restore is not an error worth surfacing on launch.
+    logWarn('workspace restore failed', e)
   }
 }
 
 /**
- * Wire up the workspace for the app lifetime: restore the last folder, refresh
- * the tree when the open document's path changes (a Save As into the workspace
- * shows the file immediately) and when the window regains focus (external edits
- * happen while unfocused). Returns an async teardown, matching `initFileSync`.
+ * Adopt a `--workspace <dir>` handed to this instance on its command line (a
+ * second instance spawned by `pick_folder_new_instance`). The Rust side takes
+ * the pending dir at most once, grants it, walks it, and deliberately does NOT
+ * persist it — two instances must not clobber each other's restore pointer.
+ * Returns whether the ordinary restore must be SKIPPED: true for every
+ * handed-off launch (a `--workspace` dir and/or argv files), even when no
+ * workspace was adoptable — the dir vanished, or the hand-off carried only
+ * files — because falling back to `restoreWorkspace` would make the child
+ * silently adopt its SPAWNER's persisted folder. Cold launches (no argv)
+ * return false and keep restoring. Errors are swallowed like
+ * `restoreWorkspace`'s: an IPC hiccup here just falls back to restoring (or
+ * an empty sidebar), same as a cold launch.
+ */
+export async function takeStartupWorkspace(): Promise<boolean> {
+  try {
+    const handoff = await invoke<{ workspace: Workspace | null; suppress_restore: boolean }>(
+      'take_startup_workspace',
+    )
+    if (handoff.workspace !== null) adopt(handoff.workspace)
+    return handoff.suppress_restore
+  } catch (e) {
+    logWarn('startup workspace handoff failed', e)
+    return false
+  }
+}
+
+/**
+ * Wire up the workspace for the app lifetime: adopt a CLI-provided startup
+ * workspace, restoring the persisted last folder ONLY on a non-handed-off
+ * (cold) launch — a spawned child starts folder-less rather than adopting its
+ * spawner's folder; refresh the tree when the open document's path changes (a
+ * Save As into the workspace shows the file immediately) and when the window
+ * regains focus (external edits happen while unfocused). Returns an async
+ * teardown, matching `initFileSync`.
  */
 export function initWorkspace(): Promise<() => void> {
-  restoreWorkspace()
+  takeStartupWorkspace().then((suppressRestore) => {
+    if (!suppressRestore) restoreWorkspace()
+  })
 
   let lastPath: string | null = get(doc).path
   const unsubDoc = doc.subscribe((s) => {

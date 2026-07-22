@@ -38,7 +38,14 @@ function loadSplit(): boolean {
   }
 }
 
-/** Split-preview mode, persisted across launches. Consumed by split-preview. */
+/**
+ * Split-preview mode, persisted across launches. Consumed by split-preview.
+ * Deliberately NOT moved into the shared settings.json (unlike settings.ts):
+ * it's read once per window at module load and in-memory after, so the
+ * shared-localStorage last-writer-wins only affects the NEXT window's
+ * default — and syncing it through settings would wrongly couple the split
+ * state of every window.
+ */
 export const split: Writable<boolean> = writable(loadSplit())
 
 export function toggleSplit(): void {
@@ -164,6 +171,19 @@ export function fileBreadcrumb(
 
   const parent = segments[segments.length - 2]
   return { crumbs: parent ? [parent] : [], filename }
+}
+
+/**
+ * Native window title: filename (or "Untitled"), a leading bullet while the
+ * doc has unsaved changes, and an " — Markdon" suffix so taskbar/Mission
+ * Control entries stay identifiable. The dirty marker lives in the title text
+ * because Tauri 2's JS API has no setDocumentEdited (macOS proxy-icon)
+ * equivalent.
+ */
+export function windowTitle(path: string | null, dirty: boolean): string {
+  const segments = path?.split('/').filter(Boolean) ?? []
+  const name = segments[segments.length - 1] ?? 'Untitled'
+  return `${dirty ? '• ' : ''}${name} — Markdon`
 }
 
 // -- pure status-bar helpers --------------------------------------------------

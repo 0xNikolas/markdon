@@ -116,8 +116,16 @@ describe('fontStack', () => {
   })
 })
 
+/** Flush the microtask/timer queue so initSettings' floating promises settle. */
+const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
+
 function fakeEnv(initial: Record<string, string> = {}) {
   const store = new Map<string, string>(Object.entries(initial))
+  /** Simulated content of the shared settings.json (null = doesn't exist). */
+  let remote: string | null = null
+  let deferLoads = false
+  const pendingLoads: Array<(v: string | null) => void> = []
+  const focusListeners = new Set<() => void>()
   return {
     storage: {
       getItem: (k: string) => store.get(k) ?? null,
@@ -126,6 +134,27 @@ function fakeEnv(initial: Record<string, string> = {}) {
     store,
     setVar: vi.fn(),
     setTheme: vi.fn(),
+    loadRemote: vi.fn(
+      (): Promise<string | null> =>
+        deferLoads ? new Promise((resolve) => pendingLoads.push(resolve)) : Promise.resolve(remote),
+    ),
+    saveRemote: vi.fn((json: string): Promise<void> => {
+      remote = json
+      return Promise.resolve()
+    }),
+    onFocus: vi.fn((cb: () => void) => {
+      focusListeners.add(cb)
+      return () => void focusListeners.delete(cb)
+    }),
+    // -- test controls ------------------------------------------------------
+    setRemote: (v: string | null) => void (remote = v),
+    getRemote: () => remote,
+    /** Make subsequent loadRemote calls hang until resolvePending. */
+    defer: () => void (deferLoads = true),
+    /** Resolve every hung loadRemote with `v`. */
+    resolvePending: (v: string | null) => void pendingLoads.splice(0).forEach((resolve) => resolve(v)),
+    fireFocus: () => void [...focusListeners].forEach((cb) => cb()),
+    focusListenerCount: () => focusListeners.size,
   }
 }
 
@@ -234,5 +263,146 @@ describe('initSettings', () => {
     updateSetting('fontSize', 13)
     expect(env.setVar).not.toHaveBeenCalled()
     expect(env.setTheme).not.toHaveBeenCalled()
+  })
+})
+
+describe('initSettings shared-file routing', () => {
+  let teardown: (() => void) | null = null
+
+  afterEach(() => {
+    teardown?.()
+    teardown = null
+  })
+
+  it('applies a differing remote after the async reconcile', async () => {
+    const env = fakeEnv()
+    env.setRemote(JSON.stringify({ ...DEFAULTS, fontSize: 17 }))
+    teardown = initSettings(env)
+    expect(get(settings).fontSize).toBe(DEFAULTS.fontSize) // boot cache first
+    await flush()
+    expect(get(settings).fontSize).toBe(17)
+    // The cache is refreshed with the applied remote value.
+    expect(JSON.parse(env.store.get(SETTINGS_KEY)!).fontSize).toBe(17)
+  })
+
+  it('seeds the file from current settings when no remote exists (migration), exactly once', async () => {
+    const env = fakeEnv({ [SETTINGS_KEY]: JSON.stringify({ ...DEFAULTS, theme: 'dark' }) })
+    teardown = initSettings(env)
+    await flush()
+    expect(env.saveRemote).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(env.getRemote()!)).toEqual({ ...DEFAULTS, theme: 'dark' })
+  })
+
+  it('a remote apply triggers zero saveRemote calls (echo guard)', async () => {
+    const env = fakeEnv()
+    env.setRemote(JSON.stringify({ ...DEFAULTS, fontSize: 17 }))
+    teardown = initSettings(env)
+    await flush()
+    expect(get(settings).fontSize).toBe(17)
+    expect(env.saveRemote).not.toHaveBeenCalled()
+  })
+
+  it('a user edit made before the reconcile resolves wins over the remote', async () => {
+    const env = fakeEnv()
+    env.defer()
+    teardown = initSettings(env)
+    updateSetting('fontSize', 16)
+    env.resolvePending(JSON.stringify({ ...DEFAULTS, fontSize: 12 }))
+    await flush()
+    expect(get(settings).fontSize).toBe(16)
+    // The edit itself was persisted to the file.
+    expect(env.saveRemote).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(env.getRemote()!).fontSize).toBe(16)
+  })
+
+  it('updateSetting persists to BOTH the localStorage cache and the file', async () => {
+    const env = fakeEnv()
+    env.setRemote(JSON.stringify(DEFAULTS)) // file exists; no seed write
+    teardown = initSettings(env)
+    await flush()
+    env.saveRemote.mockClear()
+    updateSetting('tabWidth', 4)
+    expect(JSON.parse(env.store.get(SETTINGS_KEY)!).tabWidth).toBe(4)
+    expect(env.saveRemote).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(env.saveRemote.mock.calls[0][0]).tabWidth).toBe(4)
+  })
+
+  it('focus re-read applies a changed remote (cross-instance convergence)', async () => {
+    const env = fakeEnv()
+    env.setRemote(JSON.stringify(DEFAULTS))
+    teardown = initSettings(env)
+    await flush()
+    env.setRemote(JSON.stringify({ ...DEFAULTS, theme: 'dark' })) // other instance wrote
+    env.fireFocus()
+    await flush()
+    expect(get(settings).theme).toBe('dark')
+    expect(env.saveRemote).not.toHaveBeenCalled() // the apply must not echo a save
+  })
+
+  it('focus re-read never reverts a user edit made while the load was in flight', async () => {
+    const env = fakeEnv()
+    env.setRemote(JSON.stringify(DEFAULTS))
+    teardown = initSettings(env)
+    await flush()
+    env.defer()
+    env.fireFocus() // load_prefs now hangs with pre-edit file content pending
+    updateSetting('tabWidth', 4)
+    env.resolvePending(JSON.stringify(DEFAULTS)) // stale read lands after the edit
+    await flush()
+    expect(get(settings).tabWidth).toBe(4)
+    expect(JSON.parse(env.store.get(SETTINGS_KEY)!).tabWidth).toBe(4)
+  })
+
+  it('focus re-read with an identical remote applies and saves nothing', async () => {
+    const env = fakeEnv()
+    env.setRemote(JSON.stringify(DEFAULTS))
+    teardown = initSettings(env)
+    await flush()
+    const spy = vi.fn()
+    const unsub = settings.subscribe(spy)
+    spy.mockClear()
+    env.fireFocus()
+    await flush()
+    expect(spy).not.toHaveBeenCalled() // no settings.set for an unchanged remote
+    expect(env.saveRemote).not.toHaveBeenCalled()
+    unsub()
+  })
+
+  it('swallows saveRemote rejections; the localStorage cache is still written', async () => {
+    const env = fakeEnv()
+    env.saveRemote.mockRejectedValue(new Error('ipc down'))
+    teardown = initSettings(env)
+    await flush() // seed attempt rejects — swallowed
+    expect(() => updateSetting('fontSize', 16)).not.toThrow()
+    await flush()
+    expect(JSON.parse(env.store.get(SETTINGS_KEY)!).fontSize).toBe(16)
+  })
+
+  it('teardown removes the focus listener and deactivates a late-resolving load', async () => {
+    const env = fakeEnv()
+    env.defer()
+    const stop = initSettings(env)
+    expect(env.focusListenerCount()).toBe(1)
+    stop()
+    expect(env.focusListenerCount()).toBe(0)
+    env.resolvePending(JSON.stringify({ ...DEFAULTS, fontSize: 18 }))
+    await flush()
+    expect(get(settings).fontSize).toBe(DEFAULTS.fontSize) // late load no-ops
+    env.fireFocus()
+    await flush()
+    expect(env.loadRemote).toHaveBeenCalledTimes(1) // only the initial reconcile
+  })
+
+  it('re-entrant initSettings does not stack focus listeners either', async () => {
+    const env1 = fakeEnv()
+    env1.defer()
+    teardown = initSettings(env1)
+    const env2 = fakeEnv()
+    teardown = initSettings(env2)
+    expect(env1.focusListenerCount()).toBe(0) // first init's listener removed
+    // And env1's hung reconcile must not apply into the re-initialized store.
+    env1.resolvePending(JSON.stringify({ ...DEFAULTS, fontSize: 18 }))
+    await flush()
+    expect(get(settings).fontSize).toBe(DEFAULTS.fontSize)
   })
 })
