@@ -3,5 +3,7 @@
 docs/
 node_modules
 dist
+test-results
+playwright-report
 src-tauri/target
 tasks

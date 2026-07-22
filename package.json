@@ -10,9 +10,11 @@
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
     "tauri": "tauri",
     "test": "vitest run",
+    "e2e": "playwright test",
     "vendor:icons": "node scripts/vendor-icons.mjs"
   },
   "devDependencies": {
+    "@playwright/test": "^1.54.0",
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
     "@tauri-apps/cli": "^2",
     "@tsconfig/svelte": "^5.0.8",

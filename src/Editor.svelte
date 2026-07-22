@@ -15,6 +15,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
   import { Crepe } from '@milkdown/crepe'
+  import { schemaCtx } from '@milkdown/kit/core'
   import { getHTML } from '@milkdown/kit/utils'
   import { uploadConfig } from '@milkdown/kit/plugin/upload'
   import '@milkdown/crepe/theme/common/style.css'
@@ -25,6 +26,7 @@
   import { registerHtmlSource, unregisterHtmlSource } from './lib/export'
   import { doc } from './lib/doc'
   import { uploadPastedImage, resolveImageSrc } from './lib/imagePaste'
+  import { checkEditorSchema } from './lib/schemaCheck'
   import boldIcon from './assets/icons/bold.svg?raw'
   import italicIcon from './assets/icons/italic.svg?raw'
   import linkIcon from './assets/icons/link-2.svg?raw'
@@ -97,6 +99,10 @@
     crepe.setReadonly(readonly)
     await crepe.create()
     if (destroyed) return // unmounted while create() was in flight -- don't register
+    // Dev/release parity self-check: fail loudly at mount if the built
+    // schema lost a node type the app depends on (the uploader above already
+    // works around one such prod-only regression).
+    checkEditorSchema(() => crepe!.editor.ctx.get(schemaCtx))
     source = () => crepe!.editor.action(getHTML())
     registerHtmlSource(source)
   })
