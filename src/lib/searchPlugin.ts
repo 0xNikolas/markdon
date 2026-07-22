@@ -144,7 +144,18 @@ export const searchPlugin = $prose(buildSearchPlugin)
 
 function dispatch(meta: SearchMeta): void {
   if (!activeView) return
-  activeView.dispatch(activeView.state.tr.setMeta(key, meta))
+  try {
+    activeView.dispatch(activeView.state.tr.setMeta(key, meta))
+  } catch {
+    // A dispatch can land on a MID-DESTROY editor: entering split mode
+    // unmounts the WYSIWYG <Editor> and runs the force-close-find effect in
+    // the same flush, and Crepe tears its contexts down before the
+    // ProseMirror view's destroy hook nulls `activeView` — so the plugin's
+    // decorations callback throws (Milkdown ctx already gone). The view is
+    // going away regardless; what must NOT be lost is the caller's searchUi
+    // update (closeFind's `open: false`), so swallow and return.
+    return
+  }
   const state = key.getState(activeView.state)
   if (state) syncUi(state)
 }
