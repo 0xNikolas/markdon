@@ -21,6 +21,7 @@
     renameValue,
     renameCommit,
     stemLength,
+    basename,
   } from './lib/treeState'
 
   interface Props {
@@ -71,6 +72,15 @@
       $collapsed,
     )
     if (intent === null) return
+    if (intent.kind === 'open') {
+      // Enter on a file row: explicit pinned open (keyboard dblclick).
+      // Non-markdown files keep native activation — a harmless re-select.
+      if (isMarkdownFile(basename(intent.path))) {
+        e.preventDefault()
+        onOpenFile(intent.path, { preview: false, inPlace: true })
+      }
+      return
+    }
     e.preventDefault() // handled — keep arrows/Home/End from scrolling the panel
     if (intent.kind === 'expand') setFolderCollapsed(intent.path, false)
     else if (intent.kind === 'collapse') setFolderCollapsed(intent.path, true)

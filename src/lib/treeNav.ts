@@ -15,14 +15,18 @@
  *                        workspace root is not a row).
  *   Home / End           first / last visible row.
  *
- * Enter/Space are deliberately absent: rows are real <button>s, so native
- * keyboard activation already fires their click handlers (open/toggle).
+ * Enter on a file returns an explicit `open` intent (pin, the dblclick
+ * analogue): previewing via Space and then editing relies on promote-on-edit,
+ * so the keyboard needs a direct "really open" action. Space stays absent —
+ * rows are real <button>s, so native Space activation fires their click
+ * handlers (file preview / folder toggle), as does Enter on a folder.
  */
 
 export type TreeKeyIntent =
   | { kind: 'focus'; path: string }
   | { kind: 'expand'; path: string }
   | { kind: 'collapse'; path: string }
+  | { kind: 'open'; path: string }
   | null
 
 /**
@@ -77,6 +81,14 @@ export function treeKeyIntent(
     case 'End': {
       const last = visible.length - 1
       return idx === last ? null : { kind: 'focus', path: visible[last] }
+    }
+    case 'Enter': {
+      // Files get an explicit OPEN intent — the keyboard analogue of a
+      // dblclick pin, distinct from Space's native activation (preview).
+      // Folders return null so native button activation keeps toggling them.
+      if (idx === -1) return null
+      const path = visible[idx]
+      return folders.has(path) ? null : { kind: 'open', path }
     }
     default:
       return null

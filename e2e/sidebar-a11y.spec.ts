@@ -109,12 +109,26 @@ test('ArrowRight/ArrowLeft expand, step in, step out, and collapse', async ({ pa
   await expect(treeRow(page, 'nested.md')).toHaveCount(0)
 })
 
-test('Enter on a keyboard-focused file row opens it', async ({ page }) => {
+test('Enter on a keyboard-focused file row opens it PINNED', async ({ page }) => {
   await treeRow(page, 'readme.txt').click() // non-md: nothing opens
   await page.keyboard.press('ArrowUp') // notes.md
   await expect(treeRow(page, 'notes.md')).toBeFocused()
 
-  await page.keyboard.press('Enter') // native button activation → preview open
+  await page.keyboard.press('Enter') // explicit open intent → pinned, not preview
+  await expect(
+    openFilesStrip(page).getByRole('button', { name: 'notes.md', exact: true }),
+  ).toHaveAttribute('aria-current', 'true')
+  await expect(
+    openFilesStrip(page).getByRole('button', { name: 'notes.md (preview)', exact: true }),
+  ).toHaveCount(0)
+})
+
+test('Space on a keyboard-focused file row previews it', async ({ page }) => {
+  await treeRow(page, 'readme.txt').click()
+  await page.keyboard.press('ArrowUp') // notes.md
+  await expect(treeRow(page, 'notes.md')).toBeFocused()
+
+  await page.keyboard.press(' ') // native button activation → preview
   await expect(
     openFilesStrip(page).getByRole('button', { name: 'notes.md (preview)', exact: true }),
   ).toHaveAttribute('aria-current', 'true')

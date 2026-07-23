@@ -123,8 +123,20 @@ describe('treeKeyIntent — Home / End', () => {
   })
 })
 
+describe('treeKeyIntent — Enter', () => {
+  it('returns an open intent on a file row (the keyboard dblclick)', () => {
+    expect(intent('Enter', '/ws/readme.md')).toEqual({ kind: 'open', path: '/ws/readme.md' })
+    expect(intent('Enter', '/ws/docs/note.md')).toEqual({ kind: 'open', path: '/ws/docs/note.md' })
+  })
+
+  it('leaves folders to native activation (toggle) and ignores no-focus', () => {
+    expect(intent('Enter', '/ws/docs')).toBeNull()
+    expect(intent('Enter', null)).toBeNull()
+  })
+})
+
 describe('treeKeyIntent — everything else', () => {
-  it.each(['Enter', ' ', 'Tab', 'Escape', 'a', 'PageDown'])('ignores %j', (key) => {
+  it.each([' ', 'Tab', 'Escape', 'a', 'PageDown'])('ignores %j', (key) => {
     expect(intent(key, '/ws/docs')).toBeNull()
   })
 
