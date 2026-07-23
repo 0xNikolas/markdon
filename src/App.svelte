@@ -62,6 +62,7 @@
   import { openWorkspace, openRecentWorkspace, closeWorkspace } from './lib/workspace'
   import { revealLog } from './lib/errors'
   import { exportDocument } from './lib/export'
+  import { flushBufferEdits } from './lib/bufferFlush'
   import { focusTrap, dialogDismissHandlers } from './lib/focusTrap'
 
   // True while `save()` is in flight (native dialogs aren't window-parented,
@@ -84,6 +85,9 @@
     // (see pendingPreviewPath): the slot only ever describes the CURRENT
     // discard overlay's deferred action, never a previous one's.
     pendingPreviewPath = null
+    // Both editors serialize on a trailing debounce, so isDirty can trail the
+    // screen by ~200ms — flush first or a type-then-close races past the guard.
+    flushBufferEdits()
     if (isDirty(get(doc))) openOverlay({ kind: 'discard', action })
     else action()
   }
@@ -95,6 +99,7 @@
   // scratch has no cache key, so switching away from it truly discards it.
   function switchGuarded(action: () => void) {
     pendingPreviewPath = null
+    flushBufferEdits() // see guarded(): the dirty check must not trail the editor
     const s = get(doc)
     if (s.path === null && isDirty(s)) openOverlay({ kind: 'discard', action })
     else action()
@@ -136,6 +141,10 @@
   // enterReadonly() is itself defensive (no-ops on a dirty buffer), so the
   // guarded action restores savedContent before locking on the discard path.
   function toggleReadonly() {
+    // Pending editor edits must land before the clean/dirty branch: entering
+    // read-only on a stale "clean" buffer would strand un-emitted keystrokes
+    // behind the readonly⇒clean invariant (edit() no-ops once locked).
+    flushBufferEdits()
     const s = get(doc)
     if (s.readonly) {
       enableEditing()
@@ -268,6 +277,7 @@
   // came back clean.
   function closeThisWindow() {
     pendingPreviewPath = null
+    flushBufferEdits() // see guarded(): the dirty check must not trail the editor
     const destroy = () => void getCurrentWindow().destroy()
     if (isDirty(get(doc)) || anyCachedDirty().length > 0) {
       openOverlay({ kind: 'discard', action: destroy, save: saveAllDirty })
@@ -389,6 +399,21 @@
   // covers every control that flips split, present or future.
   $effect(() => {
     if (shouldForceCloseFind($split, $searchUi.open)) closeFind()
+  })
+
+  // Flush the outgoing editor's pending serialization BEFORE the split toggle
+  // swaps the {#if $split} branches: the incoming pane seeds from
+  // $doc.content, and both editors debounce, so toggling mid-typing would
+  // otherwise seed the new pane up to one debounce window stale — and the
+  // outgoing pane cancels its pending emission on destroy (Crepe's listener
+  // and SourcePane's docSync alike), so those keystrokes would be gone for
+  // good. $effect.pre runs before the DOM update, while the outgoing pane's
+  // flush is still the bufferFlush registration; the doc-store write it
+  // causes is picked up by the same render flush. A no-op at mount and
+  // whenever nothing is pending.
+  $effect.pre(() => {
+    void $split
+    flushBufferEdits()
   })
 
   // Esc closes the find bar even when focus is inside the editor (FindBar's

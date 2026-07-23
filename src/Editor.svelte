@@ -25,6 +25,7 @@
   import { get } from 'svelte/store'
   import { searchPlugin } from './lib/searchPlugin'
   import { registerHtmlSource, unregisterHtmlSource } from './lib/export'
+  import { registerBufferFlush, unregisterBufferFlush } from './lib/bufferFlush'
   import { doc } from './lib/doc'
   import {
     registerViewStateProvider,
@@ -58,6 +59,12 @@
   // Cursor/scroll snapshot provider for the buffer cache (stash-on-switch);
   // registered post-create like `source` since it reads editorViewCtx.
   let viewStateProvider: (() => ViewState) | undefined
+  // Buffer-flush hook (bufferFlush.ts): Crepe's hardwired listener plugin
+  // serializes on a 200ms trailing debounce, so doc.content can miss the
+  // newest keystrokes; save/export/guard/stash call flushBufferEdits() and
+  // this closure lands the current editor text through the SAME onChange
+  // path (onEditorChange), keeping adoptNormalization semantics intact.
+  let bufferFlush: (() => void) | undefined
 
   onMount(async () => {
     crepe = new Crepe({
@@ -120,6 +127,8 @@
     })
     source = () => crepe!.editor.action(getHTML())
     registerHtmlSource(source)
+    bufferFlush = () => onChange(crepe!.getMarkdown())
+    registerBufferFlush(bufferFlush)
     // Buffer-cache view state: capture on demand (stashActive reads the live
     // view at switch time)…
     viewStateProvider = () => {
@@ -152,6 +161,7 @@
   onDestroy(() => {
     destroyed = true
     if (source) unregisterHtmlSource(source)
+    if (bufferFlush) unregisterBufferFlush(bufferFlush)
     if (viewStateProvider) unregisterViewStateProvider(viewStateProvider)
     crepe?.destroy()
   })

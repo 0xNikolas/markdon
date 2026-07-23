@@ -6,7 +6,13 @@
 // Imports ONLY from @codemirror/* and @lezer/highlight -- never prosemirror-*.
 // All eight packages ship with @milkdown/crepe (single-instance, verified in
 // bun.lock) and are promoted to direct dependencies in package.json.
-import { Compartment, EditorSelection, EditorState, type Extension } from '@codemirror/state'
+import {
+  Compartment,
+  EditorSelection,
+  EditorState,
+  type Extension,
+  type Text,
+} from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { markdown, markdownKeymap, markdownLanguage } from '@codemirror/lang-markdown'
@@ -85,15 +91,82 @@ export function cursorAt(state: EditorState): CursorPos {
   return { line: line.number, col: head - line.from }
 }
 
+// Docs at or below this length keep serializing synchronously on every
+// docChanged update: a rope join under 64K is far below a frame budget, and a
+// live doc.content keeps the split preview streaming while you type. Matches
+// textMetrics' sync/deferred word-count threshold. Above it, materializing
+// the whole string per keystroke is the last O(doc)-per-keystroke cost in the
+// app, so big docs fall back to a trailing debounce at the same 200ms cadence
+// as Crepe's hardwired @milkdown/plugin-listener — serialization then runs
+// per PAUSE, and the pending window is bridged by bufferFlush.ts at every
+// read point (save/export/guard/stash).
+export const DOC_SYNC_LIMIT = 64_000
+export const DOC_SYNC_DELAY_MS = 200
+
+/**
+ * The source pane's doc→store sync policy (see DOC_SYNC_LIMIT above).
+ * `docChanged` is fed from the updateListener with the post-update rope;
+ * `flush` lands a pending (debounced) serialization NOW — registered with
+ * bufferFlush so save/export/guard reads are never stale; `cancel` drops any
+ * pending emission without serializing (pane destroy: every doc-replacing
+ * flow has already flushed through its own choke-point, so a late emission
+ * here could only ever target the WRONG doc).
+ */
+export interface DocSync {
+  docChanged(docText: Text): void
+  flush(): void
+  cancel(): void
+}
+
+export function createDocSync(
+  onDocChange: (md: string) => void,
+  delayMs: number = DOC_SYNC_DELAY_MS,
+  syncLimit: number = DOC_SYNC_LIMIT,
+): DocSync {
+  let pending: Text | null = null
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const clear = () => {
+    if (timer !== null) {
+      clearTimeout(timer)
+      timer = null
+    }
+    pending = null
+  }
+  // Trailing-debounce fire; doubles as flush (no-op when nothing is pending).
+  const fire = () => {
+    const t = pending
+    clear()
+    if (t !== null) onDocChange(t.toString())
+  }
+  return {
+    docChanged(docText: Text) {
+      if (docText.length <= syncLimit) {
+        // Small doc: serialize inline. Clears any timer a previously-large
+        // doc armed (mass deletion shrank it) — this emission supersedes it.
+        clear()
+        onDocChange(docText.toString())
+        return
+      }
+      pending = docText // latest rope wins; the string materializes on fire
+      if (timer !== null) clearTimeout(timer)
+      timer = setTimeout(fire, delayMs)
+    },
+    flush: fire,
+    cancel: clear,
+  }
+}
+
 /**
  * The full extension array for the source pane. Behavior opts (soft wrap, tab
  * width, auto-close brackets) come from the shared settings store; the four
- * compartments let SourcePane reconfigure them without a rebuild.
+ * compartments let SourcePane reconfigure them without a rebuild. Doc changes
+ * route through `docSync` (createDocSync) rather than a bare callback so
+ * large docs don't pay an O(doc) toString per keystroke.
  */
 export function sourceExtensions(
   s: Settings,
   readonly: boolean,
-  onDocChange: (md: string) => void,
+  docSync: Pick<DocSync, 'docChanged'>,
   onCursor: (c: CursorPos) => void,
 ): Extension[] {
   return [
@@ -114,7 +187,7 @@ export function sourceExtensions(
       indentWithTab,
     ]),
     EditorView.updateListener.of((u) => {
-      if (u.docChanged) onDocChange(u.state.doc.toString())
+      if (u.docChanged) docSync.docChanged(u.state.doc)
       if (u.selectionSet || u.docChanged) onCursor(cursorAt(u.state))
     }),
   ]

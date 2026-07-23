@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { get } from 'svelte/store'
 
 const invoke = vi.fn()
@@ -21,6 +21,7 @@ import { errorMessage } from './errors'
 import { openList, previewPath } from './openList'
 import { conflict } from './fileSync'
 import * as bufferCache from './bufferCache'
+import { registerBufferFlush, unregisterBufferFlush } from './bufferFlush'
 import { settings, DEFAULTS } from './settings'
 
 beforeEach(() => {
@@ -714,5 +715,79 @@ describe('readonly', () => {
     expect(s.path).toBe('/tmp/copy.md')
     expect(s.readonly).toBe(false)
     expect(isDirty(s)).toBe(false)
+  })
+})
+
+describe('flush-before-read (the stale-save window)', () => {
+  // Simulates the editors' debounced serialization: the registered flush
+  // holds keystrokes that have NOT yet landed in doc.content. Every read
+  // point below must run it before trusting the store.
+  let flush: (() => void) | null = null
+  function pendingKeystrokes(md: string) {
+    flush = () => edit(md)
+    registerBufferFlush(flush)
+  }
+  afterEach(() => {
+    if (flush) unregisterBufferFlush(flush)
+    flush = null
+  })
+
+  it('save() lands the pending serialization before writing', async () => {
+    openDoc('/tmp/a.md', 'saved')
+    edit('saved plus older emission')
+    pendingKeystrokes('saved plus newest keystrokes')
+    invoke.mockResolvedValue(undefined)
+    await save()
+    expect(invoke).toHaveBeenCalledWith('write_file', {
+      path: '/tmp/a.md',
+      contents: 'saved plus newest keystrokes',
+    })
+    // …and the buffer is clean afterwards (no re-dirty when the debounced
+    // emission would have landed post-save).
+    expect(get(doc).savedContent).toBe('saved plus newest keystrokes')
+    expect(isDirty(get(doc))).toBe(false)
+  })
+
+  it('saveAs() flushes before reading the buffer', async () => {
+    openDoc('/tmp/a.md', 'saved')
+    pendingKeystrokes('newest')
+    invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === 'save_file_dialog' ? '/tmp/copy.md' : undefined,
+    )
+    await saveAs()
+    expect(invoke).toHaveBeenCalledWith('write_file', {
+      path: '/tmp/copy.md',
+      contents: 'newest',
+    })
+  })
+
+  it('stashActive() flushes so the cache never snapshots a stale buffer', () => {
+    openDoc('/tmp/a.md', 'saved')
+    openList.set(['/tmp/a.md'])
+    pendingKeystrokes('newest')
+    stashActive()
+    expect(bufferCache.peek('/tmp/a.md')?.content).toBe('newest')
+  })
+
+  it('saveAllDirty() flushes before the dirty check, not just inside save()', async () => {
+    // Without the up-front flush the active doc reads CLEAN here and is
+    // skipped entirely — the pending keystrokes would die with the window.
+    openDoc('/tmp/a.md', 'saved')
+    pendingKeystrokes('saved plus pending')
+    invoke.mockResolvedValue(undefined)
+    const allClean = await saveAllDirty()
+    expect(allClean).toBe(true)
+    expect(invoke).toHaveBeenCalledWith('write_file', {
+      path: '/tmp/a.md',
+      contents: 'saved plus pending',
+    })
+  })
+
+  it('a flush with nothing registered leaves every path working (no-op)', async () => {
+    openDoc('/tmp/a.md', 'saved')
+    edit('typed')
+    invoke.mockResolvedValue(undefined)
+    await save()
+    expect(invoke).toHaveBeenCalledWith('write_file', { path: '/tmp/a.md', contents: 'typed' })
   })
 })

@@ -6,6 +6,7 @@ import { watchStatus } from './ui'
 import { recordExternal } from './history'
 import { logInfo, logWarn } from './logging'
 import { listenScoped } from './windowing'
+import { flushBufferEdits } from './bufferFlush'
 
 /**
  * When set, the open file changed on disk while the buffer had unsaved edits.
@@ -89,6 +90,12 @@ export async function reconcileWithDisk(path: string): Promise<void> {
     logInfo('external-change read skipped (file mid-write or removed)')
     return
   }
+  // Land any pending (debounced) editor serialization before classifying:
+  // without it a buffer with un-emitted keystrokes reads clean, and a disk
+  // change would silently reload right over them. Flushing doesn't bump
+  // loadId (it routes through edit/adoptNormalization), so the staleness
+  // re-check below still sees this reconcile's own loadId.
+  flushBufferEdits()
   const current = get(doc)
   if (current.path !== path || current.loadId !== loadId) return
   switch (classifyExternalChange(current, disk, dismissedDisk)) {

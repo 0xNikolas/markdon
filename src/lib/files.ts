@@ -7,6 +7,7 @@ import { recordSave } from './history'
 import { settings } from './settings'
 import { readonlyMemory } from './readonlyMemory'
 import { reconcileWithDisk } from './fileSync'
+import { flushBufferEdits } from './bufferFlush'
 import * as bufferCache from './bufferCache'
 
 interface OpenedFile {
@@ -36,6 +37,7 @@ export interface OpenedEntry {
  * stashed — the stash must never silently drop unsaved edits.
  */
 export function stashActive(): void {
+  flushBufferEdits() // land the editor's pending serialization before snapshotting
   const s = get(doc)
   if (s.path === null) return // the untitled scratch has no cache key
   const pinned = get(openList).includes(s.path)
@@ -203,6 +205,7 @@ export async function openInNewWindow(path: string): Promise<void> {
 }
 
 export async function save(): Promise<void> {
+  flushBufferEdits() // the debounced editor emission may still hold the newest keystrokes
   const state = get(doc)
   if (state.readonly) return // read-only docs are always clean; nothing to save
   if (state.path === null) return saveAs()
@@ -219,6 +222,7 @@ export async function save(): Promise<void> {
 }
 
 export async function saveAs(): Promise<void> {
+  flushBufferEdits() // see save(): never write a buffer that trails the editor
   const state = get(doc)
   try {
     const selected = await invoke<string | null>('save_file_dialog', {
@@ -274,6 +278,9 @@ export async function saveCachedBuffer(path: string): Promise<boolean> {
  * dirty set intact; already-saved buffers aren't re-attempted on retry.
  */
 export async function saveAllDirty(): Promise<boolean> {
+  // Flush before the dirty CHECK, not just inside save(): pending editor
+  // edits could make the active doc read clean here and be skipped entirely.
+  flushBufferEdits()
   let allClean = true
   const active = get(doc)
   if (!active.readonly && isDirty(active)) {

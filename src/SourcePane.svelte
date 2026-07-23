@@ -6,6 +6,7 @@
   import { closeBrackets } from '@codemirror/autocomplete'
   import {
     sourceExtensions,
+    createDocSync,
     tabExt,
     readonlyExt,
     registerSourceView,
@@ -14,6 +15,7 @@
     bracketsC,
     readonlyC,
   } from './lib/sourceEditor'
+  import { registerBufferFlush, unregisterBufferFlush } from './lib/bufferFlush'
   import {
     registerViewStateProvider,
     unregisterViewStateProvider,
@@ -38,13 +40,21 @@
   // Cursor/scroll snapshot provider for the buffer cache (stash-on-switch).
   let viewStateProvider: (() => ViewState) | undefined
 
+  // Doc→store sync: synchronous for ordinary docs, trailing-debounced above
+  // sourceEditor's DOC_SYNC_LIMIT so huge docs don't pay an O(doc) toString
+  // per keystroke. Its flush registers with bufferFlush so every read point
+  // (save/export/guard/stash) lands pending edits first. The closure reads
+  // the live `onChange` prop at emit time (not the mount-time value).
+  const docSync = createDocSync((md) => onChange(md))
+
   onMount(() => {
     const state = EditorState.create({
       doc: initialContent,
-      extensions: sourceExtensions(get(settings), readonly, onChange, (c) => cursor.set(c)),
+      extensions: sourceExtensions(get(settings), readonly, docSync, (c) => cursor.set(c)),
     })
     view = new EditorView({ state, parent: el })
     registerSourceView(view)
+    registerBufferFlush(docSync.flush)
     onViewReady?.(view)
     cursor.set({ line: 1, col: 0 }) // seed the status bar for the caret at doc start
     viewStateProvider = () => ({
@@ -86,6 +96,12 @@
 
   onDestroy(() => {
     registerSourceView(null)
+    unregisterBufferFlush(docSync.flush)
+    // Cancel, don't flush: every doc-replacing flow (openPath's stash, the
+    // guards, the split toggle's pre-effect in App) has already flushed
+    // through bufferFlush before this unmount, so anything still pending here
+    // could only serialize the OLD text into whatever doc is live next.
+    docSync.cancel()
     if (viewStateProvider) unregisterViewStateProvider(viewStateProvider)
     cursor.set(null) // hide the status-bar Ln/Col segment in WYSIWYG mode
     view?.destroy()

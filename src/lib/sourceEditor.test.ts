@@ -1,11 +1,13 @@
-import { describe, it, expect } from 'vitest'
-import { EditorState } from '@codemirror/state'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { EditorState, Text } from '@codemirror/state'
 import {
   cursorAt,
   tabExt,
   readonlyExt,
   gotoPos,
   maxLineLength,
+  createDocSync,
+  DOC_SYNC_DELAY_MS,
   LONG_LINE_LIMIT,
 } from './sourceEditor'
 
@@ -89,6 +91,101 @@ describe('maxLineLength', () => {
     const huge = '![](data:image/png;base64,' + 'A'.repeat(LONG_LINE_LIMIT) + ')'
     expect(maxLineLength(`# ok\n\n${huge}\n`)).toBeGreaterThan(LONG_LINE_LIMIT)
     expect(maxLineLength('# ok\n\nsome ordinary paragraph\n')).toBeLessThan(LONG_LINE_LIMIT)
+  })
+})
+
+describe('createDocSync', () => {
+  const LIMIT = 10 // tiny threshold so tests stay readable
+  const text = (s: string) => Text.of(s.split('\n'))
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('serializes synchronously at or below the sync limit', () => {
+    const onDocChange = vi.fn()
+    const sync = createDocSync(onDocChange, DOC_SYNC_DELAY_MS, LIMIT)
+    sync.docChanged(text('short'))
+    expect(onDocChange).toHaveBeenCalledTimes(1)
+    expect(onDocChange).toHaveBeenCalledWith('short')
+  })
+
+  it('debounces above the limit: nothing emits until the delay elapses', () => {
+    const onDocChange = vi.fn()
+    const sync = createDocSync(onDocChange, DOC_SYNC_DELAY_MS, LIMIT)
+    sync.docChanged(text('a'.repeat(LIMIT + 1)))
+    expect(onDocChange).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(DOC_SYNC_DELAY_MS)
+    expect(onDocChange).toHaveBeenCalledTimes(1)
+    expect(onDocChange).toHaveBeenCalledWith('a'.repeat(LIMIT + 1))
+  })
+
+  it('is a trailing debounce: rapid changes re-arm and only the latest doc emits', () => {
+    const onDocChange = vi.fn()
+    const sync = createDocSync(onDocChange, DOC_SYNC_DELAY_MS, LIMIT)
+    sync.docChanged(text('a'.repeat(LIMIT + 1)))
+    vi.advanceTimersByTime(DOC_SYNC_DELAY_MS - 1)
+    sync.docChanged(text('b'.repeat(LIMIT + 2))) // <delay apart: re-arms
+    vi.advanceTimersByTime(DOC_SYNC_DELAY_MS - 1)
+    expect(onDocChange).not.toHaveBeenCalled() // continuous typing defers
+    vi.advanceTimersByTime(1)
+    expect(onDocChange).toHaveBeenCalledTimes(1)
+    expect(onDocChange).toHaveBeenCalledWith('b'.repeat(LIMIT + 2))
+  })
+
+  it('flush emits the pending doc immediately, exactly once', () => {
+    const onDocChange = vi.fn()
+    const sync = createDocSync(onDocChange, DOC_SYNC_DELAY_MS, LIMIT)
+    sync.docChanged(text('c'.repeat(LIMIT + 1)))
+    sync.flush()
+    expect(onDocChange).toHaveBeenCalledTimes(1)
+    expect(onDocChange).toHaveBeenCalledWith('c'.repeat(LIMIT + 1))
+    vi.advanceTimersByTime(DOC_SYNC_DELAY_MS * 2) // the armed timer must be cleared
+    expect(onDocChange).toHaveBeenCalledTimes(1)
+  })
+
+  it('flush with nothing pending is a no-op', () => {
+    const onDocChange = vi.fn()
+    const sync = createDocSync(onDocChange, DOC_SYNC_DELAY_MS, LIMIT)
+    sync.flush()
+    expect(onDocChange).not.toHaveBeenCalled()
+    // …including right after a synchronous (small-doc) emission
+    sync.docChanged(text('short'))
+    onDocChange.mockClear()
+    sync.flush()
+    expect(onDocChange).not.toHaveBeenCalled()
+  })
+
+  it('cancel drops the pending doc without emitting', () => {
+    const onDocChange = vi.fn()
+    const sync = createDocSync(onDocChange, DOC_SYNC_DELAY_MS, LIMIT)
+    sync.docChanged(text('d'.repeat(LIMIT + 1)))
+    sync.cancel()
+    vi.advanceTimersByTime(DOC_SYNC_DELAY_MS * 2)
+    sync.flush()
+    expect(onDocChange).not.toHaveBeenCalled()
+  })
+
+  it('a shrink below the limit emits synchronously and disarms the pending timer', () => {
+    const onDocChange = vi.fn()
+    const sync = createDocSync(onDocChange, DOC_SYNC_DELAY_MS, LIMIT)
+    sync.docChanged(text('e'.repeat(LIMIT + 1))) // arms the debounce
+    sync.docChanged(text('tiny')) // mass deletion: back under the limit
+    expect(onDocChange).toHaveBeenCalledTimes(1)
+    expect(onDocChange).toHaveBeenCalledWith('tiny')
+    vi.advanceTimersByTime(DOC_SYNC_DELAY_MS * 2)
+    expect(onDocChange).toHaveBeenCalledTimes(1) // the stale big-doc emission never fires
+  })
+
+  it('multi-line ropes serialize with newlines intact', () => {
+    const onDocChange = vi.fn()
+    const sync = createDocSync(onDocChange, DOC_SYNC_DELAY_MS, 100) // stays under the limit
+    sync.docChanged(text('# a\n\nparagraph'))
+    expect(onDocChange).toHaveBeenCalledTimes(1)
+    expect(onDocChange).toHaveBeenCalledWith('# a\n\nparagraph')
   })
 })
 

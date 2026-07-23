@@ -3,6 +3,7 @@ import { get } from 'svelte/store'
 import { doc } from './doc'
 import { settings, type Settings } from './settings'
 import { reportError } from './errors'
+import { flushBufferEdits } from './bufferFlush'
 
 /**
  * Export flow: writes the current document as standalone HTML or raw
@@ -174,6 +175,10 @@ async function waitForHtmlSource(): Promise<(() => string) | null> {
  * unhandled promise rejection.
  */
 export async function exportDocument(): Promise<void> {
+  // The markdown path exports doc.content byte-for-byte, which may trail the
+  // editor by one debounce window — land pending edits first. (The HTML/PDF
+  // paths serialize from the live editor view and were never stale.)
+  flushBufferEdits()
   const state = get(doc)
   const format = get(settings).exportFormat
 

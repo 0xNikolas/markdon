@@ -14,6 +14,7 @@ import {
   dismissConflict,
 } from './fileSync'
 import { doc, openDoc, newDoc, edit, isDirty, restoreDoc, resetReadonlyMemory } from './doc'
+import { registerBufferFlush, unregisterBufferFlush } from './bufferFlush'
 import { errorMessage } from './errors'
 import { watchStatus } from './ui'
 
@@ -258,6 +259,25 @@ describe('reconcileWithDisk', () => {
     await p
     expect(get(doc).content).toBe('restored')
     expect(get(conflict)).toBeNull()
+  })
+
+  it('flushes pending editor edits before classifying (dirty-in-flight is a conflict, not a reload)', async () => {
+    // The debounced editor emission still holds keystrokes when the watcher
+    // fires: without the flush the buffer reads clean and the external
+    // version silently reloads right over them.
+    openDoc('/tmp/a.md', 'base')
+    const flush = () => edit('base plus pending keystrokes')
+    registerBufferFlush(flush)
+    try {
+      // NB: not 'theirs' — the decline test above leaves module-level
+      // dismissedDisk holding that exact version, which would classify ignore.
+      invoke.mockResolvedValue('external-v2')
+      await reconcileWithDisk('/tmp/a.md')
+      expect(get(conflict)).toBe('external-v2') // prompted, not silently reloaded
+      expect(get(doc).content).toBe('base plus pending keystrokes')
+    } finally {
+      unregisterBufferFlush(flush)
+    }
   })
 
   it('swallows a read failure (file mid-write or removed)', async () => {
