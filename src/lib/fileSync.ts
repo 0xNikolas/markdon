@@ -63,6 +63,16 @@ export function dismissConflict(): void {
 }
 
 /**
+ * Test-only: forget a prior "Keep mine" decision. `dismissedDisk` is module
+ * state that outlives any one test (mirrors doc.ts's resetReadonlyMemory);
+ * without a reset, a test that dismisses a conflict silently changes how a
+ * later test classifies the same disk version.
+ */
+export function resetDismissedDisk(): void {
+  dismissedDisk = null
+}
+
+/**
  * Re-read `path` from disk and react per {@link classifyExternalChange}:
  * clean+changed → silent reload (recorded to File History), dirty+changed →
  * conflict bar, otherwise ignore. Shared by the file-watcher listener and by

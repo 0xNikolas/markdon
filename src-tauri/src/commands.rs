@@ -128,11 +128,23 @@ pub(crate) fn reveal_invocation(
     }
     #[cfg(target_os = "windows")]
     {
+        // Explorer does its own command-line parsing (commas split fields), and
+        // std's spawn would wrap any spaced argument in quotes WHOLE — turning
+        // `/select,C:\Users\John Doe\…` into one quoted token Explorer no
+        // longer recognizes as a switch. So quote ONLY the path (Windows paths
+        // cannot contain `"`) and hand the argument to Explorer verbatim via
+        // `raw_arg` — see the cfg(windows) spawn in `reveal_log_file`.
+        let quoted = |p: &Path| {
+            let mut arg = std::ffi::OsString::from("\"");
+            arg.push(p.as_os_str());
+            arg.push("\"");
+            arg
+        };
         if is_dir {
-            ("explorer", vec![path.as_os_str().to_os_string()])
+            ("explorer", vec![quoted(path)])
         } else {
             let mut arg = std::ffi::OsString::from("/select,");
-            arg.push(path.as_os_str());
+            arg.push(quoted(path));
             ("explorer", vec![arg])
         }
     }
@@ -167,10 +179,20 @@ pub fn reveal_log_file(
     } else {
         reveal_invocation(&dir, true)
     };
-    let mut child = std::process::Command::new(prog)
-        .args(args)
-        .spawn()
-        .map_err(|e| e.to_string())?;
+    let mut cmd = std::process::Command::new(prog);
+    // Windows: the arguments are pre-quoted for Explorer's own parser (see
+    // `reveal_invocation`); `raw_arg` bypasses std's whole-argument quoting,
+    // which would otherwise swallow the `/select,` switch for spaced paths.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        for arg in args {
+            cmd.raw_arg(arg);
+        }
+    }
+    #[cfg(not(windows))]
+    cmd.args(args);
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
     std::thread::spawn(move || {
         let _ = child.wait();
     });
@@ -241,6 +263,16 @@ mod tests {
         assert!(res.is_err());
     }
 
+    #[test]
+    fn reject_unsafe_path_rejects_canonical_windows_verbatim_paths() {
+        // Pins WHY watch_workspace must not apply this guard to Rust's own
+        // canonicalize output: on Windows, canonical paths carry the `\\?\`
+        // verbatim prefix, which this guard rejects wholesale. Commands that
+        // receive a canonical root back from the webview must rely on
+        // ensure_root's granted-set membership instead.
+        assert!(reject_unsafe_path(r"\\?\C:\Users\me\notes").is_err());
+    }
+
     // -- reveal_invocation ----------------------------------------------------
 
     #[cfg(target_os = "macos")]
@@ -257,12 +289,28 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn reveal_invocation_selects_the_file_and_opens_the_dir_fallback() {
+        // Only the PATH is quoted, never the `/select,` switch: the arguments
+        // go to Explorer verbatim (raw_arg), and a whole-argument quote around
+        // a spaced path would make Explorer drop the switch entirely.
         let (prog, args) = reveal_invocation(Path::new(r"C:\logs\markdon.log"), false);
         assert_eq!(prog, "explorer");
-        assert_eq!(args, vec![r"/select,C:\logs\markdon.log"]);
+        assert_eq!(args, vec![r#"/select,"C:\logs\markdon.log""#]);
         let (prog, args) = reveal_invocation(Path::new(r"C:\logs"), true);
         assert_eq!(prog, "explorer");
-        assert_eq!(args, vec![r"C:\logs"]);
+        assert_eq!(args, vec![r#""C:\logs""#]);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn reveal_invocation_quotes_a_spaced_profile_path() {
+        // The common case that broke: a user profile containing a space.
+        let (prog, args) =
+            reveal_invocation(Path::new(r"C:\Users\John Doe\logs\markdon.log"), false);
+        assert_eq!(prog, "explorer");
+        assert_eq!(
+            args,
+            vec![r#"/select,"C:\Users\John Doe\logs\markdon.log""#]
+        );
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]

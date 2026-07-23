@@ -425,6 +425,45 @@ describe('refreshWorkspace', () => {
     expect(get(workspace).tree).toBe(stale)
     expect(get(errorMessage)).toContain('workspace')
   })
+
+  it('drops a walk that resolves after Close Folder (no workspace resurrection)', async () => {
+    workspace.set({ root: '/ws/notes', tree: tree('notes') })
+    workspaceName.set('notes')
+    let resolveList!: (v: unknown) => void
+    invoke.mockImplementation((cmd: unknown) =>
+      cmd === 'list_workspace'
+        ? new Promise((r) => {
+            resolveList = r
+          })
+        : Promise.resolve(undefined),
+    )
+    const p = refreshWorkspace()
+    // User clicks Close Folder while the walk is in flight.
+    await closeWorkspace()
+    resolveList({ root: '/ws/notes', tree: tree('notes') })
+    await p
+    // The stale walk must not re-adopt the closed workspace (which would also
+    // re-install the Rust watcher via the root-transition subscription).
+    expect(get(workspace)).toEqual({ root: null, tree: null })
+    expect(get(workspaceName)).toBeNull()
+  })
+
+  it('drops a walk that resolves after a switch to a different root', async () => {
+    workspace.set({ root: '/ws/a', tree: tree('a') })
+    let resolveList!: (v: unknown) => void
+    invoke.mockImplementation((cmd: unknown) =>
+      cmd === 'list_workspace'
+        ? new Promise((r) => {
+            resolveList = r
+          })
+        : Promise.resolve(undefined),
+    )
+    const p = refreshWorkspace()
+    workspace.set({ root: '/ws/b', tree: tree('b') }) // root switched mid-walk
+    resolveList({ root: '/ws/a', tree: tree('a') })
+    await p
+    expect(get(workspace).root).toBe('/ws/b')
+  })
 })
 
 describe('restoreWorkspace', () => {

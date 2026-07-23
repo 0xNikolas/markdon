@@ -354,12 +354,52 @@ pub fn take_startup_workspace(
     })
 }
 
+/// How a valid Open Recent pick is honored — resolved by [`resolve_recent`].
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RecentDecision {
+    /// This instance already has a folder open: spawn a new instance for the
+    /// root (VS Code second-window semantics).
+    Spawn,
+    /// Folder-less instance: grant + walk + persist in place, like a dialog pick.
+    Adopt,
+}
+
+/// Decision core of [`open_recent_workspace`], AppHandle-free so it is
+/// unit-testable (the `record_snapshot` pattern in history.rs). Enforces the
+/// trust boundary — `root` must be an entry of the Rust-written MRU, or the
+/// pick is rejected before any grant/spawn — then picks spawn-vs-adopt from
+/// whether this instance already has a folder open.
+pub(crate) fn resolve_recent(
+    file: &Path,
+    root: &str,
+    has_current: bool,
+) -> Result<RecentDecision, String> {
+    let state = load_state(file);
+    if !state.roots.iter().any(|r| r == root) {
+        return Err("not a recent workspace".into());
+    }
+    Ok(if has_current {
+        RecentDecision::Spawn
+    } else {
+        RecentDecision::Adopt
+    })
+}
+
+/// Drop a vanished folder's entry from the MRU (leaving every other entry, and
+/// the restore pointer, untouched) so it disappears from Open Recent.
+/// AppHandle-free for the same testability reason as [`resolve_recent`].
+pub(crate) fn drop_dead_recent(file: &Path, root: &str) -> Result<(), String> {
+    let mut state = load_state(file);
+    state.roots.retain(|r| r != root);
+    save_state(file, &state)
+}
+
 /// Reopen an entry of the Open Recent menu. Trust boundary (same pattern as
 /// `close_if_owned` proving ownership by comparison against Rust-persisted
 /// state): `root` must be an entry of the Rust-written MRU — every entry was
 /// persisted only after a real dialog pick / argv hand-off in SOME instance,
 /// so the webview can replay a past grant-decision but never mint a grant for
-/// an arbitrary path.
+/// an arbitrary path. See [`resolve_recent`], which holds that check.
 ///
 /// `current_root: Some(_)` (this instance already has a folder open) spawns a
 /// new instance for `root` and returns `Ok(None)` — VS Code second-window
@@ -375,30 +415,27 @@ pub fn open_recent_workspace(
     allowed: State<'_, AllowedPaths>,
 ) -> Result<Option<Workspace>, String> {
     let file = state_file(&app)?;
-    let mut state = load_state(&file);
-    if !state.roots.iter().any(|r| r == &root) {
-        return Err("not a recent workspace".into());
-    }
-    if current_root.is_some() {
-        crate::dialogs::spawn_workspace_instance(&root)?;
-        return Ok(None);
-    }
-    match allowed.allow_root(Path::new(&root)) {
-        Ok(canon) => {
-            // Recursive display-only grant: an explicitly recent-picked whole
-            // folder, same justification as open_workspace_dialog.
-            crate::allow_asset_dir(&app, &canon, true);
-            // open_result persists current + bumps the MRU + syncs the menu.
-            Ok(Some(open_result(&app, &canon)?))
+    match resolve_recent(&file, &root, current_root.is_some())? {
+        RecentDecision::Spawn => {
+            crate::dialogs::spawn_workspace_instance(&root)?;
+            Ok(None)
         }
-        Err(e) => {
-            // Dead entry: drop it from the MRU so it leaves the menu, then
-            // let the frontend banner the failure.
-            state.roots.retain(|r| r != &root);
-            let _ = save_state(&file, &state);
-            crate::menu::sync_recent_menu(&app);
-            Err(e)
-        }
+        RecentDecision::Adopt => match allowed.allow_root(Path::new(&root)) {
+            Ok(canon) => {
+                // Recursive display-only grant: an explicitly recent-picked
+                // whole folder, same justification as open_workspace_dialog.
+                crate::allow_asset_dir(&app, &canon, true);
+                // open_result persists current + bumps the MRU + syncs the menu.
+                Ok(Some(open_result(&app, &canon)?))
+            }
+            Err(e) => {
+                // Dead entry: drop it from the MRU so it leaves the menu, then
+                // let the frontend banner the failure.
+                let _ = drop_dead_recent(&file, &root);
+                crate::menu::sync_recent_menu(&app);
+                Err(e)
+            }
+        },
     }
 }
 
@@ -640,6 +677,68 @@ mod tests {
         let back = load_state(&file);
         assert_eq!(back.current.as_deref(), Some("/ws/a"));
         assert_eq!(back.roots, vec!["/ws/a", "/ws/b"]);
+    }
+
+    #[test]
+    fn resolve_recent_rejects_a_root_absent_from_the_mru() {
+        // The trust boundary: a webview-supplied root that was never persisted
+        // by a real pick must be rejected before any grant or spawn.
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("workspace.json");
+        persist_open(&file, "/ws/a").unwrap();
+        let res = resolve_recent(&file, "/ws/never-picked", false);
+        assert_eq!(res, Err("not a recent workspace".into()));
+        // Same rejection regardless of the spawn-vs-adopt branch.
+        assert!(resolve_recent(&file, "/ws/never-picked", true).is_err());
+    }
+
+    #[test]
+    fn resolve_recent_rejects_everything_when_no_state_exists() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("nope.json");
+        assert!(resolve_recent(&file, "/ws/a", false).is_err());
+    }
+
+    #[test]
+    fn resolve_recent_spawns_when_a_folder_is_already_open() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("workspace.json");
+        persist_open(&file, "/ws/a").unwrap();
+        assert_eq!(
+            resolve_recent(&file, "/ws/a", true),
+            Ok(RecentDecision::Spawn)
+        );
+    }
+
+    #[test]
+    fn resolve_recent_adopts_in_place_when_folder_less() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("workspace.json");
+        persist_open(&file, "/ws/a").unwrap();
+        assert_eq!(
+            resolve_recent(&file, "/ws/a", false),
+            Ok(RecentDecision::Adopt)
+        );
+    }
+
+    #[test]
+    fn drop_dead_recent_removes_exactly_the_dead_entry_preserving_order() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("workspace.json");
+        persist_open(&file, "/ws/a").unwrap();
+        persist_open(&file, "/ws/dead").unwrap();
+        persist_open(&file, "/ws/c").unwrap(); // MRU: [c, dead, a], current: c
+        drop_dead_recent(&file, "/ws/dead").unwrap();
+        let state = load_state(&file);
+        assert_eq!(state.roots, vec!["/ws/c", "/ws/a"], "order preserved");
+        assert_eq!(
+            state.current.as_deref(),
+            Some("/ws/c"),
+            "the restore pointer is untouched"
+        );
+        // Dropping an entry that isn't there is a harmless no-op.
+        drop_dead_recent(&file, "/ws/dead").unwrap();
+        assert_eq!(load_state(&file).roots, vec!["/ws/c", "/ws/a"]);
     }
 
     #[test]

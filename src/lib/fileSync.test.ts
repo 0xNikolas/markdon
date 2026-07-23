@@ -12,6 +12,7 @@ import {
   reconcileWithDisk,
   conflict,
   dismissConflict,
+  resetDismissedDisk,
 } from './fileSync'
 import { doc, openDoc, newDoc, edit, isDirty, restoreDoc, resetReadonlyMemory } from './doc'
 import { registerBufferFlush, unregisterBufferFlush } from './bufferFlush'
@@ -168,6 +169,7 @@ describe('reconcileWithDisk', () => {
     invoke.mockReset()
     conflict.set(null)
     resetReadonlyMemory() // an earlier readonly open must not lock these paths
+    resetDismissedDisk() // an earlier test's "Keep mine" must not leak in here
     newDoc()
   })
 
@@ -269,11 +271,11 @@ describe('reconcileWithDisk', () => {
     const flush = () => edit('base plus pending keystrokes')
     registerBufferFlush(flush)
     try {
-      // NB: not 'theirs' — the decline test above leaves module-level
-      // dismissedDisk holding that exact version, which would classify ignore.
-      invoke.mockResolvedValue('external-v2')
+      // 'theirs' was dismissed by the decline test above — beforeEach's
+      // resetDismissedDisk means it still classifies as a conflict here.
+      invoke.mockResolvedValue('theirs')
       await reconcileWithDisk('/tmp/a.md')
-      expect(get(conflict)).toBe('external-v2') // prompted, not silently reloaded
+      expect(get(conflict)).toBe('theirs') // prompted, not silently reloaded
       expect(get(doc).content).toBe('base plus pending keystrokes')
     } finally {
       unregisterBufferFlush(flush)

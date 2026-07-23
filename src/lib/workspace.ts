@@ -136,12 +136,18 @@ export async function closeWorkspace(): Promise<void> {
 /**
  * Re-walk the current root (window refocus / a save landing a new file). On
  * error the stale tree is kept so a transient failure doesn't blank the sidebar.
+ * The walk result is DROPPED when the root changed while it was in flight
+ * (Close Folder, or a switch to another root): adopting it would resurrect the
+ * closed workspace — and re-install its Rust watcher via initWorkspace's
+ * root-transition subscription. Same post-await re-check pattern as
+ * fileSync.ts's reconcileWithDisk.
  */
 export async function refreshWorkspace(): Promise<void> {
   const root = get(workspace).root
   if (root === null) return
   try {
     const ws = await invoke<Workspace>('list_workspace', { root })
+    if (get(workspace).root !== root) return // root changed mid-walk: stale result
     adopt(ws)
   } catch (e) {
     reportError(`Could not refresh workspace: ${String(e)}`)

@@ -90,10 +90,12 @@ pub fn watch_workspace(
     allowed: State<'_, crate::allowlist::AllowedPaths>,
 ) -> Result<(), String> {
     // Same gate as list_workspace: only an actual granted workspace root.
+    // Deliberately NOT reject_unsafe_path'd: the root passed back here is
+    // Rust's own canonical output, which on Windows carries the `\\?\`
+    // verbatim prefix that guard rejects (see history.rs's module doc), and
+    // ensure_root already requires exact membership in the canonicalized
+    // granted-root set — an ungranted UNC/device path can never pass it.
     let canon = allowed.ensure_root(&root)?;
-    // Same UNC/device-path guard the read/write commands apply (defense-in-depth;
-    // keeps every path entry point consistent even if callers change).
-    crate::commands::reject_unsafe_path(&root)?;
 
     let label = window.label().to_string();
     // Owned copies for the debounce callback (runs on the debouncer's thread).
