@@ -3,7 +3,8 @@ import { writable, get, type Writable } from 'svelte/store'
 /**
  * Single source of truth for the app's mutually exclusive full-window
  * surfaces: the Settings modal, the Go to Line popover, the File History
- * modal, and the unsaved-changes discard guard. At most ONE is ever open.
+ * modal, the Quick Open palette, and the unsaved-changes discard guard.
+ * At most ONE is ever open.
  *
  * Mutual exclusion lives here, at the store, not re-asserted by hand at every
  * opener: openOverlay refuses (returns false, no-op) while one is already
@@ -18,6 +19,7 @@ export type Overlay =
   | { kind: 'settings' }
   | { kind: 'goto' }
   | { kind: 'history' }
+  | { kind: 'quickopen' }
   | {
       kind: 'discard'
       action: () => void

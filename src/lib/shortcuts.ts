@@ -14,6 +14,7 @@ export interface Shortcut {
 export const APP_SHORTCUTS: Shortcut[] = [
   { label: 'New File', keys: ['Cmd', 'N'] },
   { label: 'Open…', keys: ['Cmd', 'O'] },
+  { label: 'Quick Open…', keys: ['Cmd', 'P'] },
   { label: 'Save', keys: ['Cmd', 'S'] },
   { label: 'Save As…', keys: ['Cmd', 'Shift', 'S'] },
   {

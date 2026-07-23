@@ -27,6 +27,15 @@ pub fn build(app: &App) -> tauri::Result<(Menu<Wry>, CheckMenuItem<Wry>, Submenu
     // accelerator-collision tests below stay untouched.
     let open_recent =
         SubmenuBuilder::with_id(app, "menu:open_recent_submenu", "Open Recent").build()?;
+    // Quick Open (VS Code's Go to File): lives with the other open actions in
+    // the File menu — there is no Go menu here, and the palette is an open
+    // affordance, not an edit one. CmdOrCtrl+P is free: no other item claims
+    // it, and none of the PredefinedMenuItems this app builds defaults to it
+    // (the collision tests below cover both). The frontend no-ops the event
+    // while no workspace is open (nothing to list).
+    let quick_open = MenuItemBuilder::with_id("menu:quick_open", "Quick Open…")
+        .accelerator("CmdOrCtrl+P")
+        .build(app)?;
     let save = MenuItemBuilder::with_id("menu:save", "Save")
         .accelerator("CmdOrCtrl+S")
         .build(app)?;
@@ -95,6 +104,7 @@ pub fn build(app: &App) -> tauri::Result<(Menu<Wry>, CheckMenuItem<Wry>, Submenu
         .item(&open)
         .item(&open_folder)
         .item(&open_recent)
+        .item(&quick_open)
         .separator()
         .item(&save)
         .item(&save_as)
@@ -276,6 +286,7 @@ mod tests {
             "CmdOrCtrl+N",
             "CmdOrCtrl+O",
             "CmdOrCtrl+Shift+O",
+            "CmdOrCtrl+P",
             "CmdOrCtrl+S",
             "CmdOrCtrl+Shift+S",
             "CmdOrCtrl+Shift+E",
@@ -309,6 +320,7 @@ mod tests {
             "CmdOrCtrl+N",
             "CmdOrCtrl+O",
             "CmdOrCtrl+Shift+O",
+            "CmdOrCtrl+P",
             "CmdOrCtrl+S",
             "CmdOrCtrl+Shift+S",
             "CmdOrCtrl+Shift+E",
@@ -354,6 +366,7 @@ mod tests {
             ("menu:new", "CmdOrCtrl+N"),
             ("menu:open", "CmdOrCtrl+O"),
             ("menu:open_folder", "CmdOrCtrl+Shift+O"),
+            ("menu:quick_open", "CmdOrCtrl+P"),
             ("menu:save", "CmdOrCtrl+S"),
             ("menu:save_as", "CmdOrCtrl+Shift+S"),
             ("menu:history", "CmdOrCtrl+Shift+H"),

@@ -114,6 +114,27 @@ export function isFindReplaceFallbackKey(
   return (e.metaKey || e.ctrlKey) && e.altKey && e.code === 'KeyF'
 }
 
+// -- Quick Open keyboard fallback ---------------------------------------------
+
+/**
+ * True when `e` is the CmdOrCtrl+P Quick Open keyboard fallback for the given
+ * platform. Same mac carve-out as Go to Line's Cmd+L: on mac, ctrlKey is
+ * EXCLUDED even alongside metaKey — CodeMirror's standard keymap binds mac
+ * Ctrl-P (the emacs-style `mac: 'Ctrl-p'`) to cursorLineUp, so claiming it
+ * here would fight CM's own binding in split mode; everywhere else
+ * CmdOrCtrl+P IS Ctrl+P and CM has no non-mac Ctrl-P binding, so ctrlKey is
+ * honored there. Shift and Alt must be UP: Cmd+Shift+P is reserved (VS
+ * Code's command palette; shortcuts.ts pencils it in for split-preview), and
+ * a looser check would swallow it.
+ */
+export function isQuickOpenKey(
+  e: { metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; key: string },
+  mac: boolean,
+): boolean {
+  if (e.key.toLowerCase() !== 'p' || e.altKey || e.shiftKey) return false
+  return mac ? e.metaKey && !e.ctrlKey : e.metaKey || e.ctrlKey
+}
+
 /** Export request counter; the export feature subscribes and acts on ticks. */
 export const exportTick: Writable<number> = writable(0)
 export function requestExport(): void {

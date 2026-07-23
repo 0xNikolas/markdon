@@ -51,6 +51,7 @@
   import SettingsModal from './SettingsModal.svelte'
   import GoToLineBar from './GoToLineBar.svelte'
   import HistoryModal from './HistoryModal.svelte'
+  import QuickOpen from './QuickOpen.svelte'
   import Sidebar from './Sidebar.svelte'
   import { searchUi, openFind, openReplace, closeFind, shouldForceCloseFind } from './lib/searchPlugin'
   import { openSourceSearch, clearPendingLine } from './lib/sourceEditor'
@@ -60,9 +61,10 @@
     isMacPlatform,
     isGotoLineFallbackKey,
     isFindReplaceFallbackKey,
+    isQuickOpenKey,
   } from './lib/ui'
   import { activeOverlay, openOverlay, closeOverlay, anyOverlayOpen } from './lib/overlay'
-  import { openWorkspace, openRecentWorkspace, closeWorkspace } from './lib/workspace'
+  import { workspace, openWorkspace, openRecentWorkspace, closeWorkspace } from './lib/workspace'
   import { revealLog } from './lib/errors'
   import { exportDocument } from './lib/export'
   import { flushBufferEdits } from './lib/bufferFlush'
@@ -333,6 +335,28 @@
     fn()
   }
 
+  // ⌘P Quick Open (menu item and keyboard fallback alike). Gated on a
+  // workspace TREE being present, NOT on the empty page: with no folder open
+  // there is nothing to list, so the palette simply doesn't open (the
+  // documented no-workspace choice) — while the empty page WITH a workspace
+  // is exactly where ⌘P earns its keep, as the keyboard way out of the empty
+  // page. openOverlay's refusal covers every other overlay being up.
+  function openQuickOpen() {
+    if (get(workspace).tree === null) return
+    openOverlay({ kind: 'quickopen' })
+  }
+
+  // A palette pick: close the overlay FIRST, so switchGuarded's discard
+  // prompt (only a dirty untitled scratch defers — a dirty pathed doc stashes
+  // into the buffer cache and switches instantly) isn't refused by the
+  // palette still holding the overlay slot. Always pinned and in place: ⌘P
+  // is a deliberate jump, not a glance, and must not spawn a window even
+  // under openMode:'window'.
+  function pickQuickOpen(path: string) {
+    closeOverlay()
+    handleOpenFile(path, { inPlace: true })
+  }
+
   // All boot wiring (event subscriptions, startup drains, watcher/workspace
   // init, native-chrome mirrors) lives in appBoot.ts; App supplies only the
   // UI-flow closures the handlers need.
@@ -387,6 +411,9 @@
           }
           toggleReadonly()
         },
+        // Deliberately NOT unlessEmpty-gated: Quick Open must work from the
+        // empty page when a workspace exists (see openQuickOpen's own gate).
+        'menu:quick_open': openQuickOpen,
         'menu:settings': () => openOverlay({ kind: 'settings' }),
         'menu:open_folder': () => openWorkspace(),
         'menu:close_folder': () => closeWorkspace(),
@@ -493,6 +520,17 @@
   // isFindReplaceFallbackKey's doc comment on why it checks e.code instead).
   const macPlatform = isMacPlatform()
   function handleWindowKeydown(e: KeyboardEvent) {
+    // Quick Open runs BEFORE the empty-page gate below: with a workspace open
+    // it is the keyboard way OUT of the empty page. The combo is claimed
+    // (preventDefault) even when the open is refused — Cmd/Ctrl+P would
+    // otherwise fall through to the webview's print dialog, which is never
+    // what a ⌘P in this app means. isQuickOpenKey carries the same mac
+    // Ctrl-carve-out as Go to Line (CM binds mac Ctrl-P to cursorLineUp).
+    if (isQuickOpenKey(e, macPlatform)) {
+      e.preventDefault()
+      if (!anyOverlayOpen()) openQuickOpen()
+      return
+    }
     // Empty page up: every branch below is a document/editor action (find,
     // find-replace, go-to-line, or Escape for surfaces that can't be open
     // while empty) — the same gate the menu routes get via unlessEmpty.
@@ -710,6 +748,10 @@
 
 {#if $activeOverlay?.kind === 'history'}
   <HistoryModal path={$doc.path} readonly={$doc.readonly} onRevert={applyRevert} />
+{/if}
+
+{#if $activeOverlay?.kind === 'quickopen'}
+  <QuickOpen onPick={pickQuickOpen} />
 {/if}
 
 <style>

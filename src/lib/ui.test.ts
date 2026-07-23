@@ -26,6 +26,7 @@ const {
   emptyState,
   isGotoLineFallbackKey,
   isFindReplaceFallbackKey,
+  isQuickOpenKey,
 } = await import('./ui')
 
 describe('formatInt', () => {
@@ -272,6 +273,66 @@ describe('isFindReplaceFallbackKey', () => {
     expect(
       isFindReplaceFallbackKey({ metaKey: true, ctrlKey: false, altKey: true, code: 'KeyF' }),
     ).toBe(true)
+  })
+})
+
+describe('isQuickOpenKey', () => {
+  const ev = (over: Partial<Parameters<typeof isQuickOpenKey>[0]>) => ({
+    metaKey: false,
+    ctrlKey: false,
+    altKey: false,
+    shiftKey: false,
+    key: 'p',
+    ...over,
+  })
+
+  it('ignores every key but P', () => {
+    expect(isQuickOpenKey(ev({ metaKey: true, key: 'o' }), true)).toBe(false)
+    expect(isQuickOpenKey(ev({ ctrlKey: true, key: 'o' }), false)).toBe(false)
+  })
+
+  it('is case-insensitive on the key', () => {
+    expect(isQuickOpenKey(ev({ metaKey: true, key: 'P' }), true)).toBe(true)
+  })
+
+  it('requires Shift up — Cmd+Shift+P is reserved, never Quick Open', () => {
+    expect(isQuickOpenKey(ev({ metaKey: true, shiftKey: true }), true)).toBe(false)
+    expect(isQuickOpenKey(ev({ ctrlKey: true, shiftKey: true }), false)).toBe(false)
+  })
+
+  it('requires Alt up', () => {
+    expect(isQuickOpenKey(ev({ metaKey: true, altKey: true }), true)).toBe(false)
+    expect(isQuickOpenKey(ev({ ctrlKey: true, altKey: true }), false)).toBe(false)
+  })
+
+  describe('on mac', () => {
+    it('fires on metaKey alone', () => {
+      expect(isQuickOpenKey(ev({ metaKey: true }), true)).toBe(true)
+    })
+
+    it('never fires with ctrlKey, even alongside metaKey (CM binds mac Ctrl-P to cursorLineUp)', () => {
+      expect(isQuickOpenKey(ev({ metaKey: true, ctrlKey: true }), true)).toBe(false)
+      expect(isQuickOpenKey(ev({ ctrlKey: true }), true)).toBe(false)
+    })
+  })
+
+  describe('off mac', () => {
+    it('fires on ctrlKey alone (CmdOrCtrl+P IS Ctrl+P there)', () => {
+      expect(isQuickOpenKey(ev({ ctrlKey: true }), false)).toBe(true)
+    })
+
+    it('also fires on metaKey alone', () => {
+      expect(isQuickOpenKey(ev({ metaKey: true }), false)).toBe(true)
+    })
+
+    it('fires with both held (no CM collision off mac)', () => {
+      expect(isQuickOpenKey(ev({ metaKey: true, ctrlKey: true }), false)).toBe(true)
+    })
+  })
+
+  it('is false with neither modifier held', () => {
+    expect(isQuickOpenKey(ev({}), true)).toBe(false)
+    expect(isQuickOpenKey(ev({}), false)).toBe(false)
   })
 })
 
