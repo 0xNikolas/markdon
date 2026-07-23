@@ -3,6 +3,7 @@ import {
   selectionForContextMenu,
   clampMenuPosition,
   isSelectionClearingTarget,
+  fileMenuVisibility,
 } from './sidebarMenu'
 
 describe('selectionForContextMenu', () => {
@@ -79,5 +80,40 @@ describe('isSelectionClearingTarget', () => {
     expect(isSelectionClearingTarget(null)).toBe(false)
     expect(isSelectionClearingTarget(undefined)).toBe(false)
     expect(isSelectionClearingTarget({})).toBe(false)
+  })
+})
+
+describe('fileMenuVisibility', () => {
+  it('markdown file: Open + Reveal + Copy Path show; Close only when open', () => {
+    const closed = { isFile: true, isMarkdown: true, isImage: false, isOpen: false }
+    expect(fileMenuVisibility(closed)).toEqual({
+      open: true,
+      reveal: true,
+      copyPath: true,
+      close: false,
+    })
+    expect(fileMenuVisibility({ ...closed, isOpen: true }).close).toBe(true)
+  })
+
+  it('image file: Open shows (routes to the image view); Reveal + Copy Path show', () => {
+    expect(
+      fileMenuVisibility({ isFile: true, isMarkdown: false, isImage: true, isOpen: false }),
+    ).toEqual({ open: true, reveal: true, copyPath: true, close: false })
+  })
+
+  it('other file type: Open hidden; Reveal + Copy Path still show (type-agnostic)', () => {
+    expect(
+      fileMenuVisibility({ isFile: true, isMarkdown: false, isImage: false, isOpen: false }),
+    ).toEqual({ open: false, reveal: true, copyPath: true, close: false })
+  })
+
+  it('a non-file target (folder / multi-select / empty) shows nothing', () => {
+    expect(
+      fileMenuVisibility({ isFile: false, isMarkdown: false, isImage: false, isOpen: true }),
+    ).toEqual({ open: false, reveal: false, copyPath: false, close: false })
+    // Type/open flags are ignored entirely once isFile is false.
+    expect(
+      fileMenuVisibility({ isFile: false, isMarkdown: true, isImage: true, isOpen: true }),
+    ).toEqual({ open: false, reveal: false, copyPath: false, close: false })
   })
 })

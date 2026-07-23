@@ -26,6 +26,14 @@ function headerMenuButton(page: import('@playwright/test').Page) {
   return page.getByRole('button', { name: 'File operations' })
 }
 
+/** Right-click `name`'s workspace-tree row, returning the opened context menu. */
+async function openTreeRowMenu(page: import('@playwright/test').Page, name: string) {
+  await treeRow(page, name).click({ button: 'right' })
+  const menu = page.getByRole('menu', { name: 'File operations' })
+  await expect(menu).toBeVisible()
+  return menu
+}
+
 test('New File: NameModal preselects the stem, creates, and the tree refreshes', async ({
   page,
 }) => {
@@ -168,6 +176,112 @@ test('Cut dims the row; Paste moves it into the focused folder and clears the cu
   await sub.click() // expand: the moved row is inside
   await expect(treeRow(page, 'notes.md')).toBeVisible()
   await expect(workspaceTree(page).locator('.cut')).toHaveCount(0)
+})
+
+// -- file-level actions on ANY tree row (open or never opened) ----------------
+
+test('file actions gate by type and open state on tree rows', async ({ page }) => {
+  // Markdown, never opened: Open + Reveal + Copy Path show; Close is absent
+  // (not in the Open Files strip yet).
+  let menu = await openTreeRowMenu(page, 'notes.md')
+  await expect(menu.getByRole('menuitem', { name: 'Open', exact: true })).toBeEnabled()
+  await expect(menu.getByRole('menuitem', { name: 'Reveal in Finder', exact: true })).toBeEnabled()
+  await expect(menu.getByRole('menuitem', { name: 'Copy Path', exact: true })).toBeEnabled()
+  await expect(menu.getByRole('menuitem', { name: 'Close', exact: true })).toHaveCount(0)
+  await page.keyboard.press('Escape')
+
+  // Non-markdown "other" type: Open is hidden, but Reveal + Copy Path still
+  // show — they are file-type-agnostic.
+  menu = await openTreeRowMenu(page, 'readme.txt')
+  await expect(menu.getByRole('menuitem', { name: 'Open', exact: true })).toHaveCount(0)
+  await expect(menu.getByRole('menuitem', { name: 'Reveal in Finder', exact: true })).toBeEnabled()
+  await expect(menu.getByRole('menuitem', { name: 'Copy Path', exact: true })).toBeEnabled()
+  await page.keyboard.press('Escape')
+
+  // Folder: none of the file actions are offered.
+  menu = await openTreeRowMenu(page, 'sub')
+  await expect(menu.getByRole('menuitem', { name: 'Open', exact: true })).toHaveCount(0)
+  await expect(menu.getByRole('menuitem', { name: 'Reveal in Finder', exact: true })).toHaveCount(0)
+  await expect(menu.getByRole('menuitem', { name: 'Copy Path', exact: true })).toHaveCount(0)
+  await expect(menu.getByRole('menuitem', { name: 'Close', exact: true })).toHaveCount(0)
+})
+
+test('Reveal in Finder invokes reveal_path for a NEVER-opened tree file', async ({ page }) => {
+  // readme.txt was only ever listed by list_workspace — never opened. The
+  // workspace-root grant still covers it, so reveal_path is accepted.
+  const menu = await openTreeRowMenu(page, 'readme.txt')
+  await menu.getByRole('menuitem', { name: 'Reveal in Finder', exact: true }).click()
+
+  await expect.poll(async () => (await calls(page, 'reveal_path')).length).toBe(1)
+  expect((await calls(page, 'reveal_path'))[0].args).toEqual({ path: '/ws/readme.txt' })
+  await expect(menu).toBeHidden()
+})
+
+test('Copy Path writes a never-opened file path to the clipboard', async ({ page }) => {
+  // WebKit gates real clipboard reads behind user activation; the override
+  // records exactly what the app handed writeText.
+  await page.evaluate(() => {
+    window.__COPIED__ = null
+    navigator.clipboard.writeText = (text: string) => {
+      window.__COPIED__ = text
+      return Promise.resolve()
+    }
+  })
+
+  const menu = await openTreeRowMenu(page, 'ideas.md')
+  await menu.getByRole('menuitem', { name: 'Copy Path', exact: true }).click()
+
+  await expect.poll(() => page.evaluate(() => window.__COPIED__)).toBe('/ws/ideas.md')
+  // Copying is inert: nothing opened.
+  await expect(stripRows(page)).toHaveCount(0)
+})
+
+test('Open opens a markdown file in the current tab (pinned, never spawns)', async ({ page }) => {
+  const menu = await openTreeRowMenu(page, 'notes.md')
+  await menu.getByRole('menuitem', { name: 'Open', exact: true }).click()
+
+  await expect(editor(page)).toContainText('hello notes')
+  await expect(
+    openFilesStrip(page).getByRole('button', { name: 'notes.md', exact: true }),
+  ).toHaveAttribute('aria-current', 'true')
+  // Landed pinned, not as an italic preview.
+  await expect(
+    openFilesStrip(page).getByRole('button', { name: 'notes.md (preview)', exact: true }),
+  ).toHaveCount(0)
+  expect(await calls(page, 'open_document_window')).toHaveLength(0)
+})
+
+test('Close appears only for an open file and routes through the guarded close', async ({
+  page,
+}) => {
+  // Not open yet: Close is absent.
+  let menu = await openTreeRowMenu(page, 'notes.md')
+  await expect(menu.getByRole('menuitem', { name: 'Close', exact: true })).toHaveCount(0)
+  await page.keyboard.press('Escape')
+
+  await pinFile(page, 'notes.md')
+  await expect(stripRows(page)).toHaveCount(1)
+
+  // Now in the Open Files strip: Close shows and closes the document via
+  // App's guarded onCloseFile (the strip row drops, landing on the scratch).
+  menu = await openTreeRowMenu(page, 'notes.md')
+  await menu.getByRole('menuitem', { name: 'Close', exact: true }).click()
+  await expect(stripRows(page)).toHaveCount(0)
+  // Closed, not deleted: the file is still in the workspace tree.
+  await expect(treeRow(page, 'notes.md')).toBeVisible()
+})
+
+test('the header "…" dropdown never shows the tree-row file actions', async ({ page }) => {
+  await headerMenuButton(page).click()
+  const menu = page.getByRole('menu', { name: 'File operations' })
+  await expect(menu).toBeVisible()
+  // The cursor-only file actions must not leak into the header dropdown…
+  await expect(menu.getByRole('menuitem', { name: 'Open', exact: true })).toHaveCount(0)
+  await expect(menu.getByRole('menuitem', { name: 'Reveal in Finder', exact: true })).toHaveCount(0)
+  await expect(menu.getByRole('menuitem', { name: 'Copy Path', exact: true })).toHaveCount(0)
+  await expect(menu.getByRole('menuitem', { name: 'Close', exact: true })).toHaveCount(0)
+  // …while its existing items are unchanged.
+  await expect(menu.getByRole('menuitem', { name: 'Open in New Tab', exact: true })).toBeVisible()
 })
 
 test('Close Folder keeps the open document and its strip row', async ({ page }) => {

@@ -130,6 +130,13 @@
       case 'new-folder':
         promptNew('folder')
         break
+      case 'open':
+        // Open the file in this window: a markdown doc lands in the current
+        // tab (inPlace), an image routes to the image view — handleOpenFile
+        // detects the image type and diverts before touching $doc, so one
+        // call covers both. Non-openable types never reach here (Open hidden).
+        if (sel.length === 1) onOpenFile(sel[0], { inPlace: true })
+        break
       case 'open-tab':
         // "New tab" = pinned AND in this window by definition — `inPlace`
         // bypasses the openMode routing that a plain pinned open honors.
@@ -149,6 +156,33 @@
             reportError(`Could not open a new app instance: ${String(e)}`),
           )
         }
+        break
+      case 'reveal':
+        // Reveal in Finder. reveal_path is allowlist-gated in Rust
+        // (AllowedPaths::ensure), and opening the workspace already granted its
+        // root — so any file inside it, even one only ever LISTED and never
+        // opened, is accepted. A file deleted from disk after listing fails
+        // ensure's canonicalize and surfaces the banner rather than crashing.
+        if (sel.length === 1) {
+          invoke('reveal_path', { path: sel[0] }).catch((e) =>
+            reportError(`Could not reveal file: ${String(e)}`),
+          )
+        }
+        break
+      case 'copy-path':
+        // Absolute path to the system clipboard; a denied/unavailable clipboard
+        // surfaces honestly rather than silently no-oping (mirrors the strip).
+        if (sel.length === 1) {
+          navigator.clipboard
+            .writeText(sel[0])
+            .catch((e) => reportError(`Could not copy path: ${String(e)}`))
+        }
+        break
+      case 'close':
+        // Route through App's guarded onCloseFile (dirty-guard + neighbour /
+        // empty-state fallback) — the same path the strip's close button uses.
+        // Only offered while the file is in the strip (FileOpsMenu gating).
+        if (sel.length === 1) onCloseFile(sel[0])
         break
       case 'rename':
         if (sel.length === 1) startRename(sel[0])
@@ -224,6 +258,12 @@
   let hasRows = $derived(
     ($workspace.tree?.dirs.length ?? 0) + ($workspace.tree?.files.length ?? 0) > 0,
   )
+
+  // Paths currently in the Open Files strip (pinned rows + the italic preview
+  // row) — the row context menu's Close item shows only for a file that's open.
+  let openPaths = $derived(
+    new Set(previewPath !== null ? [...openFiles, previewPath] : openFiles),
+  )
 </script>
 
 <nav
@@ -252,6 +292,7 @@
   {#if ctxMenu}
     <FileOpsMenu
       {hasRows}
+      {openPaths}
       at={ctxMenu}
       onAction={handleAction}
       onClose={() => (ctxMenu = null)}
