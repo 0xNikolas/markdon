@@ -38,15 +38,19 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, State};
 
 use crate::allowlist::AllowedPaths;
+use crate::error::SeExt;
+use crate::fsutil::{atomic_write_bytes, sha256hex};
+
+/// Re-exported so `crate::history::bucket_key` and the unqualified references in
+/// this module's tests keep resolving after the definition moved to fsutil.
+pub(crate) use crate::fsutil::bucket_key;
 
 /// Per-canonical-path lock guarding `record_snapshot`'s read-modify-write of a
 /// bucket's `index.json` (load_index -> mutate -> write_index). Per-PROCESS
@@ -123,23 +127,12 @@ impl Default for Index {
     }
 }
 
-fn sha256hex(bytes: &[u8]) -> String {
-    hex::encode(Sha256::digest(bytes))
-}
-
-/// Bucket directory name for a canonical absolute path: `sha256hex(path)`.
-pub(crate) fn bucket_key(canonical: &str) -> String {
-    sha256hex(canonical.as_bytes())
-}
-
 /// Bucket directory for `canonical`: inside the owning workspace's state dir
 /// when the file was reached through a granted root, else the legacy
 /// standalone location (unchanged from before workspace-state existed).
 fn bucket_dir_in(base: &Path, ws_root: Option<&str>, canonical: &str) -> PathBuf {
     match ws_root {
-        Some(r) => base
-            .join("workspace-state")
-            .join(bucket_key(r))
+        Some(r) => crate::fsutil::workspace_state_dir(base, r)
             .join("history")
             .join(bucket_key(canonical)),
         None => base.join("history").join(bucket_key(canonical)),
@@ -265,23 +258,6 @@ pub(crate) fn prune(entries: &mut Vec<Entry>, now_ms: u64) -> Vec<Entry> {
     removed
 }
 
-/// Write via temp file + rename so a crash mid-write never leaves a truncated
-/// snapshot or index. Replicates commands.rs's atomic pattern (NOT its guarded
-/// write_file wrapper, which would reject the store's internal paths).
-/// `pub(crate)` so prefs.rs reuses it for the settings file instead of
-/// duplicating the tempfile+persist dance.
-pub(crate) fn atomic_write(path: &Path, contents: &[u8]) -> std::io::Result<()> {
-    let dir = match path.parent() {
-        Some(p) if !p.as_os_str().is_empty() => p,
-        _ => Path::new("."),
-    };
-    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
-    tmp.write_all(contents)?;
-    tmp.as_file().sync_all()?;
-    tmp.persist(path).map_err(|e| e.error)?;
-    Ok(())
-}
-
 fn index_path(bucket: &Path) -> PathBuf {
     bucket.join("index.json")
 }
@@ -296,8 +272,8 @@ fn load_index(bucket: &Path) -> Index {
 }
 
 fn write_index(bucket: &Path, index: &Index) -> Result<(), String> {
-    let json = serde_json::to_vec_pretty(index).map_err(|e| e.to_string())?;
-    atomic_write(&index_path(bucket), &json).map_err(|e| e.to_string())
+    let json = serde_json::to_vec_pretty(index).se()?;
+    atomic_write_bytes(&index_path(bucket), &json).se()
 }
 
 /// Core snapshot logic, testable without an AppHandle: `base` stands in for
@@ -314,7 +290,7 @@ pub(crate) fn record_snapshot(
     now_ms: u64,
 ) -> Result<Option<String>, String> {
     let bucket = resolve_bucket(base, ws_root, canonical);
-    fs::create_dir_all(&bucket).map_err(|e| e.to_string())?;
+    fs::create_dir_all(&bucket).se()?;
     let mut index = load_index(&bucket);
     let hash = sha256hex(content.as_bytes());
     if index
@@ -326,7 +302,7 @@ pub(crate) fn record_snapshot(
         return Ok(None); // no change since the latest version
     }
     let id = unique_id(&index.entries, now_ms);
-    atomic_write(&bucket.join(&id), content.as_bytes()).map_err(|e| e.to_string())?;
+    atomic_write_bytes(&bucket.join(&id), content.as_bytes()).se()?;
     index.entries.push(Entry {
         id: id.clone(),
         ts: now_ms,
@@ -369,7 +345,7 @@ pub(crate) fn read_snapshot(
     if !index.entries.iter().any(|e| e.id == id) {
         return Err("unknown version".into());
     }
-    fs::read_to_string(bucket.join(id)).map_err(|e| e.to_string())
+    fs::read_to_string(bucket.join(id)).se()
 }
 
 fn now_ms() -> u64 {
@@ -384,7 +360,7 @@ fn now_ms() -> u64 {
 /// the same file always maps to one bucket regardless of how it was reached.
 fn ensured_canonical(path: &str, allowed: &AllowedPaths) -> Result<String, String> {
     allowed.ensure(path)?;
-    let canon = fs::canonicalize(path).map_err(|e| e.to_string())?;
+    let canon = fs::canonicalize(path).se()?;
     Ok(canon.to_string_lossy().into_owned())
 }
 
@@ -397,7 +373,7 @@ fn owning_root_of(canonical: &str, allowed: &AllowedPaths) -> Option<String> {
 }
 
 fn history_base(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path().app_data_dir().map_err(|e| e.to_string())
+    app.path().app_data_dir().se()
 }
 
 /// Snapshot the current on-disk content of `path`. Best-effort from the
@@ -418,7 +394,7 @@ pub fn record_history(
     // (see HistoryLocks's doc comment).
     let lock = locks.lock_for(&canonical);
     let _held = lock.lock().unwrap();
-    let content = fs::read_to_string(&canonical).map_err(|e| e.to_string())?;
+    let content = fs::read_to_string(&canonical).se()?;
     let base = history_base(&app)?;
     let ws = owning_root_of(&canonical, &allowed);
     record_snapshot(

@@ -39,7 +39,8 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
-use crate::history::atomic_write;
+use crate::error::SeExt;
+use crate::fsutil::atomic_write_bytes;
 
 /// Preferred install directory when it exists and is writable without sudo.
 const USR_LOCAL_BIN: &str = "/usr/local/bin";
@@ -157,7 +158,7 @@ fn derive_status(installed_dir: Option<PathBuf>, target_dir: PathBuf, path_var: 
 /// This process's own binary, as a UTF-8 string to hardcode into the shim.
 fn current_bin() -> Result<String, String> {
     std::env::current_exe()
-        .map_err(|e| e.to_string())?
+        .se()?
         .to_str()
         .map(str::to_string)
         .ok_or_else(|| "non-UTF-8 executable path".to_string())
@@ -165,12 +166,7 @@ fn current_bin() -> Result<String, String> {
 
 /// `~/.local/bin` for this user.
 fn home_local_bin(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(app
-        .path()
-        .home_dir()
-        .map_err(|e| e.to_string())?
-        .join(".local")
-        .join("bin"))
+    Ok(app.path().home_dir().se()?.join(".local").join("bin"))
 }
 
 /// Real writability probe for a candidate PATH dir: a temp file created and
@@ -216,15 +212,16 @@ pub fn cli_status(app: AppHandle) -> Result<CliStatus, String> {
 /// probed writable) and the `~/.local/bin` fallback; the admin-escalated path
 /// writes via `osascript` instead (see `install_via_admin`).
 fn write_shim_to(dir: &Path, shim: &str) -> Result<(), String> {
-    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    fs::create_dir_all(dir).se()?;
     let md = dir.join("md");
-    // atomic_write (tempfile + rename) leaves a fresh file at the tempfile's
-    // 0600; a launcher must be executable, so chmod 0755 after the rename.
-    atomic_write(&md, shim.as_bytes()).map_err(|e| e.to_string())?;
+    // atomic_write_bytes (tempfile + rename) leaves a fresh file at the
+    // tempfile's 0600; a launcher must be executable, so chmod 0755 after the
+    // rename.
+    atomic_write_bytes(&md, shim.as_bytes()).se()?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&md, fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+        fs::set_permissions(&md, fs::Permissions::from_mode(0o755)).se()?;
     }
     Ok(())
 }
@@ -247,8 +244,8 @@ fn applescript_quote(s: &str) -> String {
 /// same way, as "fall back to the per-user dir", never as a hard failure.
 fn install_via_admin(shim: &str, dir: &Path) -> Result<(), String> {
     use std::io::Write as _;
-    let mut tmp = tempfile::NamedTempFile::new().map_err(|e| e.to_string())?;
-    tmp.write_all(shim.as_bytes()).map_err(|e| e.to_string())?;
+    let mut tmp = tempfile::NamedTempFile::new().se()?;
+    tmp.write_all(shim.as_bytes()).se()?;
     let tmp_path = tmp.into_temp_path();
     let tmp_str = tmp_path.to_str().ok_or("non-UTF-8 temp path")?;
     let dir_str = dir.to_str().ok_or("non-UTF-8 target dir")?;
@@ -270,7 +267,7 @@ fn install_via_admin(shim: &str, dir: &Path) -> Result<(), String> {
         .arg("-e")
         .arg(osa_script)
         .status()
-        .map_err(|e| e.to_string())?;
+        .se()?;
     // tmp_path deletes itself on drop, whether or not the cp above ran.
 
     if status.success() {

@@ -1,15 +1,15 @@
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use tauri::{Manager, State};
 
-use crate::allowlist::AllowedPaths;
+use crate::allowlist::{contains, AllowedPaths};
+use crate::error::{CmdResult, SeExt};
 
 /// Reject UNC and DOS device paths (Windows SSRF / NTLM-credential-theft vector).
 /// Backslash-prefixed paths are never legitimate on unix, so they are rejected on
 /// all platforms; forward-slash UNC and verbatim device prefixes matter on Windows.
-pub(crate) fn reject_unsafe_path(path: &str) -> Result<(), String> {
+pub(crate) fn reject_unsafe_path(path: &str) -> CmdResult<()> {
     if path.starts_with(r"\\") {
         return Err("Refusing UNC path".into());
     }
@@ -22,32 +22,14 @@ pub(crate) fn reject_unsafe_path(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Write via a temp file in the same directory + rename, so a crash or full disk
-/// mid-write can never leave `path` truncated or half-written. Preserves the
-/// existing file's permissions (a fresh temp file would otherwise be 0600).
-fn atomic_write(path: &Path, contents: &str) -> std::io::Result<()> {
-    let dir = match path.parent() {
-        Some(p) if !p.as_os_str().is_empty() => p,
-        _ => Path::new("."),
-    };
-    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
-    tmp.write_all(contents.as_bytes())?;
-    if let Ok(meta) = fs::metadata(path) {
-        fs::set_permissions(tmp.path(), meta.permissions())?;
-    }
-    tmp.as_file().sync_all()?;
-    tmp.persist(path).map_err(|e| e.error)?;
-    Ok(())
+pub(crate) fn read_file_impl(path: &str) -> CmdResult<String> {
+    reject_unsafe_path(path)?;
+    fs::read_to_string(path).se()
 }
 
-pub(crate) fn read_file_impl(path: &str) -> Result<String, String> {
+pub(crate) fn write_file_impl(path: &str, contents: &str) -> CmdResult<()> {
     reject_unsafe_path(path)?;
-    fs::read_to_string(path).map_err(|e| e.to_string())
-}
-
-pub(crate) fn write_file_impl(path: &str, contents: &str) -> Result<(), String> {
-    reject_unsafe_path(path)?;
-    atomic_write(Path::new(path), contents).map_err(|e| e.to_string())
+    crate::fsutil::atomic_write_string(Path::new(path), contents).se()
 }
 
 const IMAGE_RESOLVE_ERR: &str = "image path does not resolve inside the document's directory";
@@ -60,11 +42,11 @@ const IMAGE_RESOLVE_ERR: &str = "image path does not resolve inside the document
 /// makes `join` discard the base entirely, which the containment check then
 /// rejects unless it happens to land back inside the parent. The parent dir
 /// itself never passes (`canon != parent`): a directory is not an image.
-fn resolve_image_under(doc_parent: &Path, rel: &str) -> Result<PathBuf, String> {
+fn resolve_image_under(doc_parent: &Path, rel: &str) -> CmdResult<PathBuf> {
     let parent = fs::canonicalize(doc_parent).map_err(|_| IMAGE_RESOLVE_ERR.to_string())?;
     let canon =
         fs::canonicalize(doc_parent.join(rel)).map_err(|_| IMAGE_RESOLVE_ERR.to_string())?;
-    if canon.starts_with(&parent) && canon != parent {
+    if contains(&parent, &canon, false) {
         Ok(canon)
     } else {
         Err(IMAGE_RESOLVE_ERR.into())
@@ -99,9 +81,7 @@ pub fn resolve_image_asset(
     let resolved = resolve_image_under(parent, &rel)?;
     // Irrevocable for the process lifetime (FsScope has no un-allow — see
     // lib.rs allow_asset_dir); acceptable: single file, display channel only.
-    if let Err(e) = app.asset_protocol_scope().allow_file(&resolved) {
-        log::warn!("could not allow resolved image in asset scope: {e}");
-    }
+    crate::allow_asset_file(&app, &resolved);
     resolved
         .to_str()
         .map(str::to_string)
@@ -165,7 +145,7 @@ pub(crate) fn reveal_invocation(
 /// pre-quoted for Explorer's own parser (see `reveal_invocation`); `raw_arg`
 /// bypasses std's whole-argument quoting, which would otherwise swallow the
 /// `/select,` switch for spaced paths.
-fn spawn_reveal(prog: &str, args: Vec<std::ffi::OsString>) -> Result<(), String> {
+fn spawn_reveal(prog: &str, args: Vec<std::ffi::OsString>) -> CmdResult<()> {
     let mut cmd = std::process::Command::new(prog);
     #[cfg(windows)]
     {
@@ -176,11 +156,7 @@ fn spawn_reveal(prog: &str, args: Vec<std::ffi::OsString>) -> Result<(), String>
     }
     #[cfg(not(windows))]
     cmd.args(args);
-    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
-    Ok(())
+    crate::process::spawn_detached(cmd)
 }
 
 /// Help > Show Log (and the error banner's "Details…" button): reveal the log
@@ -195,7 +171,7 @@ pub fn reveal_log_file(
     app: tauri::AppHandle,
     name: State<'_, crate::LogFileName>,
 ) -> Result<(), String> {
-    let dir = app.path().app_log_dir().map_err(|e| e.to_string())?;
+    let dir = app.path().app_log_dir().se()?;
     let path = dir.join(&name.0);
     let (prog, args) = if path.exists() {
         reveal_invocation(&path, false)

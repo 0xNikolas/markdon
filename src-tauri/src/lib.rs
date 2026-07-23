@@ -2,12 +2,15 @@ mod allowlist;
 mod cli_install;
 mod commands;
 mod dialogs;
+mod error;
 mod fileops;
+mod fsutil;
 mod history;
 mod launch;
 mod menu;
 mod pdf;
 mod prefs;
+mod process;
 mod watcher;
 mod windows;
 mod workspace;
@@ -16,6 +19,8 @@ use std::sync::Mutex;
 
 use tauri::{Emitter, EventTarget, Manager, State};
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind};
+
+use crate::error::SeExt;
 
 use windows::{menu_target, wire_window, FocusedWindow, PendingWindowFile};
 
@@ -84,6 +89,17 @@ pub(crate) fn allow_asset_dir(app: &tauri::AppHandle, dir: &std::path::Path, rec
     }
 }
 
+/// Best-effort asset-protocol grant for a single `path` (a resolved image or a
+/// pasted image), so its convertFileSrc URL renders in the webview. The
+/// file-granular twin of [`allow_asset_dir`]; same display-channel-only,
+/// irrevocable, warn-on-failure posture — a failed grant only degrades
+/// rendering of that one image, never the operation that produced it.
+pub(crate) fn allow_asset_file(app: &tauri::AppHandle, path: &std::path::Path) {
+    if let Err(e) = app.asset_protocol_scope().allow_file(path) {
+        log::warn!("could not add {path:?} to asset scope: {e}");
+    }
+}
+
 /// Handle to the File-menu "Read Only" CheckMenuItem. The app menu is
 /// app-global (one menu bar for all windows), and `Menu::get` doesn't reach
 /// nested items, so the item is stashed here at menu-build time. The frontend
@@ -104,7 +120,20 @@ pub struct ReadonlyMenuItem(pub tauri::menu::CheckMenuItem<tauri::Wry>);
 /// instance may have reordered the file since this menu was built.
 pub struct RecentMenu {
     pub submenu: tauri::menu::Submenu<tauri::Wry>,
-    pub roots: Mutex<Vec<String>>,
+    roots: Mutex<Vec<String>>,
+}
+
+impl RecentMenu {
+    /// A copy of the roots snapshot the currently visible items were built from.
+    pub(crate) fn snapshot(&self) -> Vec<String> {
+        self.roots.lock().unwrap().clone()
+    }
+
+    /// Replace the roots snapshot (done on the main thread by
+    /// `menu::sync_recent_menu` together with the item rebuild).
+    pub(crate) fn replace(&self, roots: Vec<String>) {
+        *self.roots.lock().unwrap() = roots;
+    }
 }
 
 /// The log filename THIS instance writes (`markdon.log`, or the per-pid
@@ -157,7 +186,7 @@ fn take_opened_files(app: tauri::AppHandle, state: State<'_, OpenedFiles>) -> Ve
 /// value un-checks the item).
 #[tauri::command]
 fn set_readonly_menu_state(checked: bool, item: State<'_, ReadonlyMenuItem>) -> Result<(), String> {
-    item.0.set_checked(checked).map_err(|e| e.to_string())
+    item.0.set_checked(checked).se()
 }
 
 /// Queue the given file URLs and ping the focused window to drain them.
@@ -339,13 +368,7 @@ pub fn run() {
                 // snapshot the visible items were built from (see RecentMenu)
                 // and route as one shared event carrying the root.
                 if let Some(i) = menu::recent_index(event.id().0.as_str()) {
-                    let root = app_handle
-                        .state::<RecentMenu>()
-                        .roots
-                        .lock()
-                        .unwrap()
-                        .get(i)
-                        .cloned();
+                    let root = app_handle.state::<RecentMenu>().snapshot().get(i).cloned();
                     if let Some(root) = root {
                         let _ = app_handle.emit_to(
                             EventTarget::webview_window(&target),

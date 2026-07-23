@@ -9,13 +9,13 @@
 //! Trash (`trash::delete`) — a permanent unlink is never reachable from here.
 
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
-use tauri::{Manager, State};
+use tauri::State;
 
 use crate::allowlist::AllowedPaths;
+use crate::error::SeExt;
 
 /// Reject anything that is not a single in-directory leaf. A name containing a
 /// path separator (or `.`/`..`/NUL) is what a `../escape` rename/new-name would
@@ -70,24 +70,24 @@ fn unique_dup_name(dir: &Path, name: &str, is_dir: bool) -> String {
 /// mirrors `workspace::walk`'s policy so a copy can never dereference a link that
 /// escapes the workspace root. `src` is assumed already validated by the caller.
 fn copy_tree(src: &Path, dest: &Path) -> Result<(), String> {
-    let meta = fs::symlink_metadata(src).map_err(|e| e.to_string())?;
+    let meta = fs::symlink_metadata(src).se()?;
     let ft = meta.file_type();
     if ft.is_symlink() {
         // Never copy a symlink (its target may point outside the root).
         return Ok(());
     }
     if ft.is_dir() {
-        fs::create_dir(dest).map_err(|e| e.to_string())?;
-        for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let child_ft = entry.file_type().map_err(|e| e.to_string())?;
+        fs::create_dir(dest).se()?;
+        for entry in fs::read_dir(src).se()? {
+            let entry = entry.se()?;
+            let child_ft = entry.file_type().se()?;
             if child_ft.is_symlink() {
                 continue;
             }
             copy_tree(&entry.path(), &dest.join(entry.file_name()))?;
         }
     } else {
-        fs::copy(src, dest).map_err(|e| e.to_string())?;
+        fs::copy(src, dest).se()?;
     }
     Ok(())
 }
@@ -127,7 +127,7 @@ pub(crate) fn create_file_impl(
     valid_leaf_name(name)?;
     let target = container.join(name);
     reject_if_exists(&target)?;
-    fs::File::create(&target).map_err(|e| e.to_string())?;
+    fs::File::create(&target).se()?;
     grant(allowed, &target)
 }
 
@@ -140,7 +140,7 @@ pub(crate) fn create_folder_impl(
     valid_leaf_name(name)?;
     let target = container.join(name);
     reject_if_exists(&target)?;
-    fs::create_dir(&target).map_err(|e| e.to_string())?;
+    fs::create_dir(&target).se()?;
     grant(allowed, &target)
 }
 
@@ -154,7 +154,7 @@ pub(crate) fn rename_entry_impl(
     let src = Path::new(path);
     let dest = src.parent().ok_or("no parent")?.join(new_name);
     reject_if_exists(&dest)?;
-    fs::rename(src, &dest).map_err(|e| e.to_string())?;
+    fs::rename(src, &dest).se()?;
     grant(allowed, &dest)
 }
 
@@ -174,7 +174,7 @@ pub(crate) fn move_entry_impl(
     }
     let dest = dest_dir.join(base);
     reject_if_exists(&dest)?;
-    fs::rename(src_path, &dest).map_err(|e| e.to_string())?;
+    fs::rename(src_path, &dest).se()?;
     grant(allowed, &dest)
 }
 
@@ -187,7 +187,7 @@ pub(crate) fn copy_entry_impl(
     let dest_dir = allowed.ensure_container(dest_dir)?;
     let src_path = Path::new(src);
     if fs::symlink_metadata(src_path)
-        .map_err(|e| e.to_string())?
+        .se()?
         .file_type()
         .is_symlink()
     {
@@ -208,9 +208,7 @@ pub(crate) fn copy_entry_impl(
 pub(crate) fn duplicate_entry_impl(allowed: &AllowedPaths, path: &str) -> Result<String, String> {
     allowed.ensure(path)?;
     let src = Path::new(path);
-    let file_type = fs::symlink_metadata(src)
-        .map_err(|e| e.to_string())?
-        .file_type();
+    let file_type = fs::symlink_metadata(src).se()?.file_type();
     if file_type.is_symlink() {
         return Err("cannot duplicate a symlink".into());
     }
@@ -261,21 +259,6 @@ fn pasted_image_name(stem: &str, n: usize, ext: &str) -> String {
     format!("{stem}-pasted-{n}.{ext}")
 }
 
-/// Byte twin of commands.rs's `atomic_write` (temp file in the same dir +
-/// rename), minus the permission-preserving step: the target never exists
-/// (the collision loop guarantees it), so there is nothing to preserve.
-fn atomic_write_bytes(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let dir = match path.parent() {
-        Some(p) if !p.as_os_str().is_empty() => p,
-        _ => Path::new("."),
-    };
-    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
-    tmp.write_all(bytes)?;
-    tmp.as_file().sync_all()?;
-    tmp.persist(path).map_err(|e| e.error)?;
-    Ok(())
-}
-
 /// Decode and write a pasted image next to `doc_path` as
 /// `<doc-stem>-pasted-<n>.<ext>` (first free n >= 1). Returns the bare file
 /// NAME (what the markdown link needs) plus the absolute path (what the
@@ -295,7 +278,7 @@ pub(crate) fn save_pasted_image_impl(
     }
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(data_b64)
-        .map_err(|e| e.to_string())?;
+        .se()?;
     let doc = Path::new(doc_path);
     let dir = doc.parent().ok_or("no parent")?;
     let stem = doc
@@ -308,7 +291,7 @@ pub(crate) fn save_pasted_image_impl(
         if target.exists() {
             continue;
         }
-        atomic_write_bytes(&target, &bytes).map_err(|e| e.to_string())?;
+        crate::fsutil::atomic_write_bytes(&target, &bytes).se()?;
         grant(allowed, &target)?;
         return Ok((name, target));
     }
@@ -390,9 +373,7 @@ pub fn save_pasted_image(
     // so it must not turn a successful save into an error.
     // Irrevocable for the process lifetime (FsScope has no un-allow — see
     // lib.rs allow_asset_dir); acceptable: single file, display channel only.
-    if let Err(e) = app.asset_protocol_scope().allow_file(&abs) {
-        log::warn!("could not allow pasted image in asset scope: {e}");
-    }
+    crate::allow_asset_file(&app, &abs);
     Ok(name)
 }
 

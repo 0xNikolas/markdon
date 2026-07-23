@@ -4,6 +4,8 @@ use tauri::menu::{
 };
 use tauri::{App, AppHandle, Manager, Wry};
 
+use crate::error::SeExt;
+
 /// Builds the app menu and returns it alongside the "Read Only" CheckMenuItem
 /// and the "Open Recent" Submenu handles. `Menu::get` only walks top-level
 /// submenus, not nested items, so neither can be looked up by id after the
@@ -198,13 +200,13 @@ fn sync_recent_menu_on_main(app: &AppHandle) -> Result<(), String> {
     let file = crate::workspace::state_file(app)?;
     let roots = crate::workspace::load_state(&file).roots;
     let submenu = &state.submenu;
-    while submenu.remove_at(0).map_err(|e| e.to_string())?.is_some() {}
+    while submenu.remove_at(0).se()?.is_some() {}
     if roots.is_empty() {
         let placeholder = MenuItemBuilder::new("No Recent Workspaces")
             .enabled(false)
             .build(app)
-            .map_err(|e| e.to_string())?;
-        submenu.append(&placeholder).map_err(|e| e.to_string())?;
+            .se()?;
+        submenu.append(&placeholder).se()?;
     } else {
         let home = app
             .path()
@@ -217,11 +219,11 @@ fn sync_recent_menu_on_main(app: &AppHandle) -> Result<(), String> {
                 recent_label(root, home.as_deref()),
             )
             .build(app)
-            .map_err(|e| e.to_string())?;
-            submenu.append(&item).map_err(|e| e.to_string())?;
+            .se()?;
+            submenu.append(&item).se()?;
         }
     }
-    *state.roots.lock().unwrap() = roots;
+    state.replace(roots);
     Ok(())
 }
 
