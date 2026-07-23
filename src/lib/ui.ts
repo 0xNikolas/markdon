@@ -126,8 +126,9 @@ export const workspaceName: Writable<string | null> = writable(null)
 /**
  * True while the window shows the no-document empty page (EmptyState.svelte)
  * instead of an editor — VS Code's no-editor state. Raised by
- * doc.showEmptyState(), reached from exactly two flows: a boot that found
- * nothing to open (appBoot's maybeAutoOpenBootPreview) and closing the last
+ * doc.showEmptyState(), reached from exactly two flows: a boot with no
+ * workspace at all (appBoot's maybeRestoreBootDocument — a workspace boot
+ * instead restores its last-open file or a scratch) and closing the last
  * open file (App's onCloseFile). Cleared at the doc-load chokepoint — every
  * openDoc/restoreDoc/newDoc — so ANY route to a document (menu, sidebar,
  * startup drain, Cmd+N) dismisses the page without per-call-site wiring.

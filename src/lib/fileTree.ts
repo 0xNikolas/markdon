@@ -1,12 +1,11 @@
-import { isMarkdownFile, type WorkspaceDir } from './workspace'
+import type { WorkspaceDir } from './workspace'
 
 /**
  * Pure workspace-tree and name helpers for the sidebar's file operations:
  * name validation, visible-row flattening, folder enumeration, and paste-
  * target resolution. No stores, no IPC — everything here is a pure function
- * (the only runtime import from workspace.ts is its equally pure
- * isMarkdownFile predicate), so the modals (NameModal, MoveToModal) and
- * appBoot can depend on this module alone.
+ * (workspace.ts contributes only the WorkspaceDir type), so the modals
+ * (NameModal, MoveToModal) can depend on this module alone.
  */
 
 /**
@@ -43,24 +42,6 @@ export function visibleRowPaths(
   }
   walk(tree)
   return out
-}
-
-/**
- * Path of the first markdown file in tree RENDER order — the same
- * depth-first, dirs-before-files walk `visibleRowPaths` flattens (so with a
- * folder sorted first, typically the first file inside the first folder).
- * Non-markdown files are skipped (only markdown rows are openable). Returns
- * `null` for an empty/absent tree or one with no markdown files at all.
- * Used by appBoot's boot-time auto-preview of an otherwise empty window.
- */
-export function firstMarkdownPath(tree: WorkspaceDir | null): string | null {
-  if (tree === null) return null
-  for (const sub of tree.dirs) {
-    const found = firstMarkdownPath(sub)
-    if (found !== null) return found
-  }
-  for (const f of tree.files) if (isMarkdownFile(f.name)) return f.path
-  return null
 }
 
 export interface FolderRow {

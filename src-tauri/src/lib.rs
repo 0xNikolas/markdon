@@ -397,6 +397,8 @@ pub fn run() {
             workspace::open_recent_workspace,
             workspace::take_startup_workspace,
             workspace::list_recent_workspaces,
+            workspace::save_workspace_ui,
+            workspace::load_workspace_ui,
             fileops::create_file,
             fileops::create_folder,
             fileops::rename_entry,

@@ -23,6 +23,10 @@
 //                                   maps above (unset -> no workspace, as before)
 //   window.__TAURI_RECENT__         roots served by list_recent_workspaces
 //                                   (unset -> empty; the Recent section hides)
+//   window.__TAURI_WORKSPACE_UI__   root -> last-open file map backing
+//                                   save_workspace_ui / load_workspace_ui
+//                                   (seedable; load applies the Rust-side
+//                                   containment + existence validation)
 //   window.__TAURI_IPC_ERRORS__     cmd -> message; invoke REJECTS with the raw
 //                                   string, mirroring how Rust command errors
 //                                   arrive (checked before overrides)
@@ -131,9 +135,27 @@
     },
     list_workspace: (args) => buildWorkspace(args.root),
     close_workspace: () => null,
-    // Default: "nothing to adopt here" (specs override to return a Workspace
-    // or assert the spawn-a-new-instance null path via the call log).
-    open_recent_workspace: () => null,
+    // Mirrors workspace.rs resolve_recent: with a folder already open Rust
+    // spawns a new instance and returns null; a folder-less window adopts the
+    // root in place (specs override for custom Workspace payloads or assert
+    // the spawn path via the call log).
+    open_recent_workspace: (args) => (args.currentRoot ? null : buildWorkspace(args.root)),
+    // Per-workspace ui.json (last-open file): persists into the seedable
+    // __TAURI_WORKSPACE_UI__ map. Load mirrors workspace.rs load_ui_state's
+    // trust posture — the stored path must sit strictly under the root AND
+    // still exist (in the in-memory FS) — so tampered/vanished entries
+    // degrade to null exactly like the Rust side.
+    save_workspace_ui: (args) => {
+      ;(window.__TAURI_WORKSPACE_UI__ ||= {})[args.root] = args.lastFile
+      return null
+    },
+    load_workspace_ui: (args) => {
+      const last = (window.__TAURI_WORKSPACE_UI__ || {})[args.root]
+      if (typeof last !== 'string') return null
+      if (!last.startsWith(args.root + '/')) return null // containment
+      if (typeof fsMap()[last] !== 'string') return null // vanished file
+      return last
+    },
     // Empty page's Recent section: seed roots via __TAURI_RECENT__ (default:
     // no recents, the section stays hidden).
     list_recent_workspaces: () => window.__TAURI_RECENT__ || [],

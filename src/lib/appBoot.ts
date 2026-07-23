@@ -3,7 +3,6 @@ import { get } from 'svelte/store'
 import { listenScoped, setWindowTitle, type Routed } from './windowing'
 import { doc, isDirty, showEmptyState } from './doc'
 import { openPath, openDrainedEntries, type OpenedEntry } from './files'
-import { firstMarkdownPath } from './fileTree'
 import { initFileSync } from './fileSync'
 import { openList, previewPath } from './openList'
 import { initWorkspace, workspace } from './workspace'
@@ -178,8 +177,8 @@ export async function drainOpenedFiles(
  *
  * Returns whether ANYTHING claimed this window (a per-window assignment or at
  * least one drained global entry) — the startup-file half of the "is this
- * window truly unclaimed?" question the boot auto-preview asks (see
- * {@link maybeAutoOpenBootPreview}).
+ * window truly unclaimed?" question the boot document restore asks (see
+ * {@link maybeRestoreBootDocument}).
  */
 export async function drainStartupFiles(
   openFirst: (path: string, readonly: boolean) => void,
@@ -219,35 +218,89 @@ export function closeTabDecision(
 }
 
 /**
- * A window that boots with a restored/assigned workspace but NO document
- * would otherwise land on a useless untitled scratch; instead, auto-open the
- * workspace's first markdown file (tree render order — firstMarkdownPath).
- * It opens as a PREVIEW deliberately: preview keeps the auto-open unobtrusive
- * — an italic strip row the next single click simply replaces, promoted to a
- * real pinned tab only if the user actually edits it.
- *
- * When there is nothing to auto-open — no workspace landed at boot, or the
- * workspace holds no markdown files — the unclaimed window shows the
- * no-document empty page (doc.showEmptyState) instead of the useless
- * untitled scratch: VS Code's no-editor state, with the action list as the
- * invitation to act. An explicit Cmd+N from there still yields the scratch.
- *
- * Only acts when the window is truly unclaimed, re-checked here at fire
- * time: the doc store still holds a clean, empty untitled scratch and nothing
- * is open or previewed. The caller (bootApp) has already established the
- * other two boundaries — the startup drains yielded nothing, and the
- * workspace at hand arrived from the BOOT restore/handoff, not a later
- * user-driven folder open (a mid-session folder open never auto-opens files
- * AND never flips the window into the empty page).
+ * The workspace's remembered last-open file, from the Rust-validated
+ * per-workspace ui.json (load_workspace_ui — the counterpart of
+ * workspace.ts's recordLastFile). Rust only returns a path that still exists
+ * inside the root, so `null` uniformly covers a fresh workspace, a vanished
+ * or moved file, tampered state, AND an IPC failure — every one of which
+ * degrades to the same fresh-scratch restore.
  */
-export function maybeAutoOpenBootPreview(openPreview: (path: string) => void): void {
+export async function loadLastWorkspaceFile(root: string): Promise<string | null> {
+  try {
+    return await invoke<string | null>('load_workspace_ui', { root })
+  } catch (e) {
+    logWarn('workspace ui load failed', e)
+    return null
+  }
+}
+
+/**
+ * The one restore rule for a MID-SESSION root transition (Open Folder / Open
+ * Recent / an empty-page recent row adopting a root into a folder-less
+ * window): open the workspace's last-open file if one is remembered and still
+ * valid, else a fresh untitled scratch. `openFile` must open PINNED in place
+ * — the restored file was a real working file, not a glance, so it never gets
+ * the volatile italic preview slot — and both callbacks are expected to carry
+ * App's switch-guard semantics (a dirty pathed doc stashes via the buffer
+ * cache; a dirty untitled scratch prompts). The result is DROPPED when the
+ * root changed while the lookup was in flight (Close Folder, or another
+ * switch) — same post-await re-check pattern as refreshWorkspace's.
+ */
+export async function openLastFileOrScratch(
+  root: string,
+  openFile: (path: string) => void,
+  openScratch: () => void,
+): Promise<void> {
+  const last = await loadLastWorkspaceFile(root)
+  if (get(workspace).root !== root) return // root changed mid-lookup: stale
+  if (last !== null) openFile(last)
+  else openScratch()
+}
+
+/**
+ * True while this window is still an unclaimed pristine scratch: the doc
+ * store holds a clean, empty untitled buffer and nothing is open or
+ * previewed. The boot restore's gate, checked at fire time AND re-checked
+ * after its async lookup.
+ */
+function windowUnclaimed(): boolean {
   const d = get(doc)
-  if (d.path !== null || d.content !== '' || isDirty(d)) return
-  if (get(openList).length > 0 || get(previewPath) !== null) return
-  const ws = get(workspace)
-  const first = ws.root === null || ws.tree === null ? null : firstMarkdownPath(ws.tree)
-  if (first !== null) openPreview(first)
-  else showEmptyState()
+  if (d.path !== null || d.content !== '' || isDirty(d)) return false
+  return get(openList).length === 0 && get(previewPath) === null
+}
+
+/**
+ * Boot-settlement document restore. An UNCLAIMED window that booted with a
+ * workspace opens that workspace's last-open file — PINNED in place, it was
+ * a real working file, not a glance (this replaced the old auto-PREVIEW of
+ * the tree's first markdown file) — or, when none is remembered or it no
+ * longer validates, a fresh untitled scratch. With no workspace at all the
+ * window shows the no-document empty page (doc.showEmptyState) instead: VS
+ * Code's no-editor state, with the action list as the invitation to act; an
+ * explicit Cmd+N from there still yields the scratch.
+ *
+ * Only acts while the window is truly unclaimed ({@link windowUnclaimed}),
+ * re-checked AFTER the async last-file lookup so a startup/user open landing
+ * mid-lookup always wins. The caller (bootApp) has already established the
+ * other two boundaries: the startup drains yielded nothing, and the
+ * workspace at hand arrived from the BOOT restore/handoff — mid-session
+ * folder opens are handled by bootApp's own root-transition subscription
+ * (see {@link openLastFileOrScratch}) and never reach the empty page.
+ */
+export async function maybeRestoreBootDocument(
+  openFile: (path: string) => void,
+  openScratch: () => void,
+): Promise<void> {
+  if (!windowUnclaimed()) return
+  const root = get(workspace).root
+  if (root === null) {
+    showEmptyState()
+    return
+  }
+  const last = await loadLastWorkspaceFile(root)
+  if (!windowUnclaimed()) return // claimed while the lookup was in flight
+  if (last !== null) openFile(last)
+  else openScratch()
 }
 
 /**
@@ -258,27 +311,45 @@ export function maybeAutoOpenBootPreview(openPreview: (path: string) => void): v
  * initWorkspace return Promise<() => void>, resolved inside the teardown the
  * same way App.svelte's onMount cleanup did.
  *
- * `openBootPreview` is App's preview-open closure (its handleOpenFile with
- * {preview: true}), invoked at most once for the boot auto-preview (see
- * {@link maybeAutoOpenBootPreview}). The sequencing makes the startup drains
- * win: the auto-preview waits for BOTH the boot workspace restore to settle
- * (initWorkspace's callback — boot-time only by construction, so a folder the
- * user opens mid-session never auto-opens) AND the startup-file drains to
- * report whether anything claimed this window.
+ * `openRestoredFile` (App's pinned in-place open) and `openScratch` (App's
+ * File > New closure) are the two resolutions of the last-file restore rule,
+ * fired from two triggers that never overlap:
+ *
+ * - BOOT: once the workspace restore settles (initWorkspace's callback) AND
+ *   the startup drains report the window unclaimed, the restore runs with
+ *   {@link maybeRestoreBootDocument}'s guards — a startup-assigned/drained
+ *   file always wins, and no workspace at all means the empty page.
+ * - MID-SESSION: a root TRANSITION in the workspace store (Open Folder /
+ *   Open Recent / an empty-page recent row adopting into a folder-less
+ *   window — refreshes re-adopt the SAME root and don't count) runs
+ *   {@link openLastFileOrScratch} directly. Gated on the boot having settled
+ *   so the boot transition itself is only handled once, above; a transition
+ *   to null (Close Folder) deliberately leaves the doc alone.
  */
 export function bootApp(opts: {
   menuEvents: MenuEventMap
   openStartupFile: (path: string, readonly: boolean) => void
-  openBootPreview: (path: string) => void
+  openRestoredFile: (path: string) => void
+  openScratch: () => void
 }): () => void {
   const teardownEvents = wireEvents(opts.menuEvents)
   const startupClaimed = drainStartupFiles(opts.openStartupFile)
   const teardownSync = initFileSync() // watch the open file for external changes
-  // Restore + refresh the workspace tree; once the boot restore settles, an
-  // unclaimed window auto-previews the workspace's first markdown file.
+  // Mid-session root transitions restore that workspace's last-open file (or
+  // a scratch). Installed BEFORE initWorkspace so the boot adopt updates
+  // lastRoot here while bootSettled still gates it out.
+  let bootSettled = false
+  let lastRoot = get(workspace).root
+  const unsubRootRestore = workspace.subscribe((s) => {
+    if (s.root === lastRoot) return
+    lastRoot = s.root
+    if (!bootSettled || s.root === null) return
+    void openLastFileOrScratch(s.root, opts.openRestoredFile, opts.openScratch)
+  })
   const teardownWorkspace = initWorkspace(() => {
+    bootSettled = true // from here on, root transitions are user-driven
     void startupClaimed.then((claimed) => {
-      if (!claimed) maybeAutoOpenBootPreview(opts.openBootPreview)
+      if (!claimed) void maybeRestoreBootDocument(opts.openRestoredFile, opts.openScratch)
     })
   })
   const teardownExport = initExportOnTick()
@@ -286,6 +357,7 @@ export function bootApp(opts: {
   const teardownTitle = initWindowTitleSync()
   return () => {
     teardownEvents()
+    unsubRootRestore()
     teardownSync.then((fn) => fn())
     teardownWorkspace.then((fn) => fn())
     teardownExport()

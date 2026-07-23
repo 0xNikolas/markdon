@@ -11,7 +11,6 @@ import {
   makeDirty,
   pinFile,
   closeStripRow,
-  dismissBootPreview,
 } from './support/workspaceFixture.ts'
 
 /**
@@ -117,10 +116,8 @@ test('tree dblclick racing the discard overlay still pins (backdrop upgrade)', a
   page,
 }) => {
   // Only a dirty UNTITLED scratch still defers a switch behind the discard
-  // overlay (pathed docs stash silently), so the race is driven from one —
-  // the boot auto-preview must be closed first to get back to that scratch.
-  await dismissBootPreview(page)
-  await expect(page.locator('.filename')).toHaveText('Untitled')
+  // overlay (pathed docs stash silently) — and a fresh-workspace boot lands
+  // exactly on that scratch (gotoApp asserts it), so just dirty it.
   await makeDirty(page, MARKER)
 
   // Click #1 opens the discard overlay; click #2 and the dblclick land on the

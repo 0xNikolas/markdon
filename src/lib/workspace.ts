@@ -4,7 +4,7 @@ import { get, writable, type Writable } from 'svelte/store'
 import { doc } from './doc'
 import { reportError } from './errors'
 import { logWarn } from './logging'
-import { workspaceName } from './ui'
+import { isInsideRoot, workspaceName } from './ui'
 import { listenScoped } from './windowing'
 
 /** A file leaf in the workspace tree (mirrors Rust `WorkspaceFile`). */
@@ -260,24 +260,58 @@ export async function takeStartupWorkspace(): Promise<boolean> {
 }
 
 /**
+ * Last path persisted per root — the settings.ts `lastPersisted`-style guard:
+ * skips the IPC write when the value on disk is already what we'd store, so
+ * repeated store churn on one path never spams `save_workspace_ui`. Only a
+ * suppression cache: staleness on failure is harmless (the next differing
+ * path writes again).
+ */
+const lastRecordedUi = new Map<string, string>()
+
+/** Test support: forget the per-root last-recorded guard. */
+export function resetLastFileRecording(): void {
+  lastRecordedUi.clear()
+}
+
+/**
+ * Record `path` as the current workspace's last-open file (the Rust-owned
+ * per-workspace ui.json, restored by appBoot on the next open of this
+ * workspace). Only paths INSIDE the current root are recorded — standalone
+ * opens (Finder files, dialog picks outside the folder) are not workspace
+ * working state — and with no root open there is nothing to record against.
+ * Best-effort: a failed write only costs the restore, never an error banner.
+ */
+export function recordLastFile(path: string): void {
+  const root = get(workspace).root
+  if (root === null || !isInsideRoot(path, root)) return
+  if (lastRecordedUi.get(root) === path) return
+  lastRecordedUi.set(root, path)
+  invoke('save_workspace_ui', { root, lastFile: path }).catch((e) =>
+    logWarn('workspace ui save failed', e),
+  )
+}
+
+/**
  * Wire up the workspace for the app lifetime: adopt a CLI-provided startup
  * workspace, restoring the persisted last folder ONLY on a non-handed-off
  * (cold) launch — a spawned child starts folder-less rather than adopting its
  * spawner's folder; refresh the tree when the open document's path changes (a
- * Save As into the workspace shows the file immediately) and when the window
- * regains focus (external edits happen while unfocused). Also keeps a Rust-
- * side recursive watcher pointed at the current root (installed/replaced on
- * every root transition, torn down on close), whose debounced
- * `workspace:changed` events refresh the tree WITHOUT a refocus. Returns an
- * async teardown, matching `initFileSync`.
+ * Save As into the workspace shows the file immediately), record that path as
+ * the workspace's last-open file ({@link recordLastFile}), and refresh when
+ * the window regains focus (external edits happen while unfocused). Also
+ * keeps a Rust-side recursive watcher pointed at the current root
+ * (installed/replaced on every root transition, torn down on close), whose
+ * debounced `workspace:changed` events refresh the tree WITHOUT a refocus.
+ * Returns an async teardown, matching `initFileSync`.
  *
  * `onBootRestoreSettled` fires exactly once, after the boot-time
  * handoff/restore chain has fully settled (workspace adopted — the store is
  * already set — or provably nothing to adopt). It is the only reliable
  * boundary between "this workspace arrived at boot" and "the user opened a
- * folder later": appBoot's auto-preview of the first workspace file must run
- * on the former and never the latter, and a plain store subscription cannot
- * tell the two apart when the boot restore found nothing.
+ * folder later": appBoot's boot-settlement restore of the workspace's
+ * last-open file runs on the former, while mid-session root transitions ride
+ * appBoot's own store subscription — and a plain store subscription alone
+ * cannot tell the two apart when the boot restore found nothing.
  */
 export function initWorkspace(onBootRestoreSettled?: () => void): Promise<() => void> {
   takeStartupWorkspace().then(async (suppressRestore) => {
@@ -289,7 +323,10 @@ export function initWorkspace(onBootRestoreSettled?: () => void): Promise<() => 
   const unsubDoc = doc.subscribe((s) => {
     if (s.path === lastPath) return
     lastPath = s.path
-    if (s.path !== null) refreshWorkspace()
+    if (s.path !== null) {
+      refreshWorkspace()
+      recordLastFile(s.path)
+    }
   })
 
   // Root transitions (dialog open, restore, startup handoff, close) install /

@@ -339,11 +339,16 @@
   onMount(() =>
     bootApp({
       openStartupFile,
-      // The boot auto-preview of an unclaimed window rides the same preview
-      // flow as a sidebar single click (openPath {preview: true} via the
-      // switch guard) — the doc is a clean scratch at that point, so the
-      // guard passes straight through.
-      openBootPreview: (path) => handleOpenFile(path, { preview: true }),
+      // A workspace restore (boot settlement or a mid-session root adopt)
+      // opens the workspace's last-open file PINNED in place — it was a real
+      // working file, not a glance — through the same switch guard as a
+      // sidebar open: a dirty untitled scratch still prompts, a dirty pathed
+      // doc stashes into the buffer cache. At boot the doc is a clean
+      // scratch, so the guard passes straight through.
+      openRestoredFile: (path) => handleOpenFile(path, { inPlace: true }),
+      // No (valid) last file remembered: a fresh untitled scratch, the exact
+      // File > New closure (switch-guarded newDoc).
+      openScratch: newUntitled,
       menuEvents: {
         'menu:new': newUntitled,
         'menu:open': openFileDialog,

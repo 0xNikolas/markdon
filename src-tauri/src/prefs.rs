@@ -18,10 +18,12 @@
 //!
 //! Per-WORKSPACE state lives in the per-workspace state DIRECTORY
 //! `app_data_dir()/workspace-state/<sha256hex(canonical root)>/` (keys via
-//! history.rs's `bucket_key`). History is the first tenant, at
-//! `<hash>/history/<sha256hex(canonical file path)>/` — see history.rs;
-//! future per-workspace JSON state (open-files list, expanded folders)
-//! belongs at `<hash>/state.json`. This directory layout supersedes the
+//! history.rs's `bucket_key`). History is one tenant, at
+//! `<hash>/history/<sha256hex(canonical file path)>/` — see history.rs; the
+//! last-open-file pointer is the other, at `<hash>/ui.json` — see
+//! workspace.rs's `save_workspace_ui`/`load_workspace_ui`. Future
+//! per-workspace JSON state (open-files list, expanded folders) belongs in
+//! more `<hash>/*.json` files. This directory layout supersedes the
 //! older single-`<hash>.json` sketch, and makes "clear history for this
 //! workspace = delete one directory" newly tractable (not built this
 //! sprint). Chosen over a `.markdon/` dot-dir inside the workspace: that

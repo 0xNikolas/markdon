@@ -156,8 +156,8 @@ export function newDoc(): void {
  * (so the header/status chrome and every dirty check read clean) and raise
  * emptyState AFTER — newDoc, like every document load, clears the flag, so
  * the order is load-then-raise by construction. Reached from closing the
- * last open file (App.onCloseFile) and a boot that found nothing to open
- * (appBoot.maybeAutoOpenBootPreview); an explicit File > New instead stops
+ * last open file (App.onCloseFile) and a boot with no workspace at all
+ * (appBoot.maybeRestoreBootDocument); an explicit File > New instead stops
  * at newDoc() and keeps the editable scratch.
  */
 export function showEmptyState(): void {

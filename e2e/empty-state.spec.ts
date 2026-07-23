@@ -3,6 +3,7 @@ import {
   seedWorkspace,
   gotoApp,
   workspaceTree,
+  treeRow,
   stripRows,
   closeStripRow,
   editor,
@@ -14,11 +15,12 @@ import {
 } from './support/workspaceFixture.ts'
 
 /**
- * The no-document empty page (EmptyState.svelte): shown when a boot finds
- * nothing to open and when the last open file closes, replacing the old
- * untitled-scratch fallback. Cmd+N / the "New file" row still yields the
- * editable scratch; document-shaped menu actions no-op while it is up; the
- * Recent rows route through the stubbed open_recent_workspace flow.
+ * The no-document empty page (EmptyState.svelte): shown ONLY when a boot
+ * lands with no workspace at all and when the last open file closes — a
+ * workspace boot instead restores its last-open file or a fresh scratch
+ * (last-file.spec.ts). Cmd+N / the "New file" row still yields the editable
+ * scratch; document-shaped menu actions no-op while it is up; the Recent
+ * rows route through the stubbed open_recent_workspace flow.
  */
 
 test('an unclaimed boot with no workspace shows the empty page with its actions', async ({
@@ -53,9 +55,11 @@ test('the New file row opens the editable untitled scratch', async ({ page }) =>
 
 test('closing the last open file lands on the empty page, workspace intact', async ({ page }) => {
   await seedWorkspace(page)
-  await gotoApp(page) // boots on the auto-previewed nested.md
+  await gotoApp(page) // fresh workspace: the untitled scratch, no rows yet
 
-  await closeStripRow(page, 'nested.md')
+  await treeRow(page, 'notes.md').click()
+  await expect(editor(page)).toContainText('hello notes')
+  await closeStripRow(page, 'notes.md')
 
   await expect(emptyPage(page)).toBeVisible()
   await expect(stripRows(page)).toHaveCount(0)
@@ -73,7 +77,9 @@ test('the Recent section lists other roots (current excluded) and a row opens on
     window.__TAURI_RECENT__ = [root, '/home/other-notes']
   }, ROOT)
   await gotoApp(page)
-  await closeStripRow(page, 'nested.md') // -> empty page, workspace still open
+  await treeRow(page, 'notes.md').click() // open something, then close it…
+  await expect(editor(page)).toContainText('hello notes')
+  await closeStripRow(page, 'notes.md') // -> empty page, workspace still open
 
   const empty = emptyPage(page)
   await expect(empty).toBeVisible()
@@ -118,8 +124,10 @@ test('a recent row on a folder-less boot adopts the workspace in place', async (
   expect((await calls(page, 'open_recent_workspace')).map((c) => c.args)).toEqual([
     { root: '/ws2', currentRoot: null },
   ])
-  // The freshly adopted root leaves the Recent list (current-root filter).
-  await expect(empty.locator('.recent')).toHaveCount(0)
+  // The adopted workspace remembers no last file, so the mid-session restore
+  // replaces the empty page with the fresh untitled scratch.
+  await expect(emptyPage(page)).toHaveCount(0)
+  await expect(page.locator('.filename')).toHaveText('Untitled')
 })
 
 test('document menu actions no-op while the empty page is shown (save, split)', async ({

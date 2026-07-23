@@ -372,6 +372,114 @@ pub fn list_recent_workspaces(app: AppHandle) -> Result<Vec<String>, String> {
     Ok(recent_roots(&file))
 }
 
+// -- per-workspace UI state (last-open file) ---------------------------------
+
+/// Upper bound on a workspace's ui.json. The real payload is one path; the
+/// cap only stops a compromised webview using the file as an arbitrary-size
+/// disk sink (prefs.rs's posture for settings.json).
+const MAX_UI_STATE_BYTES: u64 = 64 * 1024;
+
+/// Persisted per-workspace UI state, stored at
+/// `app_data_dir()/workspace-state/<sha256hex(canonical root)>/ui.json` — the
+/// per-workspace state directory prefs.rs documents (history buckets are the
+/// other tenant). Currently a single field: the workspace's last-open file,
+/// reopened when the workspace opens. The serde rename keeps the frontend's
+/// requested `{"version":1,"lastFile":…}` file shape; this is a Rust-owned
+/// file format, not an IPC payload, so the no-serde-renames payload rule
+/// doesn't apply.
+#[derive(Serialize, Deserialize)]
+struct WorkspaceUiState {
+    version: u32,
+    #[serde(rename = "lastFile")]
+    last_file: String,
+}
+
+/// Path of a workspace's ui.json inside its state dir. `canonical_root` must
+/// already be canonical (ensure_root's return) so symlink/alias variants of
+/// one root collapse to a single state dir — the same keying as history.rs's
+/// buckets (`bucket_key` is that module's hashing helper, reused here).
+pub(crate) fn ui_state_file(base: &Path, canonical_root: &str) -> std::path::PathBuf {
+    base.join("workspace-state")
+        .join(crate::history::bucket_key(canonical_root))
+        .join("ui.json")
+}
+
+/// Atomically replace the stored last-open file pointer, creating the state
+/// dir on first write. `last_file` is stored verbatim: the LOAD side owns the
+/// validation (containment + existence), which is the trust boundary — a
+/// stored path that never validates only ever buys the caller a fresh
+/// scratch, never an open.
+pub(crate) fn save_ui_state(file: &Path, last_file: &str) -> Result<(), String> {
+    let state = WorkspaceUiState {
+        version: 1,
+        last_file: last_file.to_string(),
+    };
+    let json = serde_json::to_string(&state).map_err(|e| e.to_string())?;
+    if json.len() as u64 > MAX_UI_STATE_BYTES {
+        return Err("workspace ui state too large".into());
+    }
+    if let Some(parent) = file.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    crate::history::atomic_write(file, json.as_bytes()).map_err(|e| e.to_string())
+}
+
+/// Read the stored last-open file. Tolerant on the FILE — missing, oversized,
+/// or corrupt yields `None`, mirroring `load_state` — but strict on the
+/// VALUE: the stored path must canonicalize to an existing regular file
+/// STRICTLY inside `canonical_root` (`starts_with` is component-wise and the
+/// root itself is excluded — `resolve_image_under`'s containment posture), so
+/// a tampered ui.json can never point the restore outside the workspace, and
+/// a deleted/moved last file degrades to `None` (the caller opens a fresh
+/// scratch). Returns the canonical path, which — being strictly inside a
+/// granted root — passes `AllowedPaths::ensure` for the read that follows.
+pub(crate) fn load_ui_state(file: &Path, canonical_root: &Path) -> Option<String> {
+    let meta = fs::metadata(file).ok()?;
+    if meta.len() > MAX_UI_STATE_BYTES {
+        return None;
+    }
+    let raw = fs::read_to_string(file).ok()?;
+    let state: WorkspaceUiState = serde_json::from_str(&raw).ok()?;
+    let canon = fs::canonicalize(&state.last_file).ok()?;
+    if !canon.is_file() || !canon.starts_with(canonical_root) || canon == canonical_root {
+        return None;
+    }
+    canon.to_str().map(str::to_string)
+}
+
+/// Remember `last_file` as `root`'s last-open file. `root` must be a granted
+/// workspace root (`ensure_root`, like `list_workspace`) — the webview cannot
+/// use this command to write state for arbitrary directories. `last_file` is
+/// not validated here; see `save_ui_state`.
+#[tauri::command]
+pub fn save_workspace_ui(
+    root: String,
+    last_file: String,
+    app: AppHandle,
+    allowed: State<'_, AllowedPaths>,
+) -> Result<(), String> {
+    let canon = allowed.ensure_root(&root)?;
+    let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let file = ui_state_file(&base, &canon.to_string_lossy());
+    save_ui_state(&file, &last_file)
+}
+
+/// The workspace's remembered last-open file, or `None` when nothing is
+/// stored or the stored path no longer validates (vanished file, tampered
+/// state, path outside the root — see `load_ui_state`). Same `ensure_root`
+/// gate as `save_workspace_ui`.
+#[tauri::command]
+pub fn load_workspace_ui(
+    root: String,
+    app: AppHandle,
+    allowed: State<'_, AllowedPaths>,
+) -> Result<Option<String>, String> {
+    let canon = allowed.ensure_root(&root)?;
+    let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let file = ui_state_file(&base, &canon.to_string_lossy());
+    Ok(load_ui_state(&file, &canon))
+}
+
 /// How a valid Open Recent pick is honored — resolved by [`resolve_recent`].
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum RecentDecision {
@@ -770,6 +878,163 @@ mod tests {
         // Dropping an entry that isn't there is a harmless no-op.
         drop_dead_recent(&file, "/ws/dead").unwrap();
         assert_eq!(load_state(&file).roots, vec!["/ws/c", "/ws/a"]);
+    }
+
+    // -- per-workspace UI state (last-open file) -----------------------------
+
+    /// A canonical workspace root with one real markdown file inside, plus a
+    /// state base dir — the fixtures every ui-state test needs. Roots are
+    /// canonicalized up front (macOS tempdirs live under the /var -> /private
+    /// symlink) so containment compares canonical to canonical, exactly as
+    /// the commands do via `ensure_root`.
+    fn ui_fixture() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+        let dir = tempdir().unwrap();
+        let root = fs::canonicalize(mkdir(dir.path(), "ws")).unwrap();
+        let note = root.join("note.md");
+        fs::write(&note, "# note").unwrap();
+        (dir, root, note)
+    }
+
+    fn mkdir(base: &Path, name: &str) -> std::path::PathBuf {
+        let p = base.join(name);
+        fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn ui_state_round_trips_and_returns_the_canonical_path() {
+        let (base, root, note) = ui_fixture();
+        let file = ui_state_file(base.path(), root.to_str().unwrap());
+        save_ui_state(&file, note.to_str().unwrap()).unwrap();
+        assert_eq!(
+            load_ui_state(&file, &root).as_deref(),
+            Some(note.to_str().unwrap())
+        );
+        // The stored shape is the documented {"version":1,"lastFile":…}.
+        let raw = fs::read_to_string(&file).unwrap();
+        assert!(raw.contains("\"version\":1"));
+        assert!(raw.contains("\"lastFile\""));
+    }
+
+    #[test]
+    fn ui_state_overwrite_is_last_writer_wins() {
+        let (base, root, note) = ui_fixture();
+        let other = root.join("other.md");
+        fs::write(&other, "x").unwrap();
+        let file = ui_state_file(base.path(), root.to_str().unwrap());
+        save_ui_state(&file, other.to_str().unwrap()).unwrap();
+        save_ui_state(&file, note.to_str().unwrap()).unwrap();
+        assert_eq!(
+            load_ui_state(&file, &root).as_deref(),
+            Some(note.to_str().unwrap())
+        );
+    }
+
+    #[test]
+    fn ui_state_missing_or_corrupt_file_is_none() {
+        let (base, root, _note) = ui_fixture();
+        let file = ui_state_file(base.path(), root.to_str().unwrap());
+        assert_eq!(load_ui_state(&file, &root), None, "missing file");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, "not json at all").unwrap();
+        assert_eq!(load_ui_state(&file, &root), None, "corrupt file");
+    }
+
+    #[test]
+    fn ui_state_rejects_a_path_outside_the_root() {
+        // Containment is the trust boundary: a tampered ui.json naming a file
+        // outside the workspace must degrade to None, never to an open.
+        let (base, root, _note) = ui_fixture();
+        let outside = base.path().join("secret.md");
+        fs::write(&outside, "top secret").unwrap();
+        let file = ui_state_file(base.path(), root.to_str().unwrap());
+        save_ui_state(&file, fs::canonicalize(&outside).unwrap().to_str().unwrap()).unwrap();
+        assert_eq!(load_ui_state(&file, &root), None);
+    }
+
+    #[test]
+    fn ui_state_rejects_a_sibling_sharing_the_root_as_string_prefix() {
+        // starts_with is component-wise: /…/ws-evil never counts as inside /…/ws.
+        let (base, root, _note) = ui_fixture();
+        let evil = mkdir(base.path(), "ws-evil");
+        let f = evil.join("x.md");
+        fs::write(&f, "x").unwrap();
+        let file = ui_state_file(base.path(), root.to_str().unwrap());
+        save_ui_state(&file, fs::canonicalize(&f).unwrap().to_str().unwrap()).unwrap();
+        assert_eq!(load_ui_state(&file, &root), None);
+    }
+
+    #[test]
+    fn ui_state_rejects_a_vanished_last_file() {
+        // canonicalize fails for a nonexistent path -> fail closed to None,
+        // which is exactly the "open a fresh scratch instead" contract.
+        let (base, root, note) = ui_fixture();
+        let file = ui_state_file(base.path(), root.to_str().unwrap());
+        save_ui_state(&file, note.to_str().unwrap()).unwrap();
+        fs::remove_file(&note).unwrap();
+        assert_eq!(load_ui_state(&file, &root), None);
+    }
+
+    #[test]
+    fn ui_state_rejects_the_root_itself_and_directories() {
+        let (base, root, _note) = ui_fixture();
+        let sub = mkdir(&root, "sub");
+        let file = ui_state_file(base.path(), root.to_str().unwrap());
+        save_ui_state(&file, root.to_str().unwrap()).unwrap();
+        assert_eq!(load_ui_state(&file, &root), None, "the root is not a file");
+        save_ui_state(&file, sub.to_str().unwrap()).unwrap();
+        assert_eq!(
+            load_ui_state(&file, &root),
+            None,
+            "a directory is not openable"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ui_state_rejects_a_symlink_escaping_the_root() {
+        // Same posture as AllowedPaths::ensure: canonicalize resolves the
+        // link, landing outside the root, so containment fails closed.
+        let (base, root, _note) = ui_fixture();
+        let secret = base.path().join("secret.md");
+        fs::write(&secret, "top secret").unwrap();
+        let link = root.join("link.md");
+        std::os::unix::fs::symlink(&secret, &link).unwrap();
+        let file = ui_state_file(base.path(), root.to_str().unwrap());
+        save_ui_state(&file, link.to_str().unwrap()).unwrap();
+        assert_eq!(load_ui_state(&file, &root), None);
+    }
+
+    #[test]
+    fn ui_state_files_are_scoped_per_workspace() {
+        // Two roots never share a ui.json: the state dir is keyed by the
+        // hashed canonical root (history.rs's bucket_key).
+        let (base, root_a, note_a) = ui_fixture();
+        let root_b = fs::canonicalize(mkdir(base.path(), "ws2")).unwrap();
+        let file_a = ui_state_file(base.path(), root_a.to_str().unwrap());
+        let file_b = ui_state_file(base.path(), root_b.to_str().unwrap());
+        assert_ne!(file_a, file_b);
+        save_ui_state(&file_a, note_a.to_str().unwrap()).unwrap();
+        assert_eq!(
+            load_ui_state(&file_b, &root_b),
+            None,
+            "workspace b has no state"
+        );
+    }
+
+    #[test]
+    fn ui_state_oversized_file_is_none_and_oversized_save_rejects() {
+        let (base, root, _note) = ui_fixture();
+        let file = ui_state_file(base.path(), root.to_str().unwrap());
+        let huge = "x".repeat(MAX_UI_STATE_BYTES as usize + 1);
+        assert!(
+            save_ui_state(&file, &huge).is_err(),
+            "oversized save rejects"
+        );
+        // A file inflated out-of-band is ignored on read rather than parsed.
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, format!("{{\"version\":1,\"lastFile\":\"{huge}\"}}")).unwrap();
+        assert_eq!(load_ui_state(&file, &root), None);
     }
 
     #[test]

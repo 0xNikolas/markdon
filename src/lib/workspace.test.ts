@@ -47,8 +47,11 @@ import {
   initWorkspace,
   listRecentWorkspaces,
   recentWorkspaceDisplay,
+  recordLastFile,
+  resetLastFileRecording,
   type WorkspaceDir,
 } from './workspace'
+import { doc, docWith } from './doc'
 import { workspaceName } from './ui'
 import { errorMessage } from './errors'
 
@@ -66,6 +69,8 @@ beforeEach(() => {
   workspace.set({ root: null, tree: null })
   workspaceName.set(null)
   errorMessage.set(null)
+  doc.set(docWith())
+  resetLastFileRecording()
 })
 
 describe('isMarkdownFile', () => {
@@ -455,6 +460,71 @@ describe('initWorkspace workspace watcher', () => {
     const watched = watchCalls().length
     workspace.set({ root: '/ws/b', tree: tree('b') })
     expect(watchCalls()).toHaveLength(watched)
+  })
+})
+
+describe('recordLastFile', () => {
+  const uiCalls = () => invoke.mock.calls.filter(([cmd]) => cmd === 'save_workspace_ui')
+
+  it('persists an inside-root path, suppressing an immediate duplicate', () => {
+    invoke.mockResolvedValue(undefined)
+    workspace.set({ root: '/ws/notes', tree: tree('notes') })
+    recordLastFile('/ws/notes/a.md')
+    recordLastFile('/ws/notes/a.md') // the lastPersisted-style guard
+    expect(uiCalls().map(([, args]) => args)).toEqual([
+      { root: '/ws/notes', lastFile: '/ws/notes/a.md' },
+    ])
+  })
+
+  it('re-records a path the workspace switched back to (guard holds one value, per root)', () => {
+    invoke.mockResolvedValue(undefined)
+    workspace.set({ root: '/ws/notes', tree: tree('notes') })
+    recordLastFile('/ws/notes/a.md')
+    recordLastFile('/ws/notes/b.md')
+    recordLastFile('/ws/notes/a.md') // a is the newest again: must write
+    expect(uiCalls()).toHaveLength(3)
+  })
+
+  it('records nothing with no root open or for a path outside the root', () => {
+    invoke.mockResolvedValue(undefined)
+    recordLastFile('/somewhere/x.md') // root is null
+    workspace.set({ root: '/ws/notes', tree: tree('notes') })
+    recordLastFile('/elsewhere/standalone.md') // Finder/dialog open outside the folder
+    recordLastFile('/ws/notes-evil/x.md') // segment-safe: not inside /ws/notes
+    expect(uiCalls()).toHaveLength(0)
+  })
+
+  it('a failed write is logWarn territory — never a banner', async () => {
+    invoke.mockRejectedValue('disk full')
+    workspace.set({ root: '/ws/notes', tree: tree('notes') })
+    recordLastFile('/ws/notes/a.md')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(get(errorMessage)).toBeNull()
+  })
+})
+
+describe('initWorkspace last-file recording', () => {
+  it('records the doc path whenever it changes to a file inside the root', async () => {
+    invoke.mockImplementation(async (cmd: unknown, args?: unknown) => {
+      if (cmd === 'take_startup_workspace') return { workspace: null, suppress_restore: true }
+      if (cmd === 'list_workspace')
+        return { root: (args as { root: string }).root, tree: tree('a') }
+      return undefined
+    })
+    const teardown = await initWorkspace()
+    workspace.set({ root: '/ws/a', tree: tree('a') })
+    doc.set(docWith({ path: '/ws/a/x.md' }))
+    expect(invoke).toHaveBeenCalledWith('save_workspace_ui', {
+      root: '/ws/a',
+      lastFile: '/ws/a/x.md',
+    })
+    // Content-only churn on the same path never re-invokes.
+    const before = invoke.mock.calls.filter(([cmd]) => cmd === 'save_workspace_ui').length
+    doc.set(docWith({ path: '/ws/a/x.md', content: 'typed', savedContent: 'typed' }))
+    // A switch to a standalone file outside the folder records nothing.
+    doc.set(docWith({ path: '/elsewhere/standalone.md' }))
+    expect(invoke.mock.calls.filter(([cmd]) => cmd === 'save_workspace_ui')).toHaveLength(before)
+    teardown()
   })
 })
 

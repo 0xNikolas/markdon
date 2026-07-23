@@ -78,8 +78,10 @@ test('folder-less window adopts the reopened workspace in place', async ({ page 
   const reopens = await calls(page, 'open_recent_workspace')
   expect(reopens.map((c) => c.args)).toEqual([{ root: '/ws2', currentRoot: null }])
 
-  // A workspace adopted MID-SESSION must not trigger the boot auto-preview:
-  // the empty page stays and hello.md is never opened behind our back.
-  await expect(emptyPage(page)).toBeVisible()
+  // A workspace adopted MID-SESSION restores its last-open file — here none
+  // is remembered, so the empty page yields to the fresh untitled scratch
+  // and hello.md is never opened behind our back.
+  await expect(emptyPage(page)).toHaveCount(0)
+  await expect(page.locator('.filename')).toHaveText('Untitled')
   expect((await calls(page, 'read_file')).map((c) => c.args.path)).not.toContain('/ws2/hello.md')
 })

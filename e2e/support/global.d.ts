@@ -8,6 +8,7 @@ declare global {
     __TAURI_DIRS__?: string[]
     __TAURI_WORKSPACE_ROOT__?: string
     __TAURI_RECENT__?: string[]
+    __TAURI_WORKSPACE_UI__?: Record<string, string>
     __tauriEmit(event: string, payload?: unknown): void
   }
 }

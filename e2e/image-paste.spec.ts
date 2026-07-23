@@ -5,7 +5,6 @@ import {
   treeRow,
   editor,
   calls,
-  dismissBootPreview,
 } from './support/workspaceFixture.ts'
 
 /**
@@ -98,10 +97,7 @@ test('pasting into an untitled doc stays a session blob: URL, no backend write',
   page,
 }) => {
   await seedWorkspace(page)
-  await gotoApp(page)
-  // Boot lands on the auto-previewed workspace file now; close it to get the
-  // untitled scratch this spec is about.
-  await dismissBootPreview(page)
+  await gotoApp(page) // a fresh-workspace boot lands on the untitled scratch
   await expect(editor(page)).toBeVisible()
 
   await pasteImage(page)

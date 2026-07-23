@@ -52,37 +52,19 @@ export async function seedWorkspace(page: Page, opts: SeedOptions = {}): Promise
 
 /**
  * Load the app and wait for the restored workspace tree to render — plus the
- * boot auto-preview to land: an unclaimed window auto-opens the workspace's
- * first markdown file (depth-first render order — here sub/nested.md) as the
- * italic preview row. Waiting for it keeps later tree clicks off the layout
- * shift the mounting Open Files strip causes, and pins the boot state every
- * spec now starts from.
+ * boot document restore to settle: an unclaimed window looks up the
+ * workspace's last-open file (load_workspace_ui), and since these seeds
+ * store none, it lands on the fresh untitled scratch (no strip rows, no
+ * preview — the empty page is reserved for a boot with no workspace at all).
+ * Waiting for the lookup pins the boot state every spec starts from; specs
+ * that SEED a last file drive the boot themselves in last-file.spec.ts.
  */
 export async function gotoApp(page: Page): Promise<void> {
   await page.goto('/')
   await expect(workspaceTree(page)).toBeVisible()
-  await expect(bootPreviewRow(page)).toBeVisible()
-}
-
-/** The boot auto-preview's strip row (the fixture's first markdown file). */
-export function bootPreviewRow(page: Page): Locator {
-  return openFilesStrip(page).getByRole('button', { name: 'nested.md (preview)', exact: true })
-}
-
-/**
- * Close the boot auto-preview so a spec can start from the clean untitled
- * scratch. Closing the last open file lands on the no-document EMPTY PAGE
- * (VS Code parity), so this helper then presses Cmd+N (menu:new) to reach
- * the editable scratch the caller actually wants — the empty page's own
- * behavior is pinned separately in empty-state.spec.ts.
- */
-export async function dismissBootPreview(page: Page): Promise<void> {
-  await closeStripRow(page, 'nested.md')
-  await expect(emptyPage(page)).toBeVisible()
-  await expect(stripRows(page)).toHaveCount(0)
-  await emitTauri(page, 'menu:new')
-  await expect(emptyPage(page)).toHaveCount(0)
+  await expect.poll(async () => (await calls(page, 'load_workspace_ui')).length).toBe(1)
   await expect(page.locator('.filename')).toHaveText('Untitled')
+  await expect(stripRows(page)).toHaveCount(0)
 }
 
 // -- locators -----------------------------------------------------------------
@@ -147,9 +129,9 @@ export function emitTauri(page: Page, event: string, payload: unknown = null): P
  * the first click mounts the strip, which pushes the tree rows down between
  * the two physical clicks, so the second click lands on a different row.
  * Previewing first settles the layout; the dblclick then converts the
- * preview in place (same row count, no shift). (The boot auto-preview means
- * the strip is usually already mounted after gotoApp, but preview-first stays
- * correct — and necessary for flows that dismissed the boot preview.)
+ * preview in place (same row count, no shift). (A fresh-workspace boot lands
+ * on the scratch with the strip unmounted, so this matters for the first
+ * open of nearly every spec.)
  */
 export async function pinFile(page: Page, name: string): Promise<void> {
   await treeRow(page, name).click()
