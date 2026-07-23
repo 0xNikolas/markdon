@@ -15,7 +15,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
   import { Crepe } from '@milkdown/crepe'
-  import { schemaCtx } from '@milkdown/kit/core'
+  import { commandsCtx, schemaCtx } from '@milkdown/kit/core'
   import { getHTML } from '@milkdown/kit/utils'
   import { uploadConfig } from '@milkdown/kit/plugin/upload'
   import '@milkdown/crepe/theme/common/style.css'
@@ -100,9 +100,14 @@
     await crepe.create()
     if (destroyed) return // unmounted while create() was in flight -- don't register
     // Dev/release parity self-check: fail loudly at mount if the built
-    // schema lost a node type the app depends on (the uploader above already
-    // works around one such prod-only regression).
-    checkEditorSchema(() => crepe!.editor.ctx.get(schemaCtx))
+    // schema lost a node/mark type or command the app depends on (the
+    // uploader above already works around one such prod-only regression).
+    // Safe to read here: create() resolved, so CommandsReady is done.
+    checkEditorSchema(() => {
+      const ctx = crepe!.editor.ctx
+      const commands = ctx.get(commandsCtx)
+      return { schema: ctx.get(schemaCtx), getCommand: (name: string) => commands.get(name) }
+    })
     source = () => crepe!.editor.action(getHTML())
     registerHtmlSource(source)
   })

@@ -7,7 +7,9 @@ on:
 
 jobs:
   frontend:
-    runs-on: macos-14
+    # linux: nothing here is platform-dependent (vitest runs in a node
+    # environment, no browser); e2e (WebKit) + rust below need macOS.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
