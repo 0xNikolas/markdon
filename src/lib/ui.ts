@@ -1,4 +1,5 @@
 import { writable, type Writable } from 'svelte/store'
+import { basename } from './paths'
 
 /**
  * Shell contract module: the stores the app chrome (Header/StatusBar) renders
@@ -278,8 +279,7 @@ export function fileBreadcrumb(
  */
 export function windowTitle(path: string | null, dirty: boolean, empty = false): string {
   if (empty) return 'Markdon'
-  const segments = path?.split('/').filter(Boolean) ?? []
-  const name = segments[segments.length - 1] ?? 'Untitled'
+  const name = (path !== null ? basename(path) : '') || 'Untitled'
   return `${dirty ? '• ' : ''}${name} — Markdon`
 }
 

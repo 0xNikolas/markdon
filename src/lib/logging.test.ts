@@ -1,6 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { logPluginMocks } from './test-support/tauriMocks'
-import { formatUnknown, logInfo, logWarn, logError, installGlobalErrorSink } from './logging'
+import { invoke, logPluginMocks } from './test-support/tauriMocks'
+import {
+  formatUnknown,
+  logInfo,
+  logWarn,
+  logError,
+  fireAndForget,
+  installGlobalErrorSink,
+} from './logging'
 
 // logging.ts echoes every line to the console methods it captured at module
 // load; silence those (spy on the prototype-bound originals is impossible from
@@ -67,6 +74,33 @@ describe('log functions', () => {
       throw new Error('no __TAURI_INTERNALS__')
     })
     expect(() => logError('x')).not.toThrow()
+  })
+})
+
+describe('fireAndForget', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    logPluginMocks.warn.mockClear()
+  })
+
+  it('calls the command with arity ONE when no args are given', () => {
+    invoke.mockResolvedValue(null)
+    fireAndForget('reveal_log_file', 'reveal failed')
+    expect(invoke.mock.calls).toEqual([['reveal_log_file']])
+  })
+
+  it('passes the args object as the second argument when given', () => {
+    invoke.mockResolvedValue(null)
+    fireAndForget('watch_workspace', 'watch failed', { root: '/ws/a' })
+    expect(invoke.mock.calls).toEqual([['watch_workspace', { root: '/ws/a' }]])
+  })
+
+  it('routes a rejection to logWarn with the same log line, never throwing', async () => {
+    invoke.mockRejectedValueOnce('nope')
+    expect(() => fireAndForget('unwatch', 'unwatch failed')).not.toThrow()
+    // Flush the microtask queue: an unhandled rejection would fail the run.
+    await new Promise((r) => setTimeout(r, 0))
+    expect(logPluginMocks.warn.mock.calls).toEqual([['unwatch failed: nope']])
   })
 })
 

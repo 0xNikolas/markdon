@@ -61,3 +61,30 @@ export function ancestorDirs(root: string, path: string): string[] {
   }
   return out.reverse()
 }
+
+/**
+ * Final path segment, trailing slashes ignored — segment-based (NOT
+ * lastIndexOf) so `/a/dir/` -> `dir`. `''` and `/` yield `''`.
+ */
+export function basename(p: string): string {
+  const segs = p.split('/').filter(Boolean)
+  return segs.length > 0 ? segs[segs.length - 1] : ''
+}
+
+/**
+ * Parent directory, no trailing slash. A top-level file or bare segment yields
+ * `''`; never returns `'/'`. POSIX.
+ */
+export function dirname(p: string): string {
+  const i = p.lastIndexOf('/')
+  return i > 0 ? p.slice(0, i) : ''
+}
+
+/**
+ * Stem + extension of a basename. Only a NON-leading dot counts (a leading-dot
+ * dotfile like `.gitignore` has no extension); `ext` excludes the dot.
+ */
+export function splitExt(name: string): { stem: string; ext: string } {
+  const dot = name.lastIndexOf('.')
+  return dot > 0 ? { stem: name.slice(0, dot), ext: name.slice(dot + 1) } : { stem: name, ext: '' }
+}

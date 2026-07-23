@@ -1,4 +1,5 @@
 import type { WorkspaceDir } from './workspace'
+import { dirname } from './paths'
 
 /**
  * Pure workspace-tree and name helpers for the sidebar's file operations:
@@ -94,6 +95,6 @@ export function pasteTargetDir(
 ): string | null {
   if (focusedPath === null) return root
   if (folderSet.has(focusedPath)) return focusedPath
-  const parent = focusedPath.split('/').slice(0, -1).join('/')
+  const parent = dirname(focusedPath)
   return parent || root
 }

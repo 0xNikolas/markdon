@@ -8,8 +8,8 @@ import { openList, previewPath } from './openList'
 import { initWorkspace, workspace, stampTabState, type WorkspaceTabs } from './workspace'
 import { emptyState, exportTick, windowTitle, imageView } from './ui'
 import { exportDocument } from './export'
-import { reportError } from './errors'
-import { logWarn } from './logging'
+import { reportFailure } from './errors'
+import { logWarn, fireAndForget } from './logging'
 
 /**
  * App boot wiring, extracted from App.svelte's onMount so each piece is
@@ -48,9 +48,7 @@ export function wireEvents(events: MenuEventMap): () => void {
  * non-fatal — the check mark is cosmetic — so errors are swallowed.
  */
 export function syncReadonlyMenu(checked: boolean): void {
-  void invoke('set_readonly_menu_state', { checked }).catch((e) =>
-    logWarn('readonly menu sync failed', e),
-  )
+  fireAndForget('set_readonly_menu_state', 'readonly menu sync failed', { checked })
 }
 
 /**
@@ -146,7 +144,7 @@ export async function takeAssignedFile(): Promise<boolean> {
     }
     return false
   } catch (e) {
-    reportError(`Could not open the file assigned to this window: ${String(e)}`)
+    reportFailure('open the file assigned to this window', e)
     return false
   }
 }

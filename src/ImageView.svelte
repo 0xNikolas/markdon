@@ -1,5 +1,6 @@
 <script lang="ts">
   import { convertFileSrc } from '@tauri-apps/api/core'
+  import { basename } from './lib/paths'
 
   interface Props {
     /** Absolute path of the image to view. */
@@ -25,7 +26,7 @@
 </script>
 
 <div class="image-view" data-testid="image-view">
-  <img {src} class:hidden={failed} alt={path.split('/').pop()} onerror={() => (failed = true)} />
+  <img {src} class:hidden={failed} alt={basename(path)} onerror={() => (failed = true)} />
   {#if failed}
     <p class="failed">Could not load image.</p>
   {/if}

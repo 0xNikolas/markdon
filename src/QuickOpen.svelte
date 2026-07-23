@@ -7,6 +7,7 @@
   import { quickOpenSections } from './lib/quickOpen'
   import { focusTrap } from './lib/focusTrap'
   import { portal } from './lib/portal'
+  import { autofocus } from './lib/autofocus'
 
   /**
    * The ⌘P Quick Open palette (VS Code's Go to File), mounted by App.svelte
@@ -29,15 +30,6 @@
   let query = $state('')
   let selected = $state(0)
   let listEl = $state<HTMLElement>()
-  let inputEl = $state<HTMLInputElement>()
-
-  // Explicit post-mount focus, exactly like GoToLineBar's: focusTrap's own
-  // initial focus can run while the portaled panel isn't laid out yet (its
-  // offsetParent gate then skips the input — observed on WebKit when the ⌘P
-  // keydown itself triggers the mount), and typing must land in the input.
-  $effect(() => {
-    inputEl?.focus()
-  })
 
   // $doc.path threads the active file through so the empty query ranks it
   // last within Open Files (see quickOpenSections) — the file you're in is
@@ -130,7 +122,7 @@
     <!-- Combobox pattern: the input stays focused (rows are never tabbable)
          and aria-activedescendant tracks the keyboard selection. -->
     <input
-      bind:this={inputEl}
+      use:autofocus
       type="text"
       role="combobox"
       value={query}

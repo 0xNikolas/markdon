@@ -17,8 +17,8 @@
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import { get } from 'svelte/store'
 import { doc } from './doc'
-import { reportError } from './errors'
-import { joinRelative } from './paths'
+import { reportFailure } from './errors'
+import { joinRelative, dirname } from './paths'
 
 const MIME_EXT: Record<string, string> = {
   'image/png': 'png',
@@ -62,7 +62,7 @@ export async function uploadPastedImage(file: File): Promise<string> {
     const dataB64 = bytesToBase64(new Uint8Array(await file.arrayBuffer()))
     return await invoke<string>('save_pasted_image', { docPath, dataB64, ext })
   } catch (e) {
-    reportError(`Could not save pasted image: ${String(e)}`)
+    reportFailure('save pasted image', e)
     return URL.createObjectURL(file)
   }
 }
@@ -108,9 +108,9 @@ export function resolveImageSrc(src: string, docPath: string | null): string | P
   // No doc path (untitled) -> nothing to resolve against; return unchanged
   // (the link is broken either way, but never fabricate a path).
   if (docPath === null) return src
-  const dir = docPath.slice(0, docPath.lastIndexOf('/'))
+  const dir = dirname(docPath)
   const joined = joinRelative(dir, decoded)
-  if (joined.slice(0, joined.lastIndexOf('/')) === dir) return convertFileSrc(joined)
+  if (dirname(joined) === dir) return convertFileSrc(joined)
   return invoke<string>('resolve_image_asset', { docPath, rel: decoded }).then(
     (resolved) => convertFileSrc(resolved),
     () => convertFileSrc(joined),

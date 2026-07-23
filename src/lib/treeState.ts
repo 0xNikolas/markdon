@@ -1,6 +1,6 @@
 import { get, writable, type Writable } from 'svelte/store'
 import { workspace } from './workspace'
-import { ancestorDirs } from './paths'
+import { ancestorDirs, basename as pathBasename, splitExt } from './paths'
 import { leafNameError } from './fileTree'
 
 /**
@@ -35,13 +35,12 @@ export const renaming: Writable<string | null> = writable(null)
 export const renameValue: Writable<string> = writable('')
 
 export function basename(path: string): string {
-  return path.split('/').filter(Boolean).pop() ?? path
+  return pathBasename(path) || path
 }
 
 /** The offset of the extension dot, so a rename preselects just the stem. */
 export function stemLength(name: string): number {
-  const dot = name.lastIndexOf('.')
-  return dot > 0 ? dot : name.length
+  return splitExt(name).stem.length
 }
 
 /**

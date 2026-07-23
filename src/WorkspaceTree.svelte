@@ -24,6 +24,7 @@
     stemLength,
     basename,
   } from './lib/treeState'
+  import { autofocus } from './lib/autofocus'
 
   interface Props {
     activePath: string | null
@@ -87,14 +88,6 @@
     if (intent.kind === 'expand') setFolderCollapsed(intent.path, false)
     else if (intent.kind === 'collapse') setFolderCollapsed(intent.path, true)
     else focusRowDom(intent.path)
-  }
-
-  // Focus the fresh rename input and preselect the stem (files) or the whole
-  // name (folders) — Svelte action, runs once per input mount.
-  function renameSetup(node: HTMLInputElement, selectTo: number | null) {
-    node.focus()
-    if (selectTo !== null) node.setSelectionRange(0, selectTo)
-    else node.select()
   }
 
   // Commit = performRename, which already retargets the doc/openList/preview
@@ -163,7 +156,7 @@
         autocomplete="off"
         spellcheck="false"
         aria-label="Rename {f.name}"
-        use:renameSetup={stemLength(f.name)}
+        use:autofocus={{ selectTo: stemLength(f.name) }}
         onkeydown={(e) => onRenameKeydown(e, f.path)}
         onblur={() => commitRename(f.path)}
       />
@@ -207,7 +200,7 @@
         autocomplete="off"
         spellcheck="false"
         aria-label="Rename {d.name}"
-        use:renameSetup={null}
+        use:autofocus={{ selectTo: null }}
         onkeydown={(e) => onRenameKeydown(e, d.path)}
         onblur={() => commitRename(d.path)}
       />

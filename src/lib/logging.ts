@@ -1,4 +1,5 @@
 import { info, warn, error } from '@tauri-apps/plugin-log'
+import { invoke, type InvokeArgs } from '@tauri-apps/api/core'
 
 /**
  * Release error sink: the ONLY module that imports @tauri-apps/plugin-log.
@@ -57,6 +58,22 @@ export function logWarn(msg: string, err?: unknown): void {
 
 export function logError(msg: string, err?: unknown): void {
   persist(error, orig.error, msg, err)
+}
+
+/**
+ * Fire-and-forget an IPC command, swallowing any failure through logWarn —
+ * never a banner, never a throw, never an unhandled rejection. The single home
+ * for the `invoke(cmd).catch(logWarn)` idiom that dots the workspace/sync/boot
+ * modules; it lives beside logWarn (the one place that already owns the
+ * @tauri-apps/plugin-log sink) so those modules keep a single failure channel.
+ *
+ * The args branch is load-bearing, not cosmetic: `invoke(cmd, undefined)` would
+ * record a two-arg call and break call-shape assertions on the no-arg commands
+ * (reveal_log_file, unwatch_workspace, …), so a command with no args must call
+ * `invoke(cmd)` with arity one.
+ */
+export function fireAndForget(cmd: string, warnMsg: string, args?: InvokeArgs): void {
+  void (args === undefined ? invoke(cmd) : invoke(cmd, args)).catch((e) => logWarn(warnMsg, e))
 }
 
 /** The subset of Window the sink needs — injectable so tests stay node-env. */

@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { isSelfOrDescendant, rewritePrefix, ancestorDirs, joinRelative } from './paths'
+import {
+  isSelfOrDescendant,
+  rewritePrefix,
+  ancestorDirs,
+  joinRelative,
+  basename,
+  dirname,
+  splitExt,
+} from './paths'
 
 describe('isSelfOrDescendant', () => {
   it('is true for the exact same path', () => {
@@ -106,5 +114,65 @@ describe('joinRelative', () => {
 
   it('collapses doubled slashes in the relative part', () => {
     expect(joinRelative('/ws', 'img//x.png')).toBe('/ws/img/x.png')
+  })
+})
+
+describe('basename', () => {
+  it('returns the final segment of an absolute path', () => {
+    expect(basename('/ws/a/b.md')).toBe('b.md')
+  })
+
+  it('ignores a trailing slash (segment-based, not lastIndexOf)', () => {
+    expect(basename('/ws/dir/')).toBe('dir')
+  })
+
+  it('returns a bare name unchanged', () => {
+    expect(basename('name.md')).toBe('name.md')
+  })
+
+  it('returns the segment for a root-level file', () => {
+    expect(basename('/x.png')).toBe('x.png')
+  })
+
+  it('yields empty for the root and the empty string', () => {
+    expect(basename('/')).toBe('')
+    expect(basename('')).toBe('')
+  })
+})
+
+describe('dirname', () => {
+  it('returns the parent directory with no trailing slash', () => {
+    expect(dirname('/a/b/c.md')).toBe('/a/b')
+  })
+
+  it('returns empty for a root-level file (never "/")', () => {
+    expect(dirname('/x.png')).toBe('')
+    expect(dirname('/a')).toBe('')
+  })
+
+  it('returns empty for a bare segment', () => {
+    expect(dirname('a')).toBe('')
+  })
+
+  it('returns the parent for a relative two-segment path', () => {
+    expect(dirname('a/b')).toBe('a')
+  })
+})
+
+describe('splitExt', () => {
+  it('splits stem and extension on the last non-leading dot', () => {
+    expect(splitExt('notes.md')).toEqual({ stem: 'notes', ext: 'md' })
+  })
+
+  it('treats only the last dot as the extension boundary', () => {
+    expect(splitExt('notes.v2.md')).toEqual({ stem: 'notes.v2', ext: 'md' })
+  })
+
+  it('gives a leading-dot dotfile no extension', () => {
+    expect(splitExt('.gitignore')).toEqual({ stem: '.gitignore', ext: '' })
+  })
+
+  it('gives an extension-less name an empty ext', () => {
+    expect(splitExt('README')).toEqual({ stem: 'README', ext: '' })
   })
 })

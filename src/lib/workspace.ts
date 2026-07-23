@@ -2,11 +2,12 @@ import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { get, writable, type Writable } from 'svelte/store'
 import { doc } from './doc'
-import { reportError } from './errors'
-import { logWarn } from './logging'
+import { reportFailure } from './errors'
+import { logWarn, fireAndForget } from './logging'
 import { openList, previewPath } from './openList'
 import { isInsideRoot, workspaceName } from './ui'
 import { listenScoped } from './windowing'
+import { basename } from './paths'
 
 /** A file leaf in the workspace tree (mirrors Rust `WorkspaceFile`). */
 export interface WorkspaceFile {
@@ -96,7 +97,7 @@ export async function openWorkspace(): Promise<void> {
     if (ws === null) return // cancelled
     adopt(ws)
   } catch (e) {
-    reportError(`Could not open workspace folder: ${String(e)}`)
+    reportFailure('open workspace folder', e)
   }
 }
 
@@ -133,7 +134,7 @@ export interface RecentWorkspaceDisplay {
 export function recentWorkspaceDisplay(root: string, home: string | null): RecentWorkspaceDisplay {
   const trimmed = root.length > 1 ? root.replace(/\/+$/, '') : root
   const cut = trimmed.lastIndexOf('/')
-  const name = cut >= 0 ? trimmed.slice(cut + 1) : trimmed
+  const name = basename(trimmed)
   if (name === '') return { name: trimmed, parent: '' }
   let parent = cut > 0 ? trimmed.slice(0, cut) : cut === 0 ? '/' : ''
   const h = home === null || home === '' ? null : home.replace(/\/+$/, '')
@@ -164,7 +165,7 @@ export async function openRecentWorkspace(root: string): Promise<void> {
     })
     if (ws !== null) adopt(ws)
   } catch (e) {
-    reportError(`Could not reopen workspace: ${String(e)}`)
+    reportFailure('reopen workspace', e)
   }
 }
 
@@ -186,7 +187,7 @@ export async function closeWorkspace(): Promise<void> {
   try {
     if (root !== null) await invoke('close_workspace', { root })
   } catch (e) {
-    reportError(`Could not close folder: ${String(e)}`)
+    reportFailure('close folder', e)
   }
   workspace.set({ root: null, tree: null })
   workspaceName.set(null)
@@ -209,7 +210,7 @@ export async function refreshWorkspace(): Promise<void> {
     if (get(workspace).root !== root) return // root changed mid-walk: stale result
     adopt(ws)
   } catch (e) {
-    reportError(`Could not refresh workspace: ${String(e)}`)
+    reportFailure('refresh workspace', e)
   }
 }
 
@@ -352,12 +353,12 @@ function recordTabState(): void {
   const serialized = JSON.stringify(snapshot)
   if (lastWrittenUi.get(root) === serialized) return
   lastWrittenUi.set(root, serialized)
-  invoke('save_workspace_ui', {
+  fireAndForget('save_workspace_ui', 'workspace ui save failed', {
     root,
     tabs: snapshot.tabs,
     preview: snapshot.preview,
     active: snapshot.active,
-  }).catch((e) => logWarn('workspace ui save failed', e))
+  })
 }
 
 /**
@@ -465,9 +466,9 @@ export function initWorkspace(onBootRestoreSettled?: () => void): Promise<() => 
     if (s.root === watchedRoot) return
     watchedRoot = s.root
     if (s.root !== null) {
-      invoke('watch_workspace', { root: s.root }).catch((e) => logWarn('workspace watch failed', e))
+      fireAndForget('watch_workspace', 'workspace watch failed', { root: s.root })
     } else {
-      invoke('unwatch_workspace').catch((e) => logWarn('unwatch_workspace failed', e))
+      fireAndForget('unwatch_workspace', 'unwatch_workspace failed')
     }
   })
 
@@ -487,6 +488,6 @@ export function initWorkspace(onBootRestoreSettled?: () => void): Promise<() => 
     unsubWs()
     offFocus()
     offChanged()
-    invoke('unwatch_workspace').catch((e) => logWarn('unwatch_workspace failed', e))
+    fireAndForget('unwatch_workspace', 'unwatch_workspace failed')
   })
 }

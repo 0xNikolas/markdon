@@ -27,7 +27,7 @@
     performDelete,
   } from './lib/fileMutations'
   import { pasteTargetDir, folderPaths } from './lib/fileTree'
-  import { collapsed, startRename, stemLength } from './lib/treeState'
+  import { collapsed, startRename, stemLength, basename } from './lib/treeState'
   import { focusTrap } from './lib/focusTrap'
   import { portal } from './lib/portal'
   import { get } from 'svelte/store'
@@ -112,7 +112,7 @@
     const label =
       paths.length > 1
         ? `${paths.length} items`
-        : (paths[0].split('/').filter(Boolean).pop() ?? paths[0])
+        : basename(paths[0])
     deleteConfirm = { paths, label }
   }
 

@@ -1,6 +1,7 @@
 import type { WorkspaceDir } from './workspace'
 import { isMarkdownFile } from './workspace'
 import { stripOrder } from './openList'
+import { basename, dirname } from './paths'
 
 /**
  * Pure helpers behind the ⌘P Quick Open palette: flatten the workspace tree
@@ -156,8 +157,7 @@ export interface QuickOpenSection {
 function itemForStripPath(path: string, byPath: Map<string, QuickOpenItem>): QuickOpenItem {
   const known = byPath.get(path)
   if (known !== undefined) return known
-  const slash = path.lastIndexOf('/')
-  return { path, name: path.slice(slash + 1), dir: slash > 0 ? path.slice(0, slash) : '' }
+  return { path, name: basename(path), dir: dirname(path) }
 }
 
 /** Stable sort by recency desc: unknowns (recency 0) keep the input order, last. */

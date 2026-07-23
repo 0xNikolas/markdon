@@ -2,8 +2,9 @@ import { invoke } from '@tauri-apps/api/core'
 import { get } from 'svelte/store'
 import { doc } from './doc'
 import { settings, type Settings } from './settings'
-import { reportError } from './errors'
+import { reportError, reportFailure } from './errors'
 import { flushBufferEdits } from './bufferFlush'
+import { basename, splitExt } from './paths'
 
 /**
  * Export flow: writes the current document as standalone HTML or raw
@@ -38,9 +39,7 @@ export function deriveExportFilename(path: string | null, format: ExportFormat):
   if (path === null) return `untitled.${ext}`
   const cut = path.lastIndexOf('/') + 1
   const dir = path.slice(0, cut)
-  const name = path.slice(cut)
-  const dot = name.lastIndexOf('.')
-  const stem = dot > 0 ? name.slice(0, dot) : name
+  const { stem } = splitExt(path.slice(cut))
   return `${dir}${stem}.${ext}`
 }
 
@@ -57,9 +56,7 @@ export function exportUsesSystemDialog(format: ExportFormat): boolean {
 /** Filename stem used as the exported <title>; 'Untitled' with no path. */
 export function docTitle(path: string | null): string {
   if (path === null) return 'Untitled'
-  const name = path.slice(path.lastIndexOf('/') + 1)
-  const dot = name.lastIndexOf('.')
-  return dot > 0 ? name.slice(0, dot) : name
+  return splitExt(basename(path)).stem
 }
 
 const HTML_ESCAPES: Record<string, string> = {
@@ -214,6 +211,6 @@ export async function exportDocument(): Promise<void> {
     if (selected === null) return // cancelled
     await invoke('write_file', { path: selected, contents })
   } catch (e) {
-    reportError(`Could not export: ${String(e)}`)
+    reportFailure('export', e)
   }
 }
