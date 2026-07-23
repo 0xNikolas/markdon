@@ -1,4 +1,5 @@
 mod allowlist;
+mod cli_install;
 mod commands;
 mod dialogs;
 mod fileops;
@@ -413,6 +414,9 @@ pub fn run() {
             history::read_history_version,
             prefs::load_prefs,
             prefs::save_prefs,
+            cli_install::cli_status,
+            cli_install::install_cli,
+            cli_install::uninstall_cli,
             pdf::export_pdf
         ])
         .build(tauri::generate_context!())

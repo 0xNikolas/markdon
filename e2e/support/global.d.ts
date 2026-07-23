@@ -16,6 +16,8 @@ declare global {
     >
     /** Clipboard spy installed by specs (navigator.clipboard.writeText override). */
     __COPIED__?: string | null
+    /** Seedable in-memory state backing the `md` CLI installer stub commands. */
+    __TAURI_CLI__?: { installed: boolean; path: string | null; on_path: boolean }
     __tauriEmit(event: string, payload?: unknown): void
   }
 }

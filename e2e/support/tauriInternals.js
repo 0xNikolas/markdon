@@ -54,6 +54,10 @@
   const NO_CLOBBER = 'a file or folder with that name already exists'
 
   const fsMap = () => (window.__TAURI_FS__ ||= {})
+  // Backing store for the `md` CLI installer commands (cli_status / install_cli
+  // / uninstall_cli). Seedable + readable from specs via window.__TAURI_CLI__.
+  const cliState = () =>
+    (window.__TAURI_CLI__ ||= { installed: false, path: '/usr/local/bin/md', on_path: true })
   const dirList = () => (window.__TAURI_DIRS__ ||= [])
   const baseName = (p) => p.slice(p.lastIndexOf('/') + 1)
   const parentDir = (p) => p.slice(0, p.lastIndexOf('/'))
@@ -195,6 +199,21 @@
     list_history: () => [],
     load_prefs: () => null,
     save_prefs: () => null,
+    // `md` CLI installer (src-tauri/src/cli_install.rs): a seedable in-memory
+    // installed-state stands in for the real shim on disk. cli_status reads it;
+    // install/uninstall flip `installed` and return the fresh status — exactly
+    // like the Rust commands, whose replies are the post-change cli_status.
+    // Seed __TAURI_CLI__ from a spec to drive the not-installed / off-PATH
+    // views (default: installed=false, /usr/local/bin, on PATH).
+    cli_status: () => ({ ...cliState() }),
+    install_cli: () => {
+      cliState().installed = true
+      return { ...cliState() }
+    },
+    uninstall_cli: () => {
+      cliState().installed = false
+      return { ...cliState() }
+    },
     // Windowing hand-offs: log-only (the call log IS the assertion surface).
     open_document_window: () => null,
     open_file_new_instance: () => null,

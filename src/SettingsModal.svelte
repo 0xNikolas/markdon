@@ -1,10 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { getVersion } from '@tauri-apps/api/app'
+  import { invoke } from '@tauri-apps/api/core'
   import Icon from './Icon.svelte'
   import { closeOverlay } from './lib/overlay'
   import { settings, updateSetting, type Settings } from './lib/settings'
   import { settingsList } from './lib/keymap'
+  import { reportError } from './lib/errors'
+  import { pathHint, type CliStatus } from './lib/cliInstall'
 
   // The Settings Shortcuts rows come straight from the one declarative keymap
   // (src/lib/keymap.ts) — the same table that drives the window keydown handler
@@ -29,8 +32,39 @@
   let version = $state('')
   let tabRefs: (HTMLButtonElement | undefined)[] = []
 
+  // The `md` CLI toggle reflects filesystem truth (cli_status), NOT a stored
+  // preference: query it when the modal mounts (i.e. opens), and adopt the
+  // fresh status each install/uninstall returns. null until the first query
+  // resolves — the toggle renders unchecked in the meantime.
+  let cli = $state<CliStatus | null>(null)
+
+  async function refreshCli() {
+    try {
+      cli = await invoke<CliStatus>('cli_status')
+    } catch (e) {
+      reportError(`Could not check the \`md\` command status: ${String(e)}`)
+    }
+  }
+
+  // install_cli / uninstall_cli each return the post-change cli_status, so the
+  // returned value IS the re-queried filesystem truth — no separate refresh
+  // needed on success. On failure, re-query so the toggle can't stick to a
+  // stale optimistic state.
+  async function toggleCli() {
+    const installing = !cli?.installed
+    try {
+      cli = await invoke<CliStatus>(installing ? 'install_cli' : 'uninstall_cli')
+    } catch (e) {
+      reportError(
+        `Could not ${installing ? 'install' : 'uninstall'} the \`md\` command: ${String(e)}`,
+      )
+      await refreshCli()
+    }
+  }
+
   onMount(() => {
     getVersion().then((v) => (version = v))
+    refreshCli()
   })
 
   function selectTab(id: TabId) {
@@ -161,6 +195,28 @@
                 <span class="chev"><Icon name="chevron-down" size={10} /></span>
               </div>
             </div>
+          </section>
+
+          <section class="section">
+            <h3>Terminal</h3>
+            <div class="field-row">
+              <span class="label">Install <code>md</code> command</span>
+              <button
+                role="switch"
+                aria-checked={cli?.installed ?? false}
+                aria-label="Install md terminal command"
+                class="toggle"
+                onclick={toggleCli}
+              >
+                <span class="thumb"></span>
+              </button>
+            </div>
+            {#if cli?.path}
+              <p class="hint path">{cli.path}</p>
+            {/if}
+            {#if cli && pathHint(cli)}
+              <p class="hint">{pathHint(cli)}</p>
+            {/if}
           </section>
         </div>
       {:else if activeTab === 'editor'}
@@ -558,6 +614,14 @@
     margin: 0;
     font: 400 12px/1.5 var(--font-ui);
     color: var(--fg-muted);
+  }
+  .hint.path {
+    font-family: var(--font-mono);
+    word-break: break-all;
+  }
+  .field-row .label code {
+    font: 600 12px var(--font-mono);
+    color: var(--fg-strong);
   }
 
   .selector {
