@@ -8,3 +8,7 @@ test-results
 playwright-report
 src-tauri/target
 tasks/
+
+# Local agent instruction files (kept out of the repo)
+AGENTS.md
+CLAUDE.md
