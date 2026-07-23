@@ -26,6 +26,7 @@
   import { folderPaths } from './lib/fileTree'
   import { workspace, isMarkdownFile, isImageFile } from './lib/workspace'
   import { clampMenuPosition, fileMenuVisibility } from './lib/sidebarMenu'
+  import { basename } from './lib/paths'
 
   interface Props {
     hasRows: boolean
@@ -49,7 +50,7 @@
   // The single selected path (or null) and its type/open-state, shared by the
   // open-target trio and the cursor-mode file actions below.
   let singlePath = $derived($selection.size === 1 ? [...$selection][0] : null)
-  let singleName = $derived(singlePath?.split('/').filter(Boolean).pop() ?? '')
+  let singleName = $derived(singlePath ? basename(singlePath) : '')
   let isFolderSel = $derived(singlePath !== null && folderPaths($workspace.tree).has(singlePath))
   let isFileSel = $derived(singlePath !== null && !isFolderSel)
 

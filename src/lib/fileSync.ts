@@ -1,10 +1,10 @@
 import { invoke } from '@tauri-apps/api/core'
 import { get, writable, type Writable } from 'svelte/store'
 import { doc, openDoc, isDirty } from './doc'
-import { reportError } from './errors'
+import { reportFailure } from './errors'
 import { watchStatus } from './ui'
 import { recordExternal } from './history'
-import { logInfo, logWarn } from './logging'
+import { logInfo, fireAndForget } from './logging'
 import { listenScoped } from './windowing'
 import { flushBufferEdits } from './bufferFlush'
 
@@ -144,10 +144,10 @@ export async function initFileSync(): Promise<() => void> {
         },
         (e) => {
           if (watchedPath === path) watchStatus.set('idle')
-          reportError(`Could not watch file for external changes: ${String(e)}`)
+          reportFailure('watch file for external changes', e)
         },
       )
-    } else invoke('unwatch').catch((e) => logWarn('unwatch failed', e))
+    } else fireAndForget('unwatch', 'unwatch failed')
   })
 
   const unlisten = await listenScoped('file:external-change', async () => {
@@ -160,6 +160,6 @@ export async function initFileSync(): Promise<() => void> {
     unsubDoc()
     unlisten()
     watchStatus.set('idle')
-    invoke('unwatch').catch((e) => logWarn('unwatch failed', e))
+    fireAndForget('unwatch', 'unwatch failed')
   }
 }

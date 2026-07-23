@@ -1,6 +1,7 @@
 <script lang="ts">
   import { focusTrap, dialogDismissHandlers } from './lib/focusTrap'
   import { portal } from './lib/portal'
+  import { autofocus } from './lib/autofocus'
   import { leafNameError } from './lib/fileTree'
 
   interface Props {
@@ -25,20 +26,11 @@
   // `initial` once is exactly right.
   // svelte-ignore state_referenced_locally
   let value = $state(initial)
-  let inputEl = $state<HTMLInputElement>()
 
   // A leaf name only — leafNameError mirrors the backend's valid_leaf_name
   // gate so the user gets immediate feedback rather than a round-trip error
   // banner. Shared with the sidebar's inline rename.
   let invalid = $derived(leafNameError(value) !== null)
-
-  $effect(() => {
-    // Preselect the stem so typing replaces the name but keeps the extension.
-    if (inputEl) {
-      if (selectTo !== null) inputEl.setSelectionRange(0, selectTo)
-      else inputEl.select()
-    }
-  })
 
   function submit(e: Event) {
     e.preventDefault()
@@ -56,7 +48,7 @@
       <!-- svelte-ignore a11y_autofocus -->
       <input
         id="name-modal-input"
-        bind:this={inputEl}
+        use:autofocus={{ selectTo }}
         bind:value
         type="text"
         autocomplete="off"

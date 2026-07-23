@@ -2,7 +2,7 @@
   import { focusTrap, dialogDismissHandlers } from './lib/focusTrap'
   import { portal } from './lib/portal'
   import { workspace } from './lib/workspace'
-  import { isSelfOrDescendant } from './lib/paths'
+  import { isSelfOrDescendant, dirname } from './lib/paths'
   import { folderRows } from './lib/fileTree'
 
   interface Props {
@@ -20,7 +20,7 @@
   function disabled(path: string): boolean {
     if (sources.some((s) => isSelfOrDescendant(path, s))) return true
     if (sources.length === 1) {
-      const parent = sources[0].split('/').slice(0, -1).join('/')
+      const parent = dirname(sources[0])
       if (parent === path) return true
     }
     return false

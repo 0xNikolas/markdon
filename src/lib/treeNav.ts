@@ -22,6 +22,8 @@
  * handlers (file preview / folder toggle), as does Enter on a folder.
  */
 
+import { dirname } from './paths'
+
 export type TreeKeyIntent =
   | { kind: 'focus'; path: string }
   | { kind: 'expand'; path: string }
@@ -73,7 +75,7 @@ export function treeKeyIntent(
       if (idx === -1) return null
       const path = visible[idx]
       if (folders.has(path) && !collapsed[path]) return { kind: 'collapse', path }
-      const parent = path.slice(0, path.lastIndexOf('/'))
+      const parent = dirname(path)
       return visible.includes(parent) ? { kind: 'focus', path: parent } : null
     }
     case 'Home':

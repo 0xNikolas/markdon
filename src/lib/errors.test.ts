@@ -5,6 +5,7 @@ import {
   errorMessage,
   notice,
   reportError,
+  reportFailure,
   reportNotice,
   clearError,
   clearNotice,
@@ -54,5 +55,20 @@ describe('error sink funnel', () => {
     await new Promise((r) => setTimeout(r, 0))
     expect(logPluginMocks.warn.mock.calls).toEqual([['Could not reveal log file: nope']])
     expect(get(errorMessage)).toBeNull()
+  })
+
+  it('reportFailure renders a string reject verbatim — byte-identical to the old String(e) shape', () => {
+    reportFailure('save file', 'disk full')
+    expect(get(errorMessage)).toBe('Could not save file: disk full')
+    expect(logPluginMocks.error.mock.calls).toEqual([['Could not save file: disk full']])
+  })
+
+  it('reportFailure carries an Error message and stack into banner and log', () => {
+    const e = new Error('boom')
+    reportFailure('save file', e)
+    const msg = get(errorMessage)!
+    expect(msg).toContain('Could not save file: boom')
+    expect(msg).toContain(e.stack!)
+    expect(logPluginMocks.error.mock.calls).toEqual([[msg]])
   })
 })

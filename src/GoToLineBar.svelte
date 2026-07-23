@@ -6,15 +6,11 @@
   import { parseGoto, lineCount } from './lib/gotoLine'
   import { focusTrap } from './lib/focusTrap'
   import { portal } from './lib/portal'
+  import { autofocus } from './lib/autofocus'
   import { get } from 'svelte/store'
 
   let value = $state('')
   let error = $state(false)
-  let inputEl = $state<HTMLInputElement>()
-
-  $effect(() => {
-    inputEl?.focus()
-  })
 
   const total = $derived(lineCount($doc.content))
 
@@ -85,7 +81,7 @@
     onkeydown={onKeydown}
   >
     <input
-      bind:this={inputEl}
+      use:autofocus
       type="text"
       value={value}
       oninput={onInput}

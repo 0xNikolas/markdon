@@ -1,6 +1,5 @@
-import { invoke } from '@tauri-apps/api/core'
 import { writable, type Writable } from 'svelte/store'
-import { logError, logInfo, logWarn } from './logging'
+import { fireAndForget, formatUnknown, logError, logInfo } from './logging'
 
 export const errorMessage: Writable<string | null> = writable(null)
 
@@ -14,13 +13,24 @@ export function clearError(): void {
 }
 
 /**
+ * Report a failed action as a "Could not ${action}: …" banner, rendering the
+ * caught value through logging.formatUnknown — so a Tauri Result<T,String>
+ * rejection surfaces as its string verbatim (unchanged from the old
+ * `String(e)` shape), while a genuine JS Error carries its message + stack into
+ * both the banner and the log line. A thin front for {@link reportError}.
+ */
+export function reportFailure(action: string, e: unknown): void {
+  reportError(`Could not ${action}: ${formatUnknown(e)}`)
+}
+
+/**
  * Reveal this instance's log file in the OS file manager (Help > Show Log and
  * the error banner's "Details…" button). Fire-and-forget; a failed reveal is
  * deliberately logWarn — NOT reportError — so a broken reveal can never spawn
  * an error banner whose own Details button re-fails in a loop.
  */
 export function revealLog(): void {
-  void invoke('reveal_log_file').catch((e) => logWarn('Could not reveal log file', e))
+  fireAndForget('reveal_log_file', 'Could not reveal log file')
 }
 
 /**

@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { get } from 'svelte/store'
 import { retargetPath, detachIfAffected } from './doc'
-import { reportError, reportNotice } from './errors'
+import { reportFailure, reportNotice } from './errors'
 import { workspace, refreshWorkspace } from './workspace'
 import {
   openList,
@@ -62,7 +62,7 @@ export async function performCreateFile(dir: string, name: string): Promise<void
     await refreshWorkspace()
     afterMutation([p])
   } catch (e) {
-    reportError(`Could not create file: ${String(e)}`)
+    reportFailure('create file', e)
   }
 }
 
@@ -72,7 +72,7 @@ export async function performCreateFolder(dir: string, name: string): Promise<vo
     await refreshWorkspace()
     afterMutation([p])
   } catch (e) {
-    reportError(`Could not create folder: ${String(e)}`)
+    reportFailure('create folder', e)
   }
 }
 
@@ -86,7 +86,7 @@ export async function performRename(path: string, newName: string): Promise<void
     await refreshWorkspace()
     afterMutation([p])
   } catch (e) {
-    reportError(`Could not rename: ${String(e)}`)
+    reportFailure('rename', e)
   }
 }
 
@@ -96,7 +96,7 @@ export async function performDuplicate(path: string): Promise<void> {
     await refreshWorkspace()
     afterMutation([p])
   } catch (e) {
-    reportError(`Could not duplicate: ${String(e)}`)
+    reportFailure('duplicate', e)
   }
 }
 
@@ -117,7 +117,7 @@ export async function performMove(paths: string[], destDir: string): Promise<voi
       moved.push(p)
     }
   } catch (e) {
-    reportError(`Could not move: ${String(e)}`)
+    reportFailure('move', e)
   }
   await refreshWorkspace()
   if (moved.length > 0) afterMutation(moved)
@@ -159,7 +159,7 @@ export async function paste(): Promise<void> {
     }
     if (cb.mode === 'cut') clipboard.set(null)
   } catch (e) {
-    reportError(`Could not paste: ${String(e)}`)
+    reportFailure('paste', e)
     if (cb.mode === 'cut') {
       const remaining = cb.paths.slice(movedCount)
       clipboard.set(remaining.length > 0 ? { mode: 'cut', paths: remaining } : null)
@@ -181,7 +181,7 @@ export async function performDelete(paths: string[]): Promise<void> {
   try {
     await deleteEntries(paths)
   } catch (e) {
-    reportError(`Could not delete: ${String(e)}`)
+    reportFailure('delete', e)
     await refreshWorkspace()
     return
   }

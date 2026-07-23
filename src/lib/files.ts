@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { get } from 'svelte/store'
 import { doc, openDoc, restoreDoc, markSaved, isDirty } from './doc'
-import { reportError } from './errors'
+import { reportFailure } from './errors'
 import { openList, previewPath, pinOpen } from './openList'
 import { recordSave } from './history'
 import { settings } from './settings'
@@ -105,7 +105,7 @@ export async function openPath(
     // later background save of it would clobber the newer buffer.
     const active = get(doc).path
     if (active !== null) bufferCache.evict(active)
-    reportError(`Could not open file: ${String(e)}`)
+    reportFailure('open file', e)
   }
 }
 
@@ -132,7 +132,7 @@ export async function open(): Promise<void> {
       pinOpen(p) // dialog opens are always pinned; drop a stale preview of the same path
     })
   } catch (e) {
-    reportError(`Could not open file: ${String(e)}`)
+    reportFailure('open file', e)
   }
 }
 
@@ -157,7 +157,7 @@ export function openInPreferredTarget(
 ): void {
   if (get(settings).openMode === 'window') {
     spawnDocumentWindow(path, readonly).catch((e) => {
-      reportError(`Could not open a new window: ${String(e)}`)
+      reportFailure('open a new window', e)
       openInPlace(path)
     })
     return
@@ -210,7 +210,7 @@ export async function openInNewWindow(path: string): Promise<void> {
   try {
     await spawnDocumentWindow(path, false)
   } catch (e) {
-    reportError(`Could not open a new window: ${String(e)}`)
+    reportFailure('open a new window', e)
   }
 }
 
@@ -227,7 +227,7 @@ export async function save(): Promise<void> {
     // turn a good save into a reported failure.
     void recordSave(state.path)
   } catch (e) {
-    reportError(`Could not save file: ${String(e)}`)
+    reportFailure('save file', e)
   }
 }
 
@@ -250,7 +250,7 @@ export async function saveAs(): Promise<void> {
     // doc's OLD path would be a dead row (its buffer just moved away).
     previewPath.update((p) => (p === state.path ? null : p))
   } catch (e) {
-    reportError(`Could not save file: ${String(e)}`)
+    reportFailure('save file', e)
   }
 }
 
@@ -275,7 +275,7 @@ export async function saveCachedBuffer(path: string): Promise<boolean> {
     void recordSave(path)
     return true
   } catch (e) {
-    reportError(`Could not save file: ${String(e)}`)
+    reportFailure('save file', e)
     return false
   }
 }
