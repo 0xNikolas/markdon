@@ -53,8 +53,10 @@ const ICONS = [
   'italic',
   'keyboard',
   'layout-grid',
+  'moon',
   'link-2',
   'settings',
+  'sun',
   'split-square-vertical',
   'x',
 ]

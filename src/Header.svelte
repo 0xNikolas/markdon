@@ -3,6 +3,8 @@
   import { workspaceName, fileBreadcrumb, split, toggleSplit, requestExport } from './lib/ui'
   import { openOverlay } from './lib/overlay'
   import { workspace } from './lib/workspace'
+  import { resolvedTheme } from './lib/theme'
+  import { updateSetting } from './lib/settings'
   import wordmarkLight from './assets/brand/wordmark-light.svg?raw'
   import wordmarkDark from './assets/brand/wordmark-dark.svg?raw'
 
@@ -52,6 +54,16 @@
     <button class="btn" onclick={requestExport}>
       <Icon name="file-up" />
       Export
+    </button>
+    <!-- Two-state flip on the RESOLVED theme: clicking always sets an explicit
+         light/dark pref (persisted via settings, the themePref single writer);
+         'system' remains available in Settings. -->
+    <button
+      class="btn icon-only"
+      aria-label={$resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+      onclick={() => updateSetting('theme', $resolvedTheme === 'dark' ? 'light' : 'dark')}
+    >
+      <Icon name={$resolvedTheme === 'dark' ? 'sun' : 'moon'} />
     </button>
     <!-- openOverlay refuses (silent no-op) if any overlay is already up — that
          refusal IS the fix for the gear stacking a second focus trap. -->

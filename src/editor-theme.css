@@ -6,6 +6,9 @@
   --crepe-font-default: var(--editor-font-family);
   --crepe-font-code: var(--font-mono);
   --crepe-color-background: var(--bg);
+  /* Crepe paints text ::selection and selected nodes with this; its own
+     values (#d5d5d5 / #2f2f2f) are near-invisible against our slate bgs. */
+  --crepe-color-selected: var(--selection-bg);
 }
 
 /* Dark seam: the runtime-injected crepe dark sheet (theme.ts scopeDarkCss,
@@ -17,6 +20,7 @@
 :root[data-theme='dark'] #app .milkdown {
   --crepe-color-background: var(--bg);
   --crepe-color-on-background: var(--fg);
+  --crepe-color-selected: var(--selection-bg); /* outrank the injected dark sheet's #2f2f2f */
 }
 
 /* Comfortable centered reading column, like Obsidian/Typora. */
@@ -27,6 +31,7 @@
   line-height: var(--editor-line-height);
   font-size: var(--editor-font-size);
   color: var(--fg);
+  caret-color: var(--accent); /* explicit: visible on both slate bgs, matches the source pane */
 }
 
 /* In-document search highlights (search.ts / searchPlugin.ts decorations).

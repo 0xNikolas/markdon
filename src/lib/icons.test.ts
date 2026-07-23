@@ -26,8 +26,10 @@ const EXPECTED = [
   'italic.svg',
   'keyboard.svg',
   'layout-grid.svg',
+  'moon.svg',
   'link-2.svg',
   'settings.svg',
+  'sun.svg',
   'split-square-vertical.svg',
   'x.svg',
 ]
