@@ -1,0 +1,77 @@
+name: release-please
+
+# On every push to main, release-please reads the Conventional Commits since
+# the last release and maintains a "release PR" that bumps the version and
+# updates the CHANGELOG. Merging that PR tags the release and creates a GitHub
+# Release. The `node` release-type owns package.json + CHANGELOG.md; the
+# extra-files updaters keep the Tauri version sources in lockstep
+# (tauri.conf.json, Cargo.toml, and the app entry in Cargo.lock).
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      release_id: ${{ steps.rp.outputs.id }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: rp
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # When release-please cuts a release, build the macOS app on the tagged
+  # commit and attach the .app/.dmg to that GitHub Release. Chained here (not a
+  # separate `release:`-triggered workflow) because a release created by the
+  # default GITHUB_TOKEN does not trigger downstream workflow runs.
+  build-release:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS universal (Apple Silicon + Intel). The app is macOS-only
+          # (objc2-app-kit / WKWebView), so no Windows/Linux targets.
+          - platform: macos-14
+            args: '--target universal-apple-darwin'
+    runs-on: ${{ matrix.platform }}
+    steps:
+      # Build the exact tagged release commit, not just the workflow-run SHA.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: bun install --frozen-lockfile
+      - name: Build the app and upload it to the release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Code signing + notarization are parked (sprint 4 item 6): without
+          # these repo secrets the build is ad-hoc signed, so users open it via
+          # right-click > Open once (or `xattr -dr com.apple.quarantine`). Set
+          # them once an Apple Developer account is available to ship a
+          # Developer-ID-signed, notarized build — no workflow change needed.
+          # APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          # APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # APPLE_ID: ${{ secrets.APPLE_ID }}
+          # APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          releaseId: ${{ needs.release-please.outputs.release_id }}
+          args: ${{ matrix.args }}
