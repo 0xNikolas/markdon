@@ -123,6 +123,10 @@ pub fn wire_window(window: &WebviewWindow, app: &AppHandle) {
             app_focus
                 .state::<FocusedWindow>()
                 .set(Some(lbl_focus.clone()));
+            // workspace.json is shared by every instance: refresh Open Recent
+            // on the same focus signal the frontend already uses for its tree
+            // refresh, so another instance's opens show up here without IPC.
+            crate::menu::sync_recent_menu(&app_focus);
         }
         tauri::WindowEvent::CloseRequested { api, .. } => {
             api.prevent_close();

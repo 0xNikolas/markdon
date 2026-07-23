@@ -97,6 +97,8 @@ pub fn resolve_image_asset(
         .filter(|p| !p.as_os_str().is_empty())
         .ok_or_else(|| IMAGE_RESOLVE_ERR.to_string())?;
     let resolved = resolve_image_under(parent, &rel)?;
+    // Irrevocable for the process lifetime (FsScope has no un-allow — see
+    // lib.rs allow_asset_dir); acceptable: single file, display channel only.
     if let Err(e) = app.asset_protocol_scope().allow_file(&resolved) {
         log::warn!("could not allow resolved image in asset scope: {e}");
     }
@@ -104,6 +106,75 @@ pub fn resolve_image_asset(
         .to_str()
         .map(str::to_string)
         .ok_or_else(|| "non-UTF-8 path".to_string())
+}
+
+/// Platform invocation for revealing `path` in the OS file manager: macOS
+/// selects the file via `open -R`; Windows via `explorer /select,`; Linux
+/// xdg-open has no select, so the containing directory is opened instead.
+/// With `is_dir` (the fallback when the log file doesn't exist yet) the
+/// directory itself is opened everywhere. Pure so each cfg branch is
+/// unit-testable.
+pub(crate) fn reveal_invocation(
+    path: &Path,
+    is_dir: bool,
+) -> (&'static str, Vec<std::ffi::OsString>) {
+    #[cfg(target_os = "macos")]
+    {
+        if is_dir {
+            ("open", vec![path.as_os_str().to_os_string()])
+        } else {
+            ("open", vec!["-R".into(), path.as_os_str().to_os_string()])
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if is_dir {
+            ("explorer", vec![path.as_os_str().to_os_string()])
+        } else {
+            let mut arg = std::ffi::OsString::from("/select,");
+            arg.push(path.as_os_str());
+            ("explorer", vec![arg])
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let dir = if is_dir {
+            path
+        } else {
+            path.parent().unwrap_or(path)
+        };
+        ("xdg-open", vec![dir.as_os_str().to_os_string()])
+    }
+}
+
+/// Help > Show Log (and the error banner's "Details…" button): reveal the log
+/// file THIS instance writes in the OS file manager. The filename comes from
+/// the managed `LogFileName` — computed in `run()` from the same handed-off
+/// branch that configured the log plugin, so a per-pid child reveals its own
+/// markdon-<pid>.log, never the primary's. A missing file (fresh install /
+/// rotated away) falls back to revealing the log directory rather than
+/// erroring. Spawn+reap pattern as in windows.rs: dropping the Child would
+/// leave a zombie until waited on, so a throwaway thread reaps it.
+#[tauri::command]
+pub fn reveal_log_file(
+    app: tauri::AppHandle,
+    name: State<'_, crate::LogFileName>,
+) -> Result<(), String> {
+    let dir = app.path().app_log_dir().map_err(|e| e.to_string())?;
+    let path = dir.join(&name.0);
+    let (prog, args) = if path.exists() {
+        reveal_invocation(&path, false)
+    } else {
+        reveal_invocation(&dir, true)
+    };
+    let mut child = std::process::Command::new(prog)
+        .args(args)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 #[tauri::command]
@@ -168,6 +239,42 @@ mod tests {
     fn write_file_rejects_unc_path() {
         let res = write_file_impl(r"\\evil-server\share\x", "x");
         assert!(res.is_err());
+    }
+
+    // -- reveal_invocation ----------------------------------------------------
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn reveal_invocation_selects_the_file_and_opens_the_dir_fallback() {
+        let (prog, args) = reveal_invocation(Path::new("/logs/markdon.log"), false);
+        assert_eq!(prog, "open");
+        assert_eq!(args, vec!["-R", "/logs/markdon.log"]);
+        let (prog, args) = reveal_invocation(Path::new("/logs"), true);
+        assert_eq!(prog, "open");
+        assert_eq!(args, vec!["/logs"]);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn reveal_invocation_selects_the_file_and_opens_the_dir_fallback() {
+        let (prog, args) = reveal_invocation(Path::new(r"C:\logs\markdon.log"), false);
+        assert_eq!(prog, "explorer");
+        assert_eq!(args, vec![r"/select,C:\logs\markdon.log"]);
+        let (prog, args) = reveal_invocation(Path::new(r"C:\logs"), true);
+        assert_eq!(prog, "explorer");
+        assert_eq!(args, vec![r"C:\logs"]);
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[test]
+    fn reveal_invocation_opens_the_containing_dir() {
+        // xdg-open has no select flag: a file ref opens its parent directory.
+        let (prog, args) = reveal_invocation(Path::new("/logs/markdon.log"), false);
+        assert_eq!(prog, "xdg-open");
+        assert_eq!(args, vec!["/logs"]);
+        let (prog, args) = reveal_invocation(Path::new("/logs"), true);
+        assert_eq!(prog, "xdg-open");
+        assert_eq!(args, vec!["/logs"]);
     }
 
     // -- resolve_image_under --------------------------------------------------

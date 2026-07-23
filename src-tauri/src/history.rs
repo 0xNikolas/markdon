@@ -2,11 +2,32 @@
 //! silent external reloads and the pre-revert snapshot — records the just-written
 //! file content into an app-owned store under `app_data_dir()`.
 //!
-//! Layout: `app_data_dir()/history/<sha256hex(canonical abs path)>/` holds one
-//! `<timestamp-ms>.md` per version plus an `index.json` describing them. The
-//! bucket key is derived in Rust by canonicalizing the ensure()'d path and
+//! Layout: a file reached through a granted workspace root buckets under that
+//! workspace's state dir (prefs.rs documents the convention),
+//! `app_data_dir()/workspace-state/<sha256hex(canonical root)>/history/<sha256hex(canonical abs path)>/`;
+//! a standalone file (exact-file grant, no owning root) buckets at the legacy
+//! `app_data_dir()/history/<sha256hex(canonical abs path)>/`. Each bucket holds
+//! one `<timestamp-ms>.md` per version plus an `index.json` describing them.
+//! Bucket keys are derived in Rust by canonicalizing the ensure()'d path and
 //! hashing the string, so symlink/alias aliases collapse to one bucket and the
 //! webview can never name a store path.
+//!
+//! MIGRATION (lazy, per-file — see `resolve_bucket`): when a workspace file's
+//! new bucket doesn't exist but its legacy bucket does, the legacy bucket is
+//! renamed into place (same volume, atomic dir move). This preserves existing
+//! history for every file the user still touches at O(1) cost — no startup
+//! scan, no double-store; buckets for files never opened again stay in the
+//! legacy dir harmlessly, bounded by the retention already applied to them.
+//! The alternative (orphaning ALL old entries) would silently lose user
+//! history for zero savings.
+//!
+//! ACCEPTED EDGE: the bucket location follows how the file is REACHED at call
+//! time — the same file opened standalone (exact-file grant, no root) uses the
+//! legacy bucket, so a workspace file later opened standalone shows a fresh
+//! history. This split is also exactly what shrinks the cross-process
+//! lost-entry race documented on `HistoryLocks`: the realistic two-instance
+//! same-file collision (workspace instance + standalone instance) now writes
+//! two different indexes.
 //!
 //! SECURITY: only the user file path is routed through `AllowedPaths::ensure`;
 //! history-internal paths are always built with `PathBuf::join` under
@@ -33,7 +54,11 @@ use crate::allowlist::AllowedPaths;
 /// race the index and drop one entry (its `<ts>.md` is orphaned, never
 /// corrupted — `atomic_write` and the tolerant `load_index` see to that).
 /// A cross-process flock isn't worth the platform-specific machinery for a
-/// worst case of one lost history entry.
+/// worst case of one lost history entry. The per-workspace bucket split
+/// narrows that race further: a workspace instance and a standalone instance
+/// touching the same file now write two DIFFERENT indexes (see the module
+/// doc's accepted edge), leaving only two instances sharing the same
+/// workspace — or both standalone — able to collide at all.
 ///
 /// Within one process the lock is load-bearing: without it,
 /// two `record_history` invocations racing for the SAME file (a fast double
@@ -107,8 +132,45 @@ pub(crate) fn bucket_key(canonical: &str) -> String {
     sha256hex(canonical.as_bytes())
 }
 
-fn bucket_dir_in(base: &Path, canonical: &str) -> PathBuf {
-    base.join("history").join(bucket_key(canonical))
+/// Bucket directory for `canonical`: inside the owning workspace's state dir
+/// when the file was reached through a granted root, else the legacy
+/// standalone location (unchanged from before workspace-state existed).
+fn bucket_dir_in(base: &Path, ws_root: Option<&str>, canonical: &str) -> PathBuf {
+    match ws_root {
+        Some(r) => base
+            .join("workspace-state")
+            .join(bucket_key(r))
+            .join("history")
+            .join(bucket_key(canonical)),
+        None => base.join("history").join(bucket_key(canonical)),
+    }
+}
+
+/// The bucket to actually use, performing the lazy legacy migration: a
+/// workspace file whose new bucket doesn't exist yet but whose legacy bucket
+/// does gets the legacy bucket RENAMED into place (same volume — both under
+/// `app_data_dir` — so this is a cheap atomic dir move). On rename failure,
+/// if the new bucket exists another process won the race and it is used;
+/// otherwise fall back to the legacy bucket rather than dropping history.
+/// In-process, `record_history` holds the per-canonical `HistoryLocks` lock
+/// across the whole operation, which serializes migration with recording.
+pub(crate) fn resolve_bucket(base: &Path, ws_root: Option<&str>, canonical: &str) -> PathBuf {
+    let new = bucket_dir_in(base, ws_root, canonical);
+    if ws_root.is_none() || new.exists() {
+        return new;
+    }
+    let legacy = bucket_dir_in(base, None, canonical);
+    if !legacy.exists() {
+        return new;
+    }
+    if let Some(parent) = new.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    match fs::rename(&legacy, &new) {
+        Ok(()) => new,
+        Err(_) if new.exists() => new, // another process won the migration race
+        Err(_) => legacy,              // rename impossible: keep the history readable where it is
+    }
 }
 
 /// A one-line preview: the first ATX heading (`# …`) if any, else the first ~80
@@ -239,17 +301,19 @@ fn write_index(bucket: &Path, index: &Index) -> Result<(), String> {
 }
 
 /// Core snapshot logic, testable without an AppHandle: `base` stands in for
-/// `app_data_dir()`. Content-deduped against the newest entry (a save with no
-/// change writes nothing), then pruned. Returns the new entry id, or None when
-/// deduped.
+/// `app_data_dir()`, `ws_root` for the owning workspace root (None =
+/// standalone/legacy bucket). Content-deduped against the newest entry (a save
+/// with no change writes nothing), then pruned. Returns the new entry id, or
+/// None when deduped.
 pub(crate) fn record_snapshot(
     base: &Path,
+    ws_root: Option<&str>,
     canonical: &str,
     content: &str,
     trigger: &str,
     now_ms: u64,
 ) -> Result<Option<String>, String> {
-    let bucket = bucket_dir_in(base, canonical);
+    let bucket = resolve_bucket(base, ws_root, canonical);
     fs::create_dir_all(&bucket).map_err(|e| e.to_string())?;
     let mut index = load_index(&bucket);
     let hash = sha256hex(content.as_bytes());
@@ -281,8 +345,8 @@ pub(crate) fn record_snapshot(
 }
 
 /// Metadata list for a bucket, newest-first (empty if no history yet).
-pub(crate) fn list_snapshots(base: &Path, canonical: &str) -> Vec<Entry> {
-    let bucket = bucket_dir_in(base, canonical);
+pub(crate) fn list_snapshots(base: &Path, ws_root: Option<&str>, canonical: &str) -> Vec<Entry> {
+    let bucket = resolve_bucket(base, ws_root, canonical);
     let mut index = load_index(&bucket);
     index.entries.reverse();
     index.entries
@@ -291,11 +355,16 @@ pub(crate) fn list_snapshots(base: &Path, canonical: &str) -> Vec<Entry> {
 /// Read one version's content. `id` must pass `valid_id` AND be a known entry in
 /// the index — both checks are mandatory (a compromised webview must not read an
 /// arbitrary store file by naming it).
-pub(crate) fn read_snapshot(base: &Path, canonical: &str, id: &str) -> Result<String, String> {
+pub(crate) fn read_snapshot(
+    base: &Path,
+    ws_root: Option<&str>,
+    canonical: &str,
+    id: &str,
+) -> Result<String, String> {
     if !valid_id(id) {
         return Err("bad version id".into());
     }
-    let bucket = bucket_dir_in(base, canonical);
+    let bucket = resolve_bucket(base, ws_root, canonical);
     let index = load_index(&bucket);
     if !index.entries.iter().any(|e| e.id == id) {
         return Err("unknown version".into());
@@ -317,6 +386,14 @@ fn ensured_canonical(path: &str, allowed: &AllowedPaths) -> Result<String, Strin
     allowed.ensure(path)?;
     let canon = fs::canonicalize(path).map_err(|e| e.to_string())?;
     Ok(canon.to_string_lossy().into_owned())
+}
+
+/// The owning workspace root (as a String) for an already-canonical path, or
+/// None for standalone opens — decides which bucket family the file uses.
+fn owning_root_of(canonical: &str, allowed: &AllowedPaths) -> Option<String> {
+    allowed
+        .owning_root(Path::new(canonical))
+        .map(|p| p.to_string_lossy().into_owned())
 }
 
 fn history_base(app: &AppHandle) -> Result<PathBuf, String> {
@@ -343,7 +420,15 @@ pub fn record_history(
     let _held = lock.lock().unwrap();
     let content = fs::read_to_string(&canonical).map_err(|e| e.to_string())?;
     let base = history_base(&app)?;
-    record_snapshot(&base, &canonical, &content, &trigger, now_ms())?;
+    let ws = owning_root_of(&canonical, &allowed);
+    record_snapshot(
+        &base,
+        ws.as_deref(),
+        &canonical,
+        &content,
+        &trigger,
+        now_ms(),
+    )?;
     Ok(())
 }
 
@@ -355,7 +440,8 @@ pub fn list_history(
 ) -> Result<Vec<Entry>, String> {
     let canonical = ensured_canonical(&path, &allowed)?;
     let base = history_base(&app)?;
-    Ok(list_snapshots(&base, &canonical))
+    let ws = owning_root_of(&canonical, &allowed);
+    Ok(list_snapshots(&base, ws.as_deref(), &canonical))
 }
 
 #[tauri::command]
@@ -367,7 +453,8 @@ pub fn read_history_version(
 ) -> Result<String, String> {
     let canonical = ensured_canonical(&path, &allowed)?;
     let base = history_base(&app)?;
-    read_snapshot(&base, &canonical, &id)
+    let ws = owning_root_of(&canonical, &allowed);
+    read_snapshot(&base, ws.as_deref(), &canonical, &id)
 }
 
 #[cfg(test)]
@@ -522,19 +609,105 @@ mod tests {
         assert!(load_index(dir.path()).entries.is_empty());
     }
 
+    // -- bucket resolution + lazy migration ---------------------------------
+
+    #[test]
+    fn bucket_dir_in_splits_workspace_and_standalone_layouts() {
+        let base = Path::new("/data");
+        let canonical = "/ws/notes/a.md";
+        let legacy = bucket_dir_in(base, None, canonical);
+        assert_eq!(
+            legacy,
+            base.join("history").join(bucket_key(canonical)),
+            "standalone files keep the pre-existing layout"
+        );
+        let scoped = bucket_dir_in(base, Some("/ws/notes"), canonical);
+        assert_eq!(
+            scoped,
+            base.join("workspace-state")
+                .join(bucket_key("/ws/notes"))
+                .join("history")
+                .join(bucket_key(canonical)),
+            "workspace files bucket under the owning root's state dir"
+        );
+        assert_ne!(legacy, scoped);
+    }
+
+    #[test]
+    fn resolve_bucket_migrates_a_legacy_bucket_by_rename() {
+        let base = tempdir().unwrap();
+        let canonical = "/ws/a.md";
+        // Seed history in the legacy location (a pre-upgrade install).
+        let id = record_snapshot(base.path(), None, canonical, "old body", "save", 1000)
+            .unwrap()
+            .unwrap();
+        let legacy = bucket_dir_in(base.path(), None, canonical);
+        assert!(legacy.exists());
+
+        let resolved = resolve_bucket(base.path(), Some("/ws"), canonical);
+        assert_eq!(resolved, bucket_dir_in(base.path(), Some("/ws"), canonical));
+        assert!(!legacy.exists(), "legacy bucket moved, not copied");
+        // The migrated history is fully readable through the new location.
+        assert_eq!(
+            read_snapshot(base.path(), Some("/ws"), canonical, &id).unwrap(),
+            "old body"
+        );
+        let list = list_snapshots(base.path(), Some("/ws"), canonical);
+        assert_eq!(list.len(), 1);
+    }
+
+    #[test]
+    fn resolve_bucket_prefers_an_existing_workspace_bucket() {
+        // Once the new bucket exists (migrated or fresh), a lingering legacy
+        // bucket is never consulted again — no double-store, no flip-flop.
+        let base = tempdir().unwrap();
+        let canonical = "/ws/a.md";
+        record_snapshot(base.path(), Some("/ws"), canonical, "new", "save", 2000).unwrap();
+        // Plant a stale legacy bucket afterwards (e.g. an old instance wrote it).
+        record_snapshot(base.path(), None, canonical, "stale", "save", 1000).unwrap();
+        let resolved = resolve_bucket(base.path(), Some("/ws"), canonical);
+        assert_eq!(resolved, bucket_dir_in(base.path(), Some("/ws"), canonical));
+        let list = list_snapshots(base.path(), Some("/ws"), canonical);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].ts, 2000);
+    }
+
+    #[test]
+    fn record_and_read_against_a_workspace_bucket_end_to_end() {
+        let base = tempdir().unwrap();
+        let canonical = "/ws/notes/a.md";
+        let ws = Some("/ws/notes");
+        let id = record_snapshot(base.path(), ws, canonical, "# One", "save", 1000)
+            .unwrap()
+            .unwrap();
+        record_snapshot(base.path(), ws, canonical, "# Two", "save", 2000)
+            .unwrap()
+            .unwrap();
+        let list = list_snapshots(base.path(), ws, canonical);
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].ts, 2000);
+        assert_eq!(
+            read_snapshot(base.path(), ws, canonical, &id).unwrap(),
+            "# One"
+        );
+        // The standalone view of the same file is a DIFFERENT (empty) bucket —
+        // the documented accepted edge.
+        assert!(list_snapshots(base.path(), None, canonical).is_empty());
+    }
+
     // -- record / read integration (base dir stands in for app_data_dir) ----
 
     #[test]
     fn record_writes_snapshot_and_index() {
         let base = tempdir().unwrap();
         let canonical = "/docs/a.md";
-        let id = record_snapshot(base.path(), canonical, "# One", "save", 1000)
+        let id = record_snapshot(base.path(), None, canonical, "# One", "save", 1000)
             .unwrap()
             .expect("first record writes a snapshot");
-        let bucket = bucket_dir_in(base.path(), canonical);
+        let bucket = bucket_dir_in(base.path(), None, canonical);
         assert!(bucket.join(&id).exists());
         assert!(index_path(&bucket).exists());
-        let list = list_snapshots(base.path(), canonical);
+        let list = list_snapshots(base.path(), None, canonical);
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].preview, "One");
         assert_eq!(list[0].trigger, "save");
@@ -545,19 +718,19 @@ mod tests {
     fn record_dedupes_identical_content() {
         let base = tempdir().unwrap();
         let canonical = "/docs/a.md";
-        record_snapshot(base.path(), canonical, "same", "save", 1000).unwrap();
-        let second = record_snapshot(base.path(), canonical, "same", "save", 2000).unwrap();
+        record_snapshot(base.path(), None, canonical, "same", "save", 1000).unwrap();
+        let second = record_snapshot(base.path(), None, canonical, "same", "save", 2000).unwrap();
         assert!(second.is_none(), "identical content must not snapshot");
-        assert_eq!(list_snapshots(base.path(), canonical).len(), 1);
+        assert_eq!(list_snapshots(base.path(), None, canonical).len(), 1);
     }
 
     #[test]
     fn record_appends_on_change_and_lists_newest_first() {
         let base = tempdir().unwrap();
         let canonical = "/docs/a.md";
-        record_snapshot(base.path(), canonical, "v1", "save", 1000).unwrap();
-        record_snapshot(base.path(), canonical, "v2", "save", 2000).unwrap();
-        let list = list_snapshots(base.path(), canonical);
+        record_snapshot(base.path(), None, canonical, "v1", "save", 1000).unwrap();
+        record_snapshot(base.path(), None, canonical, "v2", "save", 2000).unwrap();
+        let list = list_snapshots(base.path(), None, canonical);
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].ts, 2000); // newest first
         assert_eq!(list[1].ts, 1000);
@@ -567,11 +740,12 @@ mod tests {
     fn record_prunes_and_deletes_pruned_snapshot_files() {
         let base = tempdir().unwrap();
         let canonical = "/docs/big.md";
-        let bucket = bucket_dir_in(base.path(), canonical);
+        let bucket = bucket_dir_in(base.path(), None, canonical);
         // 60 distinct-content saves; retention caps at 50 and deletes the files.
         for i in 0..60 {
             record_snapshot(
                 base.path(),
+                None,
                 canonical,
                 &format!("content {i}"),
                 "save",
@@ -579,7 +753,7 @@ mod tests {
             )
             .unwrap();
         }
-        let list = list_snapshots(base.path(), canonical);
+        let list = list_snapshots(base.path(), None, canonical);
         assert_eq!(list.len(), 50);
         // The 10 oldest snapshot files must be gone from disk, not just the index.
         let md_files = fs::read_dir(&bucket)
@@ -594,15 +768,15 @@ mod tests {
     fn same_millisecond_saves_get_distinct_ids() {
         let base = tempdir().unwrap();
         let canonical = "/docs/a.md";
-        let a = record_snapshot(base.path(), canonical, "one", "save", 1000)
+        let a = record_snapshot(base.path(), None, canonical, "one", "save", 1000)
             .unwrap()
             .unwrap();
-        let b = record_snapshot(base.path(), canonical, "two", "save", 1000)
+        let b = record_snapshot(base.path(), None, canonical, "two", "save", 1000)
             .unwrap()
             .unwrap();
         assert_ne!(a, b, "two saves in one ms must not share an id/filename");
         assert!(valid_id(&a) && valid_id(&b));
-        let bucket = bucket_dir_in(base.path(), canonical);
+        let bucket = bucket_dir_in(base.path(), None, canonical);
         assert_eq!(fs::read_to_string(bucket.join(&a)).unwrap(), "one");
         assert_eq!(fs::read_to_string(bucket.join(&b)).unwrap(), "two");
     }
@@ -611,11 +785,11 @@ mod tests {
     fn read_snapshot_returns_content_for_known_id() {
         let base = tempdir().unwrap();
         let canonical = "/docs/a.md";
-        let id = record_snapshot(base.path(), canonical, "# Hello", "save", 1000)
+        let id = record_snapshot(base.path(), None, canonical, "# Hello", "save", 1000)
             .unwrap()
             .unwrap();
         assert_eq!(
-            read_snapshot(base.path(), canonical, &id).unwrap(),
+            read_snapshot(base.path(), None, canonical, &id).unwrap(),
             "# Hello"
         );
     }
@@ -624,9 +798,9 @@ mod tests {
     fn read_snapshot_rejects_unknown_id() {
         let base = tempdir().unwrap();
         let canonical = "/docs/a.md";
-        record_snapshot(base.path(), canonical, "x", "save", 1000).unwrap();
+        record_snapshot(base.path(), None, canonical, "x", "save", 1000).unwrap();
         // Well-formed but not in the index.
-        assert!(read_snapshot(base.path(), canonical, "9999.md").is_err());
+        assert!(read_snapshot(base.path(), None, canonical, "9999.md").is_err());
     }
 
     // -- HistoryLocks ---------------------------------------------------------
@@ -672,6 +846,7 @@ mod tests {
                     let _held = lock.lock().unwrap();
                     record_snapshot(
                         &base_path,
+                        None,
                         canonical,
                         &format!("content {i}"),
                         "save",
@@ -688,7 +863,7 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), 16, "every concurrent save must get a unique id");
 
-        let list = list_snapshots(&base_path, canonical);
+        let list = list_snapshots(&base_path, None, canonical);
         assert_eq!(
             list.len(),
             16,
@@ -700,11 +875,11 @@ mod tests {
     fn read_snapshot_rejects_traversal_id_even_if_file_exists() {
         let base = tempdir().unwrap();
         let canonical = "/docs/a.md";
-        record_snapshot(base.path(), canonical, "x", "save", 1000).unwrap();
-        let bucket = bucket_dir_in(base.path(), canonical);
+        record_snapshot(base.path(), None, canonical, "x", "save", 1000).unwrap();
+        let bucket = bucket_dir_in(base.path(), None, canonical);
         // Plant a secret one level up from the bucket and try to escape to it.
         let secret = bucket.parent().unwrap().join("secret.md");
         fs::write(&secret, "TOP SECRET").unwrap();
-        assert!(read_snapshot(base.path(), canonical, "../secret.md").is_err());
+        assert!(read_snapshot(base.path(), None, canonical, "../secret.md").is_err());
     }
 }

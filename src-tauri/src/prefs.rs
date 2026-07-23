@@ -16,13 +16,17 @@
 //! caps size and requires a JSON object; the frontend's tolerant
 //! `parseSettings` remains the schema authority.
 //!
-//! Future per-WORKSPACE state (open-files list, expanded folders — nothing is
-//! persisted today) should live in
-//! `app_data_dir()/workspace-state/<sha256hex(canonical root)>.json`, reusing
-//! history.rs's `bucket_key` pattern. Chosen over a `.markdon/` dot-dir inside
-//! the workspace: that would pollute user repos, invite cloud-sync conflicts,
-//! and widen the guarded-write surface into user folders. Convention only —
-//! nothing consumes it yet, so nothing is built.
+//! Per-WORKSPACE state lives in the per-workspace state DIRECTORY
+//! `app_data_dir()/workspace-state/<sha256hex(canonical root)>/` (keys via
+//! history.rs's `bucket_key`). History is the first tenant, at
+//! `<hash>/history/<sha256hex(canonical file path)>/` — see history.rs;
+//! future per-workspace JSON state (open-files list, expanded folders)
+//! belongs at `<hash>/state.json`. This directory layout supersedes the
+//! older single-`<hash>.json` sketch, and makes "clear history for this
+//! workspace = delete one directory" newly tractable (not built this
+//! sprint). Chosen over a `.markdon/` dot-dir inside the workspace: that
+//! would pollute user repos, invite cloud-sync conflicts, and widen the
+//! guarded-write surface into user folders.
 
 use std::fs;
 use std::io::ErrorKind;

@@ -39,6 +39,7 @@ import {
   folderIcon,
   workspace,
   openWorkspace,
+  openRecentWorkspace,
   closeWorkspace,
   refreshWorkspace,
   restoreWorkspace,
@@ -145,6 +146,48 @@ describe('openWorkspace', () => {
     await openWorkspace()
     expect(get(errorMessage)).toContain('workspace')
     expect(get(workspace).root).toBe('/ws/notes')
+  })
+})
+
+describe('openRecentWorkspace', () => {
+  it('is a no-op when the root is already open here (no invoke)', async () => {
+    workspace.set({ root: '/ws/notes', tree: tree('notes') })
+    workspaceName.set('notes')
+    await openRecentWorkspace('/ws/notes')
+    expect(invoke).not.toHaveBeenCalled()
+    expect(get(workspace).root).toBe('/ws/notes')
+  })
+
+  it('adopts in place when folder-less (store + breadcrumb set)', async () => {
+    invoke.mockResolvedValue({ root: '/ws/recent', tree: tree('recent') })
+    await openRecentWorkspace('/ws/recent')
+    expect(invoke).toHaveBeenCalledWith('open_recent_workspace', {
+      root: '/ws/recent',
+      currentRoot: null,
+    })
+    expect(get(workspace).root).toBe('/ws/recent')
+    expect(get(workspaceName)).toBe('recent')
+  })
+
+  it('with a folder already open, passes currentRoot and adopts nothing (null = spawned)', async () => {
+    workspace.set({ root: '/ws/notes', tree: tree('notes') })
+    workspaceName.set('notes')
+    invoke.mockResolvedValue(null) // Rust spawned a new instance for the root
+    await openRecentWorkspace('/ws/other')
+    expect(invoke).toHaveBeenCalledWith('open_recent_workspace', {
+      root: '/ws/other',
+      currentRoot: '/ws/notes',
+    })
+    // This instance keeps its own workspace untouched.
+    expect(get(workspace).root).toBe('/ws/notes')
+    expect(get(workspaceName)).toBe('notes')
+  })
+
+  it('banners a rejection (vanished folder) and leaves the store untouched', async () => {
+    invoke.mockRejectedValue('workspace root is not a directory')
+    await openRecentWorkspace('/ws/gone')
+    expect(get(errorMessage)).toContain('reopen')
+    expect(get(workspace).root).toBeNull()
   })
 })
 

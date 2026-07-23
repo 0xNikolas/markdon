@@ -86,6 +86,30 @@ export async function openWorkspace(): Promise<void> {
 }
 
 /**
+ * Reopen an entry of the File > Open Recent menu (`menu:open_recent`, carrying
+ * the root Rust resolved from its own MRU snapshot). Same-root is a no-op —
+ * it is already open right here. With no folder open the workspace is adopted
+ * in place (Rust grants + walks + persists, exactly like a dialog pick); with
+ * a folder already open Rust spawns a whole new instance for the root and
+ * returns null (VS Code second-window semantics, mirroring `openWorkspace`),
+ * so this process adopts nothing. A vanished folder rejects (Rust drops it
+ * from the MRU) and lands in the error banner.
+ */
+export async function openRecentWorkspace(root: string): Promise<void> {
+  const current = get(workspace).root
+  if (current === root) return
+  try {
+    const ws = await invoke<Workspace | null>('open_recent_workspace', {
+      root,
+      currentRoot: current,
+    })
+    if (ws !== null) adopt(ws)
+  } catch (e) {
+    reportError(`Could not reopen workspace: ${String(e)}`)
+  }
+}
+
+/**
  * Close the open folder: delete the persisted restore pointer, then reset the
  * store exactly inverse of `adopt` (root/tree null + breadcrumb). The current
  * root rides along so Rust can prove ownership — the pointer file is shared

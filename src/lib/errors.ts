@@ -1,5 +1,6 @@
+import { invoke } from '@tauri-apps/api/core'
 import { writable, type Writable } from 'svelte/store'
-import { logError, logInfo } from './logging'
+import { logError, logInfo, logWarn } from './logging'
 
 export const errorMessage: Writable<string | null> = writable(null)
 
@@ -10,6 +11,16 @@ export function reportError(msg: string): void {
 
 export function clearError(): void {
   errorMessage.set(null)
+}
+
+/**
+ * Reveal this instance's log file in the OS file manager (Help > Show Log and
+ * the error banner's "Details…" button). Fire-and-forget; a failed reveal is
+ * deliberately logWarn — NOT reportError — so a broken reveal can never spawn
+ * an error banner whose own Details button re-fails in a loop.
+ */
+export function revealLog(): void {
+  void invoke('reveal_log_file').catch((e) => logWarn('Could not reveal log file', e))
 }
 
 /**

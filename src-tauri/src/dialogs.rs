@@ -150,10 +150,8 @@ pub async fn open_workspace_dialog(
 /// do all of that in its own allowlist, and skipping persistence keeps the two
 /// instances from clobbering each other's restore pointer. Returns whether a
 /// folder was actually picked (false = cancelled), so the frontend can skip
-/// any "opened" UI on cancel. Dropping the spawned Child handle would NOT
-/// detach it — the exited child would linger as a zombie until waited on — so
-/// a throwaway thread reaps it; the thread never influences the child's
-/// lifetime.
+/// any "opened" UI on cancel. Spawn/reap mechanics live in
+/// `spawn_workspace_instance` below.
 #[tauri::command]
 pub async fn pick_folder_new_instance(app: AppHandle) -> Result<bool, String> {
     let picked =
@@ -164,15 +162,26 @@ pub async fn pick_folder_new_instance(app: AppHandle) -> Result<bool, String> {
         return Ok(false);
     };
     let path = to_path_string(folder)?;
+    spawn_workspace_instance(&path)?;
+    Ok(true)
+}
+
+/// Hand `dir` to a brand-NEW app process (`current_exe --workspace <dir>`):
+/// the spawn+reap tail of `pick_folder_new_instance`, shared with
+/// `open_recent_workspace` (which reopens a folder without a dialog). Dropping
+/// the spawned Child handle would NOT detach it — the exited child would
+/// linger as a zombie until waited on — so a throwaway thread reaps it; the
+/// thread never influences the child's lifetime.
+pub(crate) fn spawn_workspace_instance(dir: &str) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut child = std::process::Command::new(exe)
-        .args(["--workspace", &path])
+        .args(["--workspace", dir])
         .spawn()
         .map_err(|e| e.to_string())?;
     std::thread::spawn(move || {
         let _ = child.wait();
     });
-    Ok(true)
+    Ok(())
 }
 
 #[cfg(test)]

@@ -1,11 +1,19 @@
 <script lang="ts">
-  import { errorMessage, clearError, notice, clearNotice } from './lib/errors'
+  import { errorMessage, clearError, notice, clearNotice, revealLog } from './lib/errors'
 </script>
 
 {#if $errorMessage}
   <div class="banner" role="alert">
     <span>{$errorMessage}</span>
-    <button onclick={clearError} aria-label="Dismiss">×</button>
+    <span class="actions">
+      <!-- Error banners only (not notices): every reportError also lands in the
+           log (errors.ts), so "Details…" reveals that log file for the fuller
+           story behind the one-line message. -->
+      <button class="details" onclick={revealLog} title="Reveal the app log in the file manager"
+        >Details…</button
+      >
+      <button onclick={clearError} aria-label="Dismiss">×</button>
+    </span>
   </div>
 {/if}
 {#if $notice}
@@ -47,5 +55,15 @@
   }
   button:active {
     background: var(--surface-active);
+  }
+  /* Quiet secondary action inside the banner: text-sized, underlined. */
+  .details {
+    font: 12px var(--font-ui);
+    text-decoration: underline;
+  }
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
   }
 </style>

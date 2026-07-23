@@ -129,7 +129,13 @@
     },
     list_workspace: (args) => buildWorkspace(args.root),
     close_workspace: () => null,
+    // Default: "nothing to adopt here" (specs override to return a Workspace
+    // or assert the spawn-a-new-instance null path via the call log).
+    open_recent_workspace: () => null,
     set_readonly_menu_state: () => null,
+    // Log-only, like the windowing hand-offs: the call log IS the assertion
+    // surface (revealing a file in Finder has no browser-visible effect).
+    reveal_log_file: () => null,
     watch_file: () => null,
     unwatch: () => null,
     watch_workspace: () => null,
