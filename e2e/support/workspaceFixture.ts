@@ -68,9 +68,11 @@ export function openFilesStrip(page: Page): Locator {
   return page.getByTestId('open-files')
 }
 
-/** A workspace-tree row button by its exact visible name. */
+/** A workspace-tree row (role=treeitem — ARIA tree pattern) by its exact
+    visible name. The Open Files strip rows stay role=button — it is a list,
+    not a tree — so openFilesStrip getByRole('button') locators are separate. */
 export function treeRow(page: Page, name: string): Locator {
-  return workspaceTree(page).getByRole('button', { name, exact: true })
+  return workspaceTree(page).getByRole('treeitem', { name, exact: true })
 }
 
 /** Every row in the Open Files strip (pinned and preview alike). */

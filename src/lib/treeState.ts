@@ -18,6 +18,15 @@ export function toggleFolder(path: string): void {
 }
 
 /**
+ * Set a folder's collapse state explicitly — keyboard Left/Right on the tree,
+ * where the treeKeyIntent decision already knows the target state and a
+ * toggle could race a click on the same chevron.
+ */
+export function setFolderCollapsed(path: string, value: boolean): void {
+  collapsed.update((c) => ({ ...c, [path]: value }))
+}
+
+/**
  * Inline rename (VS Code style — no modal): the row whose name is being
  * edited plus the live input value. One rename at a time; NameModal stays
  * for New File / New Folder only.

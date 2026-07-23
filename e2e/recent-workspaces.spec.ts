@@ -72,7 +72,7 @@ test('folder-less window adopts the reopened workspace in place', async ({ page 
   await emitTauri(page, 'menu:open_recent', { target: 'main', root: '/ws2' })
 
   await expect(workspaceTree(page)).toBeVisible()
-  await expect(workspaceTree(page).getByRole('button', { name: 'hello.md' })).toBeVisible()
+  await expect(workspaceTree(page).getByRole('treeitem', { name: 'hello.md' })).toBeVisible()
   const reopens = await calls(page, 'open_recent_workspace')
   expect(reopens.map((c) => c.args)).toEqual([{ root: '/ws2', currentRoot: null }])
 })

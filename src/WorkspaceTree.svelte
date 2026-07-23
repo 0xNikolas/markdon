@@ -9,12 +9,14 @@
     type WorkspaceDir,
     type WorkspaceFile,
   } from './lib/workspace'
-  import { selection, clipboard, focusRow } from './lib/fileOpsState'
+  import { selection, clipboard, focused, focusRow } from './lib/fileOpsState'
   import { performRename } from './lib/fileMutations'
-  import { leafNameError } from './lib/fileTree'
+  import { leafNameError, visibleRowPaths, folderPaths } from './lib/fileTree'
+  import { treeKeyIntent } from './lib/treeNav'
   import {
     collapsed,
     toggleFolder,
+    setFolderCollapsed,
     renaming,
     renameValue,
     renameCommit,
@@ -35,6 +37,45 @@
   let cutSet = $derived(
     $clipboard?.mode === 'cut' ? new Set($clipboard.paths) : new Set<string>(),
   )
+
+  let treeEl = $state<HTMLDivElement>()
+
+  // Roving tabindex (ARIA tree pattern): exactly one row is tabbable — the
+  // focused row when it's visible, else the first row — so Tab enters the
+  // tree once and arrow keys move within it.
+  let visibleRows = $derived(visibleRowPaths($workspace.tree, $collapsed))
+  let tabAnchor = $derived(
+    $focused !== null && visibleRows.includes($focused) ? $focused : (visibleRows[0] ?? null),
+  )
+
+  // Move the selection/focus anchor AND real DOM focus to a row. DOM focus is
+  // explicit because WebKit does not focus <button>s on click, and the next
+  // keydown needs a focus origin inside the tree for navigation to work.
+  function focusRowDom(path: string) {
+    focusRow(path)
+    treeEl?.querySelector<HTMLElement>(`[data-path="${CSS.escape(path)}"]`)?.focus()
+  }
+
+  // Keyboard navigation: the pure decision lives in treeNav.ts; this handler
+  // only applies the returned intent. Enter/Space need no code here — rows
+  // are <button>s, so native activation fires the existing click handlers.
+  function onTreeKeydown(e: KeyboardEvent) {
+    // The rename input owns its keys (arrows move the caret; Enter/Escape are
+    // handled on the input itself) — never treat them as tree navigation.
+    if ((e.target as HTMLElement | null)?.closest?.('.rename-input')) return
+    const intent = treeKeyIntent(
+      e.key,
+      $focused,
+      visibleRows,
+      folderPaths($workspace.tree),
+      $collapsed,
+    )
+    if (intent === null) return
+    e.preventDefault() // handled — keep arrows/Home/End from scrolling the panel
+    if (intent.kind === 'expand') setFolderCollapsed(intent.path, false)
+    else if (intent.kind === 'collapse') setFolderCollapsed(intent.path, true)
+    else focusRowDom(intent.path)
+  }
 
   // Focus the fresh rename input and preselect the stem (files) or the whole
   // name (folders) — Svelte action, runs once per input mount.
@@ -71,7 +112,7 @@
   // strip row, always in-place); the second click of a dblclick no-ops in
   // App (already active), then onFileDblClick pins it.
   function onFileClick(f: WorkspaceFile) {
-    focusRow(f.path)
+    focusRowDom(f.path)
     if (isMarkdownFile(f.name)) onOpenFile(f.path, { preview: true })
   }
   function onFileDblClick(f: WorkspaceFile) {
@@ -82,7 +123,7 @@
     if (isMarkdownFile(f.name)) onOpenFile(f.path, { preview: false, inPlace: true })
   }
   function onFolderClick(d: WorkspaceDir) {
-    focusRow(d.path)
+    focusRowDom(d.path)
     toggleFolder(d.path)
   }
 </script>
@@ -91,7 +132,9 @@
   {#if $renaming === f.path}
     <!-- Inline rename swaps the row's <button> for a div: an input inside a
          button is invalid HTML. The .rename-input class is load-bearing —
-         isSelectionClearingTarget matches it so caret clicks don't deselect. -->
+         isSelectionClearingTarget matches it so caret clicks don't deselect.
+         Deliberate ARIA-pattern deviation: the renaming row is role-less —
+         it's a transient edit state whose input carries its own aria-label. -->
     <div class="file-row renaming">
       <span class="active-bar"></span>
       <Icon name={fileIcon(f.name)} size={16} />
@@ -114,7 +157,11 @@
       class:active={f.path === activePath}
       class:selected={$selection.has(f.path) && f.path !== activePath}
       class:cut={cutSet.has(f.path)}
+      role="treeitem"
+      aria-selected={$selection.has(f.path) || f.path === activePath}
       aria-current={f.path === activePath ? 'true' : undefined}
+      data-path={f.path}
+      tabindex={tabAnchor === f.path ? 0 : -1}
       onclick={() => onFileClick(f)}
       ondblclick={() => onFileDblClick(f)}
       oncontextmenu={(e) => onRowContextMenu(e, f.path)}
@@ -153,7 +200,11 @@
       class="folder-row"
       class:selected={$selection.has(d.path)}
       class:cut={cutSet.has(d.path)}
+      role="treeitem"
+      aria-selected={$selection.has(d.path)}
       aria-expanded={!$collapsed[d.path]}
+      data-path={d.path}
+      tabindex={tabAnchor === d.path ? 0 : -1}
       onclick={() => onFolderClick(d)}
       oncontextmenu={(e) => onRowContextMenu(e, d.path)}
     >
@@ -165,7 +216,10 @@
     </button>
   {/if}
   {#if !$collapsed[d.path]}
-    <div class="indent">
+    <!-- role=group ties the children to the folder treeitem above it. Nesting
+         depth is conveyed by the group structure alone (aria-level/posinset/
+         setsize are an optional follow-up — VoiceOver derives them). -->
+    <div class="indent" role="group">
       {#each d.dirs as sub (sub.path)}{@render dirRows(sub)}{/each}
       {#each d.files as f (f.path)}{@render fileRow(f)}{/each}
     </div>
@@ -175,8 +229,20 @@
 {#if $workspace.tree}
   <!-- data-testid: the strip and the workspace tree are visually identical
        .tree containers whose rows can render the same file names — e2e
-       locators need an unambiguous scope for each. -->
-  <div class="tree" data-testid="workspace-tree">
+       locators need an unambiguous scope for each.
+       aria-label: the parent nav is "Workspace"; the tree widget needs its
+       own name. tabindex=-1 keeps the container out of the tab order (the
+       roving row tabindex is the single entry point) while satisfying the
+       focusable-widget contract for the keydown handler. -->
+  <div
+    class="tree"
+    data-testid="workspace-tree"
+    role="tree"
+    aria-label="Workspace files"
+    tabindex="-1"
+    bind:this={treeEl}
+    onkeydown={onTreeKeydown}
+  >
     {#each $workspace.tree.dirs as d (d.path)}{@render dirRows(d)}{/each}
     {#each $workspace.tree.files as f (f.path)}{@render fileRow(f)}{/each}
   </div>

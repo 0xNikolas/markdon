@@ -4,6 +4,7 @@ import { workspace, type WorkspaceDir, type WorkspaceFile } from './workspace'
 import {
   collapsed,
   toggleFolder,
+  setFolderCollapsed,
   renaming,
   renameValue,
   startRename,
@@ -33,6 +34,17 @@ describe('toggleFolder', () => {
     toggleFolder('/ws/a')
     expect(get(collapsed)['/ws/a']).toBe(true)
     toggleFolder('/ws/a')
+    expect(get(collapsed)['/ws/a']).toBe(false)
+  })
+})
+
+describe('setFolderCollapsed', () => {
+  it('sets the state explicitly and idempotently', () => {
+    setFolderCollapsed('/ws/a', true)
+    expect(get(collapsed)['/ws/a']).toBe(true)
+    setFolderCollapsed('/ws/a', true)
+    expect(get(collapsed)['/ws/a']).toBe(true)
+    setFolderCollapsed('/ws/a', false)
     expect(get(collapsed)['/ws/a']).toBe(false)
   })
 })
