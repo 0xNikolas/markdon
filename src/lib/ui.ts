@@ -135,6 +135,35 @@ export function isQuickOpenKey(
   return mac ? e.metaKey && !e.ctrlKey : e.metaKey || e.ctrlKey
 }
 
+// -- Open-file cycling keys ----------------------------------------------------
+
+/**
+ * The file-cycling direction `e` asks for, or null when `e` is not a cycling
+ * combo. Two families, both VS Code's standard bindings:
+ *
+ * - Ctrl+Tab (+1) / Ctrl+Shift+Tab (-1) on EVERY platform — physical Ctrl,
+ *   never Cmd (Cmd+Tab is the macOS app switcher and can't reach the webview
+ *   anyway). Alt and Meta must be up so browser/OS chords don't leak in.
+ * - CmdOrCtrl+Shift+] (+1) / CmdOrCtrl+Shift+[ (-1) — Cmd on mac (with the
+ *   same ctrlKey carve-out as Quick Open / Go to Line, keeping Ctrl chords
+ *   free for CodeMirror's emacs-style mac bindings), Ctrl elsewhere. Checked
+ *   against `e.code` ('BracketRight'/'BracketLeft'), not `e.key`: Shift
+ *   remaps the bracket characters ('}'/'{' on US layouts, other glyphs
+ *   elsewhere), while the physical key is stable — the same rationale as
+ *   isFindReplaceFallbackKey's KeyF check.
+ */
+export function fileCycleDirection(
+  e: { metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; key: string; code: string },
+  mac: boolean,
+): 1 | -1 | null {
+  if (e.key === 'Tab' && e.ctrlKey && !e.metaKey && !e.altKey) return e.shiftKey ? -1 : 1
+  if (e.shiftKey && !e.altKey && (e.code === 'BracketRight' || e.code === 'BracketLeft')) {
+    const mod = mac ? e.metaKey && !e.ctrlKey : e.metaKey || e.ctrlKey
+    if (mod) return e.code === 'BracketRight' ? 1 : -1
+  }
+  return null
+}
+
 /** Export request counter; the export feature subscribes and acts on ticks. */
 export const exportTick: Writable<number> = writable(0)
 export function requestExport(): void {

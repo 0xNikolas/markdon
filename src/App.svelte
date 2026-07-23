@@ -32,6 +32,7 @@
     pinPreview,
     removeOpen,
     neighbourAfterClose,
+    neighbourInStrip,
   } from './lib/openList'
   import { conflict, reloadFromDisk, dismissConflict } from './lib/fileSync'
   import {
@@ -62,6 +63,7 @@
     isGotoLineFallbackKey,
     isFindReplaceFallbackKey,
     isQuickOpenKey,
+    fileCycleDirection,
   } from './lib/ui'
   import { activeOverlay, openOverlay, closeOverlay, anyOverlayOpen } from './lib/overlay'
   import { workspace, openWorkspace, openRecentWorkspace, closeWorkspace } from './lib/workspace'
@@ -529,6 +531,28 @@
     if (isQuickOpenKey(e, macPlatform)) {
       e.preventDefault()
       if (!anyOverlayOpen()) openQuickOpen()
+      return
+    }
+    // Ctrl+Tab / Ctrl+Shift+Tab / CmdOrCtrl+Shift+]/[: cycle the Open Files
+    // strip in row order (see neighbourInStrip — deliberately a wrap-around
+    // cycle, not VS Code's MRU picker). Claimed (preventDefault) even when the
+    // switch is refused — Ctrl+Tab would otherwise focus-traverse the webview.
+    // No-ops behind any overlay (same gate as Go to Line) and on the empty
+    // page (no strip). The target keeps its row kind: a pinned row is a plain
+    // openPath (pinOpen is a no-op on an already-pinned path, the preview slot
+    // untouched), the preview row re-opens AS a preview so cycling through it
+    // never promotes it — pin/preview state is unchanged either way, and the
+    // buffer cache makes the switch instant and lossless for dirty rows.
+    const cycleDir = fileCycleDirection(e, macPlatform)
+    if (cycleDir !== null) {
+      e.preventDefault()
+      if (anyOverlayOpen() || get(emptyState)) return
+      const target = neighbourInStrip(get(doc).path, get(openList), get(previewPath), cycleDir)
+      // null: fewer than 2 rows (with the untitled scratch active, ANY row is
+      // a target — neighbourInStrip enters the cycle at the first/last row).
+      if (target === null) return
+      const preview = target === get(previewPath)
+      switchGuarded(() => openPath(target, { preview }))
       return
     }
     // Empty page up: every branch below is a document/editor action (find,

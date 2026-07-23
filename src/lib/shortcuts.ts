@@ -15,6 +15,18 @@ export const APP_SHORTCUTS: Shortcut[] = [
   { label: 'New File', keys: ['Cmd', 'N'] },
   { label: 'Open…', keys: ['Cmd', 'O'] },
   { label: 'Quick Open…', keys: ['Cmd', 'P'] },
+  // Keyboard-only (no menu item); the Shortcut shape carries ONE combo, so
+  // the bracket pair is listed as primary and Ctrl+Tab rides the note.
+  {
+    label: 'Next Open File',
+    keys: ['Cmd', 'Shift', ']'],
+    note: 'Cycles the Open Files strip in row order, wrapping. Ctrl+Tab also works.',
+  },
+  {
+    label: 'Previous Open File',
+    keys: ['Cmd', 'Shift', '['],
+    note: 'Same cycle, backwards. Ctrl+Shift+Tab also works.',
+  },
   { label: 'Save', keys: ['Cmd', 'S'] },
   { label: 'Save As…', keys: ['Cmd', 'Shift', 'S'] },
   {

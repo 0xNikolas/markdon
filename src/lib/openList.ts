@@ -119,6 +119,36 @@ export function pinPreview(): void {
 }
 
 /**
+ * The next/previous path for Ctrl+Tab file cycling, in STRIP ORDER: the
+ * pinned rows (`open`, as displayed) plus the preview row appended last when
+ * one is showing — the exact row order OpenFilesStrip.svelte renders (its
+ * `previewRow` hides a preview that is also pinned, mirrored here).
+ * Deliberately a simple wrap-around cycle over that visible order, NOT VS
+ * Code's MRU picker overlay — this app's strip has no z-order to surface, and
+ * a plain cycle stays predictable with no extra UI.
+ *
+ * `dir` is +1 (next) or -1 (previous), wrapping at either end. Returns null —
+ * cycle from an active strip row with no other row to go to (fewer than 2
+ * rows), or an empty strip. An active doc NOT in the strip (the untitled
+ * scratch, which has no row) enters the cycle instead: next lands on the
+ * first row, previous on the last — VS Code's Ctrl+Tab-from-untitled
+ * behavior — so a single row IS reachable from there.
+ */
+export function neighbourInStrip(
+  current: string | null,
+  open: string[],
+  preview: string | null,
+  dir: 1 | -1,
+): string | null {
+  const strip = preview !== null && !open.includes(preview) ? [...open, preview] : open
+  if (strip.length === 0) return null
+  const i = current === null ? -1 : strip.indexOf(current)
+  if (i === -1) return dir === 1 ? strip[0] : strip[strip.length - 1]
+  if (strip.length < 2) return null
+  return strip[(i + dir + strip.length) % strip.length]
+}
+
+/**
  * Which path should become active after `closing` is removed from `list`.
  * Closing a background (non-active) entry leaves `active` untouched. Closing
  * the active entry switches to the previous entry, else the next, else

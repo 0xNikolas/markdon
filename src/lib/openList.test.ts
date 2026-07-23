@@ -4,6 +4,7 @@ import {
   addOpen,
   removeOpen,
   neighbourAfterClose,
+  neighbourInStrip,
   retargetOpen,
   removeOpenSubtree,
   retargetPreview,
@@ -220,5 +221,58 @@ describe('pinOpen / pinPreview (store transitions)', () => {
     pinPreview()
     expect(get(openList)).toEqual(['/a.md'])
     expect(get(previewPath)).toBeNull()
+  })
+})
+
+describe('neighbourInStrip', () => {
+  const open = ['/a.md', '/b.md', '/c.md']
+
+  it('steps forward through the pinned rows', () => {
+    expect(neighbourInStrip('/a.md', open, null, 1)).toBe('/b.md')
+    expect(neighbourInStrip('/b.md', open, null, 1)).toBe('/c.md')
+  })
+
+  it('steps backward through the pinned rows', () => {
+    expect(neighbourInStrip('/c.md', open, null, -1)).toBe('/b.md')
+    expect(neighbourInStrip('/b.md', open, null, -1)).toBe('/a.md')
+  })
+
+  it('wraps forward off the last row and backward off the first', () => {
+    expect(neighbourInStrip('/c.md', open, null, 1)).toBe('/a.md')
+    expect(neighbourInStrip('/a.md', open, null, -1)).toBe('/c.md')
+  })
+
+  it('includes the preview row, appended after every pinned row', () => {
+    expect(neighbourInStrip('/c.md', open, '/peek.md', 1)).toBe('/peek.md')
+    expect(neighbourInStrip('/peek.md', open, '/peek.md', 1)).toBe('/a.md') // wrap off the preview
+    expect(neighbourInStrip('/peek.md', open, '/peek.md', -1)).toBe('/c.md')
+    expect(neighbourInStrip('/a.md', open, '/peek.md', -1)).toBe('/peek.md') // backward wrap lands on it
+  })
+
+  it('ignores a preview that is also pinned (the strip hides that row)', () => {
+    expect(neighbourInStrip('/c.md', open, '/a.md', 1)).toBe('/a.md') // plain wrap, no duplicate row
+    expect(neighbourInStrip('/a.md', open, '/a.md', -1)).toBe('/c.md')
+  })
+
+  it('enters the cycle from the untitled scratch (no row): next=first, previous=last', () => {
+    expect(neighbourInStrip(null, open, null, 1)).toBe('/a.md')
+    expect(neighbourInStrip(null, open, null, -1)).toBe('/c.md')
+    expect(neighbourInStrip(null, open, '/peek.md', -1)).toBe('/peek.md')
+  })
+
+  it('reaches even a single row from the untitled scratch', () => {
+    expect(neighbourInStrip(null, ['/a.md'], null, 1)).toBe('/a.md')
+    expect(neighbourInStrip(null, [], '/peek.md', -1)).toBe('/peek.md')
+  })
+
+  it('is null on a single row that is already active (nowhere to go)', () => {
+    expect(neighbourInStrip('/a.md', ['/a.md'], null, 1)).toBeNull()
+    expect(neighbourInStrip('/a.md', ['/a.md'], null, -1)).toBeNull()
+    expect(neighbourInStrip('/peek.md', [], '/peek.md', 1)).toBeNull()
+  })
+
+  it('is null on an empty strip', () => {
+    expect(neighbourInStrip(null, [], null, 1)).toBeNull()
+    expect(neighbourInStrip('/a.md', [], null, -1)).toBeNull()
   })
 })
