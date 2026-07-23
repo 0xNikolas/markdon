@@ -9,7 +9,8 @@ The package manager and task runner is **bun** — never npm/yarn/pnpm.
 > Sprint planning docs live in `tasks/`, which is **gitignored** — you will not
 > find sprint rationale in the repo, only in the code and this file.
 
-`CLAUDE.md` is a symlink to this file; there is one canonical doc, agent-agnostic.
+`AGENTS.md` (tracked, for cross-tool agent discovery) and a local, gitignored
+`CLAUDE.md` are symlinks to this file — one canonical doc, agent-agnostic.
 
 ## Commands
 
