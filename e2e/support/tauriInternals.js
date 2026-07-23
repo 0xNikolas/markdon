@@ -21,6 +21,8 @@
 //   window.__TAURI_WORKSPACE_ROOT__ when set, restore_workspace/list_workspace
 //                                   derive a live Workspace tree from the two
 //                                   maps above (unset -> no workspace, as before)
+//   window.__TAURI_RECENT__         roots served by list_recent_workspaces
+//                                   (unset -> empty; the Recent section hides)
 //   window.__TAURI_IPC_ERRORS__     cmd -> message; invoke REJECTS with the raw
 //                                   string, mirroring how Rust command errors
 //                                   arrive (checked before overrides)
@@ -132,6 +134,9 @@
     // Default: "nothing to adopt here" (specs override to return a Workspace
     // or assert the spawn-a-new-instance null path via the call log).
     open_recent_workspace: () => null,
+    // Empty page's Recent section: seed roots via __TAURI_RECENT__ (default:
+    // no recents, the section stays hidden).
+    list_recent_workspaces: () => window.__TAURI_RECENT__ || [],
     set_readonly_menu_state: () => null,
     // Log-only, like the windowing hand-offs: the call log IS the assertion
     // surface (revealing a file in Finder has no browser-visible effect).

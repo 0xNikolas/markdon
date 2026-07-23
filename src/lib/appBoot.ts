@@ -1,13 +1,13 @@
 import { invoke } from '@tauri-apps/api/core'
 import { get } from 'svelte/store'
 import { listenScoped, setWindowTitle, type Routed } from './windowing'
-import { doc, isDirty } from './doc'
+import { doc, isDirty, showEmptyState } from './doc'
 import { openPath, openDrainedEntries, type OpenedEntry } from './files'
 import { firstMarkdownPath } from './fileTree'
 import { initFileSync } from './fileSync'
 import { openList, previewPath } from './openList'
 import { initWorkspace, workspace } from './workspace'
-import { exportTick, windowTitle } from './ui'
+import { emptyState, exportTick, windowTitle } from './ui'
 import { exportDocument } from './export'
 import { reportError } from './errors'
 import { logWarn } from './logging'
@@ -82,6 +82,10 @@ export function initExportOnTick(onExport: () => void = exportDocument): () => v
       firstExportTick = false
       return
     }
+    // The Header's Export button stays clickable while the empty page is
+    // shown; with no document there is nothing to export, so the tick is
+    // dropped here — the menu route is gated in App.svelte's shared gate.
+    if (get(emptyState)) return
     onExport()
   })
 }
@@ -95,13 +99,22 @@ export function initExportOnTick(onExport: () => void = exportDocument): () => v
  */
 export function initWindowTitleSync(): () => void {
   let lastTitle = ''
-  return doc.subscribe((s) => {
-    const t = windowTitle(s.path, isDirty(s))
+  const apply = () => {
+    const s = get(doc)
+    // The empty page has no document: plain "Markdon", no filename (the
+    // pristine scratch underneath would otherwise title as "Untitled").
+    const t = windowTitle(s.path, isDirty(s), get(emptyState))
     if (t !== lastTitle) {
       lastTitle = t
       setWindowTitle(t)
     }
-  })
+  }
+  const unsubDoc = doc.subscribe(apply)
+  const unsubEmpty = emptyState.subscribe(apply)
+  return () => {
+    unsubDoc()
+    unsubEmpty()
+  }
 }
 
 /**
@@ -211,25 +224,30 @@ export function closeTabDecision(
  * workspace's first markdown file (tree render order — firstMarkdownPath).
  * It opens as a PREVIEW deliberately: preview keeps the auto-open unobtrusive
  * — an italic strip row the next single click simply replaces, promoted to a
- * real pinned tab only if the user actually edits it. (An empty-state screen
- * was rejected as new design surface.)
+ * real pinned tab only if the user actually edits it.
  *
- * Only fires when the window is truly unclaimed, re-checked here at fire
+ * When there is nothing to auto-open — no workspace landed at boot, or the
+ * workspace holds no markdown files — the unclaimed window shows the
+ * no-document empty page (doc.showEmptyState) instead of the useless
+ * untitled scratch: VS Code's no-editor state, with the action list as the
+ * invitation to act. An explicit Cmd+N from there still yields the scratch.
+ *
+ * Only acts when the window is truly unclaimed, re-checked here at fire
  * time: the doc store still holds a clean, empty untitled scratch and nothing
  * is open or previewed. The caller (bootApp) has already established the
  * other two boundaries — the startup drains yielded nothing, and the
  * workspace at hand arrived from the BOOT restore/handoff, not a later
- * user-driven folder open. A workspace with no markdown files keeps the
- * untitled scratch.
+ * user-driven folder open (a mid-session folder open never auto-opens files
+ * AND never flips the window into the empty page).
  */
 export function maybeAutoOpenBootPreview(openPreview: (path: string) => void): void {
-  const ws = get(workspace)
-  if (ws.root === null || ws.tree === null) return
   const d = get(doc)
   if (d.path !== null || d.content !== '' || isDirty(d)) return
   if (get(openList).length > 0 || get(previewPath) !== null) return
-  const first = firstMarkdownPath(ws.tree)
+  const ws = get(workspace)
+  const first = ws.root === null || ws.tree === null ? null : firstMarkdownPath(ws.tree)
   if (first !== null) openPreview(first)
+  else showEmptyState()
 }
 
 /**

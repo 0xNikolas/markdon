@@ -123,6 +123,19 @@ export function requestExport(): void {
 /** Open workspace folder basename for the Header breadcrumb; set by workspace. */
 export const workspaceName: Writable<string | null> = writable(null)
 
+/**
+ * True while the window shows the no-document empty page (EmptyState.svelte)
+ * instead of an editor — VS Code's no-editor state. Raised by
+ * doc.showEmptyState(), reached from exactly two flows: a boot that found
+ * nothing to open (appBoot's maybeAutoOpenBootPreview) and closing the last
+ * open file (App's onCloseFile). Cleared at the doc-load chokepoint — every
+ * openDoc/restoreDoc/newDoc — so ANY route to a document (menu, sidebar,
+ * startup drain, Cmd+N) dismisses the page without per-call-site wiring.
+ * An explicit File > New never shows it: Cmd+N is newDoc(), the editable
+ * scratch.
+ */
+export const emptyState: Writable<boolean> = writable(false)
+
 /** Header breadcrumb: muted segments before the filename, plus the filename itself. */
 export interface FileBreadcrumb {
   crumbs: string[]
@@ -179,8 +192,13 @@ export function fileBreadcrumb(
  * Control entries stay identifiable. The dirty marker lives in the title text
  * because Tauri 2's JS API has no setDocumentEdited (macOS proxy-icon)
  * equivalent.
+ *
+ * `empty` (the emptyState store) wins over everything: the empty page has no
+ * document at all, so the title is plain "Markdon" — not "Untitled", which
+ * names a real (editable) scratch buffer.
  */
-export function windowTitle(path: string | null, dirty: boolean): string {
+export function windowTitle(path: string | null, dirty: boolean, empty = false): string {
+  if (empty) return 'Markdon'
   const segments = path?.split('/').filter(Boolean) ?? []
   const name = segments[segments.length - 1] ?? 'Untitled'
   return `${dirty ? '• ' : ''}${name} — Markdon`

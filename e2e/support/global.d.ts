@@ -7,6 +7,7 @@ declare global {
     __TAURI_FS__?: Record<string, string>
     __TAURI_DIRS__?: string[]
     __TAURI_WORKSPACE_ROOT__?: string
+    __TAURI_RECENT__?: string[]
     __tauriEmit(event: string, payload?: unknown): void
   }
 }

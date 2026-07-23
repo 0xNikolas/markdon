@@ -40,10 +40,10 @@ import {
   maybeAutoOpenBootPreview,
   bootApp,
 } from './appBoot'
-import { doc, docWith, resetReadonlyMemory } from './doc'
+import { doc, docWith, openDoc, resetReadonlyMemory, showEmptyState } from './doc'
 import { openList, previewPath } from './openList'
 import { errorMessage } from './errors'
-import { requestExport } from './ui'
+import { emptyState, requestExport } from './ui'
 import { workspace } from './workspace'
 import { tree, dir, file } from './test-support/workspaceFixtures'
 
@@ -67,6 +67,7 @@ beforeEach(() => {
   previewPath.set(null)
   errorMessage.set(null)
   workspace.set({ root: null, tree: null })
+  emptyState.set(false)
 })
 
 describe('wireEvents', () => {
@@ -220,6 +221,18 @@ describe('initExportOnTick', () => {
     requestExport()
     expect(onExport).toHaveBeenCalledTimes(1)
   })
+
+  it('drops ticks while the empty page is shown (Header button stays clickable)', () => {
+    const onExport = vi.fn()
+    const teardown = initExportOnTick(onExport)
+    showEmptyState()
+    requestExport()
+    expect(onExport).not.toHaveBeenCalled()
+    openDoc('/w/a.md', '# a') // any document load re-arms exporting
+    requestExport()
+    expect(onExport).toHaveBeenCalledTimes(1)
+    teardown()
+  })
 })
 
 describe('initWindowTitleSync', () => {
@@ -237,6 +250,16 @@ describe('initWindowTitleSync', () => {
     doc.set(docWith({ path: '/w/other.md' }))
     expect(setWindowTitle).toHaveBeenCalledTimes(2)
   })
+
+  it('renders plain "Markdon" while the empty page is shown, restoring on load', () => {
+    const teardown = initWindowTitleSync()
+    expect(setWindowTitle).toHaveBeenLastCalledWith('Untitled — Markdon')
+    showEmptyState()
+    expect(setWindowTitle).toHaveBeenLastCalledWith('Markdon')
+    openDoc('/w/notes.md', '# n')
+    expect(setWindowTitle).toHaveBeenLastCalledWith('notes.md — Markdon')
+    teardown()
+  })
 })
 
 describe('maybeAutoOpenBootPreview', () => {
@@ -248,23 +271,37 @@ describe('maybeAutoOpenBootPreview', () => {
     maybeAutoOpenBootPreview(openPreview)
     expect(openPreview).toHaveBeenCalledTimes(1)
     expect(openPreview).toHaveBeenCalledWith('/ws/docs/note.md')
+    expect(get(emptyState)).toBe(false) // something to open: never the empty page
   })
 
   it.each([
-    ['no workspace landed', () => {}],
     ['the doc already has a path', () => { seedWorkspaceStore(); doc.set(docWith({ path: '/w/a.md' })) }],
     ['the untitled scratch holds content', () => { seedWorkspaceStore(); doc.set(docWith({ content: 'typed' })) }],
     ['a file is already pinned open', () => { seedWorkspaceStore(); openList.set(['/w/a.md']) }],
     ['a preview is already active', () => { seedWorkspaceStore(); previewPath.set('/w/a.md') }],
-    [
-      'the workspace has no markdown files',
-      () => workspace.set({ root: '/ws', tree: dir('ws', '/ws', [], [file('a.txt', '/ws/a.txt')]) }),
-    ],
-  ])('does nothing when %s', (_label, arrange) => {
+  ])('a claimed window neither previews nor shows the empty page when %s', (_label, arrange) => {
     arrange()
     const openPreview = vi.fn()
     maybeAutoOpenBootPreview(openPreview)
     expect(openPreview).not.toHaveBeenCalled()
+    expect(get(emptyState)).toBe(false)
+  })
+
+  it.each([
+    ['no workspace landed at boot (case a)', () => {}],
+    [
+      'the boot workspace has no markdown files (case b)',
+      () => workspace.set({ root: '/ws', tree: dir('ws', '/ws', [], [file('a.txt', '/ws/a.txt')]) }),
+    ],
+  ])('an unclaimed window with nothing to open shows the empty page: %s', (_label, arrange) => {
+    arrange()
+    const openPreview = vi.fn()
+    maybeAutoOpenBootPreview(openPreview)
+    expect(openPreview).not.toHaveBeenCalled()
+    expect(get(emptyState)).toBe(true)
+    // showEmptyState also reset the buffer to a pristine scratch.
+    expect(get(doc).path).toBeNull()
+    expect(get(doc).content).toBe('')
   })
 })
 
@@ -343,11 +380,25 @@ describe('bootApp', () => {
     const teardown = bootApp({ menuEvents: {}, openStartupFile: vi.fn(), openBootPreview })
     await flush()
     expect(openBootPreview).not.toHaveBeenCalled()
-    // The user opens a folder mid-session (dialog / Open Recent adopt path):
-    // the boot restore already settled, so nothing may fire.
+    // Nothing to restore and nothing handed off: the boot settles on the
+    // no-document empty page (case a) …
+    expect(get(emptyState)).toBe(true)
+    // … and a folder opened mid-session (dialog / Open Recent adopt path)
+    // fires nothing: the boot restore already settled.
     workspace.set({ root: '/ws', tree })
     await flush()
     expect(openBootPreview).not.toHaveBeenCalled()
+    teardown()
+  })
+
+  it('a startup-claimed window never shows the empty page even with no workspace', async () => {
+    bootMock({
+      restore_workspace: null,
+      take_opened_files: [{ path: '/w/first.md', readonly: false }],
+    })
+    const teardown = bootApp({ menuEvents: {}, openStartupFile: vi.fn(), openBootPreview: vi.fn() })
+    await flush()
+    expect(get(emptyState)).toBe(false)
     teardown()
   })
 })

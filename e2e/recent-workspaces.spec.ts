@@ -5,6 +5,7 @@ import {
   workspaceTree,
   calls,
   emitTauri,
+  emptyPage,
   ROOT,
   STUB,
 } from './support/workspaceFixture.ts'
@@ -66,7 +67,8 @@ test('folder-less window adopts the reopened workspace in place', async ({ page 
     }
   })
   await page.goto('/')
-  await expect(page.locator('.filename')).toHaveText('Untitled')
+  // A folder-less, file-less boot lands on the no-document empty page.
+  await expect(emptyPage(page)).toBeVisible()
   await expect(workspaceTree(page)).toHaveCount(0)
 
   await emitTauri(page, 'menu:open_recent', { target: 'main', root: '/ws2' })
@@ -77,7 +79,7 @@ test('folder-less window adopts the reopened workspace in place', async ({ page 
   expect(reopens.map((c) => c.args)).toEqual([{ root: '/ws2', currentRoot: null }])
 
   // A workspace adopted MID-SESSION must not trigger the boot auto-preview:
-  // the untitled scratch stays and hello.md is never opened behind our back.
-  await expect(page.locator('.filename')).toHaveText('Untitled')
+  // the empty page stays and hello.md is never opened behind our back.
+  await expect(emptyPage(page)).toBeVisible()
   expect((await calls(page, 'read_file')).map((c) => c.args.path)).not.toContain('/ws2/hello.md')
 })

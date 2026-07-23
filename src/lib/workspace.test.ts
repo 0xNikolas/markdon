@@ -45,6 +45,8 @@ import {
   restoreWorkspace,
   takeStartupWorkspace,
   initWorkspace,
+  listRecentWorkspaces,
+  recentWorkspaceDisplay,
   type WorkspaceDir,
 } from './workspace'
 import { workspaceName } from './ui'
@@ -188,6 +190,61 @@ describe('openRecentWorkspace', () => {
     await openRecentWorkspace('/ws/gone')
     expect(get(errorMessage)).toContain('reopen')
     expect(get(workspace).root).toBeNull()
+  })
+})
+
+describe('listRecentWorkspaces', () => {
+  it('returns the Rust MRU verbatim', async () => {
+    invoke.mockResolvedValue(['/ws/b', '/ws/a'])
+    await expect(listRecentWorkspaces()).resolves.toEqual(['/ws/b', '/ws/a'])
+    expect(invoke).toHaveBeenCalledWith('list_recent_workspaces')
+  })
+
+  it('degrades to an empty list on failure — never a banner', async () => {
+    invoke.mockRejectedValue('ipc down')
+    await expect(listRecentWorkspaces()).resolves.toEqual([])
+    expect(get(errorMessage)).toBeNull()
+  })
+})
+
+describe('recentWorkspaceDisplay', () => {
+  it('splits a root into basename and parent, abbreviating home to ~', () => {
+    expect(recentWorkspaceDisplay('/Users/me/notes', '/Users/me')).toEqual({
+      name: 'notes',
+      parent: '~',
+    })
+    expect(recentWorkspaceDisplay('/Users/me/dev/proj', '/Users/me')).toEqual({
+      name: 'proj',
+      parent: '~/dev',
+    })
+  })
+
+  it('keeps the raw parent outside home or with no home known', () => {
+    expect(recentWorkspaceDisplay('/srv/data/ws', '/Users/me')).toEqual({
+      name: 'ws',
+      parent: '/srv/data',
+    })
+    expect(recentWorkspaceDisplay('/srv/data/ws', null)).toEqual({
+      name: 'ws',
+      parent: '/srv/data',
+    })
+  })
+
+  it('does not abbreviate a sibling that merely shares home as a string prefix', () => {
+    // Mirrors menu.rs recent_label's segment-safe rule.
+    expect(recentWorkspaceDisplay('/Users/melon/ws', '/Users/me')).toEqual({
+      name: 'ws',
+      parent: '/Users/melon',
+    })
+  })
+
+  it('falls back legibly on degenerate roots', () => {
+    expect(recentWorkspaceDisplay('/', '/Users/me')).toEqual({ name: '/', parent: '' })
+    expect(recentWorkspaceDisplay('/top', null)).toEqual({ name: 'top', parent: '/' })
+    expect(recentWorkspaceDisplay('/Users/me/notes/', '/Users/me')).toEqual({
+      name: 'notes',
+      parent: '~',
+    })
   })
 })
 

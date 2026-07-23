@@ -15,7 +15,9 @@ import {
   restoreDoc,
   resetReadonlyMemory,
   adoptNormalization,
+  showEmptyState,
 } from './doc'
+import { emptyState } from './ui'
 
 describe('doc store', () => {
   beforeEach(() => {
@@ -433,5 +435,47 @@ describe('adoptNormalization (normalization baseline)', () => {
     adoptNormalization('- x\n')
     markSaved('/tmp/a.md', '- x\n')
     expect(isDirty(get(doc))).toBe(false)
+  })
+})
+
+describe('empty-state transitions', () => {
+  beforeEach(() => {
+    newDoc()
+    resetReadonlyMemory()
+    emptyState.set(false)
+  })
+
+  it('showEmptyState resets the buffer to a pristine scratch and raises the flag', () => {
+    openDoc('/tmp/a.md', '# A')
+    edit('# A typed')
+    showEmptyState()
+    const s = get(doc)
+    expect(s.path).toBeNull()
+    expect(s.content).toBe('')
+    expect(isDirty(s)).toBe(false)
+    expect(get(emptyState)).toBe(true)
+  })
+
+  it('every document load clears the flag: openDoc, restoreDoc, newDoc', () => {
+    showEmptyState()
+    openDoc('/tmp/a.md', '# A')
+    expect(get(emptyState)).toBe(false)
+
+    showEmptyState()
+    restoreDoc('/tmp/a.md', { content: 'x', savedContent: 'x', normalized: null })
+    expect(get(emptyState)).toBe(false)
+
+    showEmptyState()
+    newDoc() // an explicit File > New: the editable scratch, not the page
+    expect(get(emptyState)).toBe(false)
+  })
+
+  it('non-load doc mutations leave the flag alone', () => {
+    // Defensive: only loads dismiss the page. (In production no edit can
+    // arrive while it is up — the editor is unmounted — but the store must
+    // not couple unrelated transitions to the flag.)
+    showEmptyState()
+    edit('typed')
+    expect(get(emptyState)).toBe(true)
   })
 })

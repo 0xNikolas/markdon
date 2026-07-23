@@ -71,14 +71,18 @@ export function bootPreviewRow(page: Page): Locator {
 
 /**
  * Close the boot auto-preview so a spec can start from the clean untitled
- * scratch the app booted with before auto-preview existed. Closing the active
- * preview with nothing else open falls back to newDoc() and clears the
- * preview slot — exactly the pre-auto-preview boot state.
+ * scratch. Closing the last open file lands on the no-document EMPTY PAGE
+ * (VS Code parity), so this helper then presses Cmd+N (menu:new) to reach
+ * the editable scratch the caller actually wants — the empty page's own
+ * behavior is pinned separately in empty-state.spec.ts.
  */
 export async function dismissBootPreview(page: Page): Promise<void> {
   await closeStripRow(page, 'nested.md')
-  await expect(page.locator('.filename')).toHaveText('Untitled')
+  await expect(emptyPage(page)).toBeVisible()
   await expect(stripRows(page)).toHaveCount(0)
+  await emitTauri(page, 'menu:new')
+  await expect(emptyPage(page)).toHaveCount(0)
+  await expect(page.locator('.filename')).toHaveText('Untitled')
 }
 
 // -- locators -----------------------------------------------------------------
@@ -91,6 +95,11 @@ export function workspaceTree(page: Page): Locator {
 /** The Open Files strip container (pinned rows + the italic preview row). */
 export function openFilesStrip(page: Page): Locator {
   return page.getByTestId('open-files')
+}
+
+/** The no-document empty page (rendered in place of the editor). */
+export function emptyPage(page: Page): Locator {
+  return page.getByTestId('empty-state')
 }
 
 /** A workspace-tree row (role=treeitem — ARIA tree pattern) by its exact

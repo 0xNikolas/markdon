@@ -1,6 +1,7 @@
 import { writable, type Writable } from 'svelte/store'
 import { rewritePrefix, isSelfOrDescendant } from './paths'
 import { readonlyMemory } from './readonlyMemory'
+import { emptyState } from './ui'
 
 export interface DocState {
   path: string | null
@@ -104,6 +105,10 @@ export function openDoc(path: string, content: string, readonly = false): void {
     readonly: effective,
     loadId: s.loadId + 1,
   }))
+  // Any document load dismisses the empty page. AFTER the doc update, so
+  // subscribers watching both stores (window-title sync) never compute from
+  // a half-transitioned pair.
+  emptyState.set(false)
 }
 
 /**
@@ -131,6 +136,7 @@ export function restoreDoc(
     readonly: readonlyMemory.has(path),
     loadId: s.loadId + 1,
   }))
+  emptyState.set(false) // any document load dismisses the empty page (see openDoc)
 }
 
 export function newDoc(): void {
@@ -142,6 +148,21 @@ export function newDoc(): void {
     readonly: false,
     loadId: s.loadId + 1,
   }))
+  emptyState.set(false) // the scratch is a real (editable) document (see openDoc)
+}
+
+/**
+ * Enter the no-document empty page: reset the buffer to a pristine scratch
+ * (so the header/status chrome and every dirty check read clean) and raise
+ * emptyState AFTER — newDoc, like every document load, clears the flag, so
+ * the order is load-then-raise by construction. Reached from closing the
+ * last open file (App.onCloseFile) and a boot that found nothing to open
+ * (appBoot.maybeAutoOpenBootPreview); an explicit File > New instead stops
+ * at newDoc() and keeps the editable scratch.
+ */
+export function showEmptyState(): void {
+  newDoc()
+  emptyState.set(true)
 }
 
 export function edit(content: string): void {

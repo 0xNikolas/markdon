@@ -11,6 +11,7 @@
     enterReadonly,
     revertBuffer,
     adoptNormalization,
+    showEmptyState,
   } from './lib/doc'
   import { recordRevert } from './lib/history'
   import {
@@ -41,6 +42,7 @@
   } from './lib/appBoot'
   import { allowsNativeContextMenu } from './lib/contextMenu'
   import Editor from './Editor.svelte'
+  import EmptyState from './EmptyState.svelte'
   import SplitView from './SplitView.svelte'
   import Header from './Header.svelte'
   import StatusBar from './StatusBar.svelte'
@@ -54,6 +56,7 @@
   import { openSourceSearch, clearPendingLine } from './lib/sourceEditor'
   import {
     split,
+    emptyState,
     isMacPlatform,
     isGotoLineFallbackKey,
     isFindReplaceFallbackKey,
@@ -271,7 +274,9 @@
       previewPath.update((pv) => (pv === path ? null : pv))
       openList.update((l) => removeOpen(l, path))
       evict(path) // close destroys: drop any (defensive) cache entry with the row
-      if (next === null) newDoc()
+      // Closing the LAST open file lands on the no-document empty page (VS
+      // Code parity) — an explicit Cmd+N from there still yields the scratch.
+      if (next === null) showEmptyState()
       else openPath(next)
     })
   }
@@ -301,6 +306,33 @@
   const openStartupFile = (path: string, readonly: boolean) =>
     switchGuarded(() => openPath(path, { readonly }))
 
+  // File > New and File > Open…, hoisted so the empty page's action rows ride
+  // the EXACT same closures as the menu items (and the sidebar's "+").
+  // newDoc replaces the doc without going through openPath, so the pathed
+  // doc's stash is explicit here; open() stashes inside its in-place closure
+  // (only once a pick actually landed).
+  const newUntitled = () => switchGuarded(() => { stashActive(); newDoc() })
+  const openFileDialog = () => switchGuarded(() => open())
+
+  // The one gate for document-shaped actions while the empty page is shown:
+  // there is no document (and no mounted editor) for them to act on, so they
+  // must no-op cleanly. Gated here: save / save-as (would open a Save As
+  // dialog for a doc that doesn't exist), export (same, via the menu; the
+  // Header button's tick is dropped in appBoot's initExportOnTick), find /
+  // find-replace / go-to-line (would open search or jump UI over a missing
+  // editor), and the read-only toggle (would lock the hidden scratch and
+  // render the read-only bar — its handler below also re-syncs the native
+  // check mark, so it keeps its own branch). Already safe WITHOUT a gate:
+  // File History (its path===null check covers the empty page's pristine
+  // scratch), Close Tab (falls through to close-window — correct VS Code
+  // behavior), and the Header's Split Preview toggle (a bare preference flip;
+  // no editor is mounted to react, and the next open honoring it is the
+  // toggle's normal meaning).
+  const unlessEmpty = (fn: () => void) => () => {
+    if (get(emptyState)) return
+    fn()
+  }
+
   // All boot wiring (event subscriptions, startup drains, watcher/workspace
   // init, native-chrome mirrors) lives in appBoot.ts; App supplies only the
   // UI-flow closures the handlers need.
@@ -313,25 +345,24 @@
       // guard passes straight through.
       openBootPreview: (path) => handleOpenFile(path, { preview: true }),
       menuEvents: {
-        // newDoc replaces the doc without going through openPath, so the
-        // pathed doc's stash is explicit here; open() stashes inside its
-        // in-place closure (only once a pick actually landed).
-        'menu:new': () => switchGuarded(() => { stashActive(); newDoc() }),
-        'menu:open': () => switchGuarded(() => open()),
-        'menu:save': () => save(),
-        'menu:save_as': () => saveAs(),
-        'menu:find': () => routeFind(),
-        'menu:find_replace': () => routeFindReplace(),
-        'menu:goto_line': () => {
+        'menu:new': newUntitled,
+        'menu:open': openFileDialog,
+        'menu:save': unlessEmpty(() => void save()),
+        'menu:save_as': unlessEmpty(() => void saveAs()),
+        'menu:find': unlessEmpty(routeFind),
+        'menu:find_replace': unlessEmpty(routeFindReplace),
+        'menu:goto_line': unlessEmpty(() => {
           // The native Edit menu item isn't disabled by app state (menu.rs has
           // no such wiring), so it stays clickable while another overlay is up.
           // openOverlay enforces mutual exclusion at the store: it refuses (no-op)
           // if one is already open, so Go to Line can't stack its focus trap
           // behind the discard guard / Settings / History (DEFECT A1).
           openOverlay({ kind: 'goto' })
-        },
+        }),
         'menu:history': () => {
           // Untitled/never-saved docs have no history — the menu item no-ops.
+          // The same check already covers the empty page (its underlying
+          // scratch is pathless), so no unlessEmpty gate is needed here.
           // openOverlay handles modal precedence (refuses if any overlay is open).
           if (get(doc).path === null) return
           openOverlay({ kind: 'history' })
@@ -341,10 +372,11 @@
           // flips its check on click before this fires. Read-only isn't itself an
           // overlay (toggleReadonly may OPEN the discard guard via the dirty
           // path), so this can't lean on openOverlay's refusal — it gates on
-          // anyOverlayOpen() directly. When blocked, re-sync the check to the
-          // store's real value to undo muda's optimistic flip (the store didn't
-          // change, so the subscription won't).
-          if (anyOverlayOpen()) {
+          // anyOverlayOpen() directly, plus the empty page (no document to
+          // lock). When blocked, re-sync the check to the store's real value
+          // to undo muda's optimistic flip (the store didn't change, so the
+          // subscription won't).
+          if (anyOverlayOpen() || get(emptyState)) {
             syncReadonlyMenu(get(doc).readonly)
             return
           }
@@ -377,7 +409,7 @@
           }
         },
         'menu:close_window': closeThisWindow,
-        'menu:export': () => exportDocument(),
+        'menu:export': unlessEmpty(() => void exportDocument()),
         'window:close-requested': closeThisWindow,
         'file:opened': () => void drainOpenedFiles(openStartupFile),
       },
@@ -456,6 +488,10 @@
   // isFindReplaceFallbackKey's doc comment on why it checks e.code instead).
   const macPlatform = isMacPlatform()
   function handleWindowKeydown(e: KeyboardEvent) {
+    // Empty page up: every branch below is a document/editor action (find,
+    // find-replace, go-to-line, or Escape for surfaces that can't be open
+    // while empty) — the same gate the menu routes get via unlessEmpty.
+    if (get(emptyState)) return
     if (e.key === 'Escape' && $searchUi.open && $activeOverlay?.kind !== 'discard') {
       e.preventDefault()
       closeFind()
@@ -568,7 +604,7 @@
 
 <main class="app">
   <!-- Header hosts the native traffic-light overlay: nothing may render above it. -->
-  <Header path={$doc.path} dirty={isDirty($doc)} />
+  <Header path={$doc.path} dirty={isDirty($doc)} empty={$emptyState} />
   <Banner />
   <div class="body">
     <!-- Always rendered, not gated on whether a workspace is open: Sidebar
@@ -581,7 +617,7 @@
       previewPath={$previewPath}
       onOpenFile={handleOpenFile}
       onCloseFile={onCloseFile}
-      onNewFile={() => switchGuarded(() => { stashActive(); newDoc() })}
+      onNewFile={newUntitled}
       dirtyPaths={$dirtyCached}
     />
     <div class="content">
@@ -603,24 +639,36 @@
       {#if $searchUi.open}
         <FindBar />
       {/if}
-      {#key $doc.loadId}
-        {#if $split}
-          <!-- CodeMirror is byte-accurate (no adoptNormalization dance), but
-               its edits must promote a previewed doc just like the WYSIWYG
-               path's. -->
-          <SplitView
-            initialContent={$doc.content}
-            content={$doc.content}
-            readonly={$doc.readonly}
-            onChange={(md) => {
-              edit(md)
-              promotePreviewOnEdit()
-            }}
-          />
-        {:else}
-          <Editor initialContent={$doc.content} readonly={$doc.readonly} onChange={onEditorChange} />
-        {/if}
-      {/key}
+      {#if $emptyState}
+        <!-- No document at all: the empty page replaces the editor/split
+             surface. Its rows call the same closures as the menu items. -->
+        <EmptyState
+          onNewFile={newUntitled}
+          onOpenFile={openFileDialog}
+          onOpenFolder={() => void openWorkspace()}
+          onOpenSettings={() => openOverlay({ kind: 'settings' })}
+          onOpenRecent={(root) => void openRecentWorkspace(root)}
+        />
+      {:else}
+        {#key $doc.loadId}
+          {#if $split}
+            <!-- CodeMirror is byte-accurate (no adoptNormalization dance), but
+                 its edits must promote a previewed doc just like the WYSIWYG
+                 path's. -->
+            <SplitView
+              initialContent={$doc.content}
+              content={$doc.content}
+              readonly={$doc.readonly}
+              onChange={(md) => {
+                edit(md)
+                promotePreviewOnEdit()
+              }}
+            />
+          {:else}
+            <Editor initialContent={$doc.content} readonly={$doc.readonly} onChange={onEditorChange} />
+          {/if}
+        {/key}
+      {/if}
     </div>
   </div>
   <StatusBar content={$doc.content} />

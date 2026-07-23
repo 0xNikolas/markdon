@@ -9,10 +9,14 @@
   interface Props {
     path: string | null
     dirty: boolean
+    /** Empty-state page shown: no document, so no breadcrumb/filename. */
+    empty?: boolean
   }
-  let { path, dirty }: Props = $props()
+  let { path, dirty, empty = false }: Props = $props()
 
-  const breadcrumb = $derived(fileBreadcrumb(path, $workspace.root, $workspaceName))
+  const breadcrumb = $derived(
+    empty ? { crumbs: [], filename: '' } : fileBreadcrumb(path, $workspace.root, $workspaceName),
+  )
 </script>
 
 <!-- data-tauri-drag-region="deep": the whole bar drags the window and

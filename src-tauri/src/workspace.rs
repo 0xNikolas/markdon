@@ -354,6 +354,24 @@ pub fn take_startup_workspace(
     })
 }
 
+/// The Open Recent MRU as the frontend's empty page consumes it: newest-first
+/// roots from the shared state file. Pure (`&Path` in, no AppHandle) so the
+/// command below stays a trivial shell — the `record_snapshot` testability
+/// pattern used throughout this file.
+pub(crate) fn recent_roots(file: &Path) -> Vec<String> {
+    load_state(file).roots
+}
+
+/// Newest-first recent workspace roots for the empty page's Recent section.
+/// Read-only against the Rust-owned state file — no grant is minted and
+/// nothing is persisted; actually OPENING a listed root still routes through
+/// `open_recent_workspace`, whose MRU-membership check is the trust boundary.
+#[tauri::command]
+pub fn list_recent_workspaces(app: AppHandle) -> Result<Vec<String>, String> {
+    let file = state_file(&app)?;
+    Ok(recent_roots(&file))
+}
+
 /// How a valid Open Recent pick is honored — resolved by [`resolve_recent`].
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum RecentDecision {
@@ -677,6 +695,19 @@ mod tests {
         let back = load_state(&file);
         assert_eq!(back.current.as_deref(), Some("/ws/a"));
         assert_eq!(back.roots, vec!["/ws/a", "/ws/b"]);
+    }
+
+    #[test]
+    fn recent_roots_reads_the_mru_newest_first_and_tolerates_a_missing_file() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("workspace.json");
+        assert!(recent_roots(&file).is_empty(), "missing file: empty list");
+        persist_open(&file, "/ws/a").unwrap();
+        persist_open(&file, "/ws/b").unwrap();
+        assert_eq!(recent_roots(&file), vec!["/ws/b", "/ws/a"]);
+        // Corrupt state degrades to empty, mirroring load_state's tolerance.
+        fs::write(&file, "not json at all").unwrap();
+        assert!(recent_roots(&file).is_empty());
     }
 
     #[test]

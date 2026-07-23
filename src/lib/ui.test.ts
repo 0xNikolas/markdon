@@ -23,6 +23,7 @@ const {
   fileBreadcrumb,
   isInsideRoot,
   windowTitle,
+  emptyState,
   isGotoLineFallbackKey,
   isFindReplaceFallbackKey,
 } = await import('./ui')
@@ -170,6 +171,19 @@ describe('windowTitle', () => {
     // Mirrors fileBreadcrumb's segment filtering: empty segments never surface.
     expect(windowTitle('/ws/notes/', false)).toBe('notes — Markdon')
     expect(windowTitle('/', false)).toBe('Untitled — Markdon')
+  })
+
+  it('renders plain "Markdon" while the empty page is shown — empty wins over everything', () => {
+    expect(windowTitle(null, false, true)).toBe('Markdon')
+    // The empty page implies a pristine pathless doc, but stale-looking
+    // inputs must not leak a filename or bullet either.
+    expect(windowTitle('/ws/a.md', true, true)).toBe('Markdon')
+  })
+})
+
+describe('emptyState', () => {
+  it('starts false: a window is assumed to hold a document until told otherwise', () => {
+    expect(get(emptyState)).toBe(false)
   })
 })
 

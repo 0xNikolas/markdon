@@ -86,6 +86,50 @@ export async function openWorkspace(): Promise<void> {
 }
 
 /**
+ * The Open Recent MRU (newest-first roots) for the empty page's Recent
+ * section, read from the Rust-owned state file via `list_recent_workspaces`.
+ * Display-only — opening still routes through {@link openRecentWorkspace}'s
+ * trust boundary. A failed read yields an empty list (the section hides)
+ * rather than an error: recents are a convenience, never worth a banner.
+ */
+export async function listRecentWorkspaces(): Promise<string[]> {
+  try {
+    return await invoke<string[]>('list_recent_workspaces')
+  } catch (e) {
+    logWarn('recent workspaces load failed', e)
+    return []
+  }
+}
+
+/** How the empty page renders one recent root: basename strong, parent muted. */
+export interface RecentWorkspaceDisplay {
+  name: string
+  parent: string
+}
+
+/**
+ * Split a recent workspace root into its basename and an abbreviated parent
+ * path (home shortened to `~`), mirroring the native Open Recent menu's
+ * label rule (menu.rs `recent_label`) so the two surfaces never disagree.
+ * Pure string work: `home` comes from the path API when available, `null`
+ * skips abbreviation. Degenerate roots ('/', '') fall back to the raw root
+ * with an empty parent so the row stays legible.
+ */
+export function recentWorkspaceDisplay(root: string, home: string | null): RecentWorkspaceDisplay {
+  const trimmed = root.length > 1 ? root.replace(/\/+$/, '') : root
+  const cut = trimmed.lastIndexOf('/')
+  const name = cut >= 0 ? trimmed.slice(cut + 1) : trimmed
+  if (name === '') return { name: trimmed, parent: '' }
+  let parent = cut > 0 ? trimmed.slice(0, cut) : cut === 0 ? '/' : ''
+  const h = home === null || home === '' ? null : home.replace(/\/+$/, '')
+  if (h !== null && h !== '') {
+    if (parent === h) parent = '~'
+    else if (parent.startsWith(`${h}/`)) parent = `~${parent.slice(h.length)}`
+  }
+  return { name, parent }
+}
+
+/**
  * Reopen an entry of the File > Open Recent menu (`menu:open_recent`, carrying
  * the root Rust resolved from its own MRU snapshot). Same-root is a no-op —
  * it is already open right here. With no folder open the workspace is adopted

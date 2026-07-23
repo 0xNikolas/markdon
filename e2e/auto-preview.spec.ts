@@ -8,6 +8,7 @@ import {
   editor,
   calls,
   bootPreviewRow,
+  emptyPage,
   STUB,
   ROOT,
 } from './support/workspaceFixture.ts'
@@ -71,7 +72,9 @@ test('a drained startup (Finder/argv) file suppresses the auto-preview', async (
   expect(reads).not.toContain(`${ROOT}/sub/nested.md`)
 })
 
-test('a workspace with no markdown files keeps the untitled scratch', async ({ page }) => {
+test('a workspace with no markdown files shows the empty page (nothing to auto-open)', async ({
+  page,
+}) => {
   await page.addInitScript({ path: STUB })
   await page.addInitScript((root) => {
     window.__TAURI_WORKSPACE_ROOT__ = root
@@ -80,8 +83,9 @@ test('a workspace with no markdown files keeps the untitled scratch', async ({ p
   await page.goto('/')
   await expect(workspaceTree(page)).toBeVisible()
 
-  // Nothing to auto-open: the scratch stays, and nothing was ever read.
-  await expect(page.locator('.filename')).toHaveText('Untitled')
+  // Nothing to auto-open: the no-document empty page replaces the scratch,
+  // and nothing was ever read.
+  await expect(emptyPage(page)).toBeVisible()
   await expect(stripRows(page)).toHaveCount(0)
   expect(await calls(page, 'read_file')).toHaveLength(0)
 })
