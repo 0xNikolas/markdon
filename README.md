@@ -3,6 +3,9 @@
 A fast, native markdown editor for macOS and Linux — WYSIWYG editing
 (Milkdown/Crepe) with a CodeMirror source view, built with Tauri and Svelte.
 
+Contributors: see [`CONTRIBUTORS.md`](CONTRIBUTORS.md) for the architecture,
+commands, and conventions.
+
 ## Download
 
 Every [GitHub Release](https://github.com/0xNikolas/markdon/releases) ships

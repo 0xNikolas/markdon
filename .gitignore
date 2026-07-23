@@ -9,6 +9,5 @@ playwright-report
 src-tauri/target
 tasks/
 
-# Local agent instruction files (kept out of the repo)
-AGENTS.md
+# Local Claude symlink -> the tracked CONTRIBUTORS.md; kept out of the repo
 CLAUDE.md
