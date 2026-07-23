@@ -326,11 +326,14 @@
     background: var(--accent-tint-strong);
   }
   /* Selected-but-not-open rows (multi-select via Select All, or a focused
-     folder/non-md file): a quiet surface fill distinct from the accent-tinted
-     open row. */
+     folder/non-md file): a hairline ring, NOT a fill — a fill reads as a
+     second "open document" highlight next to the accent-tinted active row
+     (arrow keys move the selection anchor while the open file keeps its
+     highlight, so both are often visible at once). Keyboard position itself
+     is carried by the global :focus-visible accent outline. */
   .file-row.selected:not(.active),
   .folder-row.selected {
-    background: var(--surface-hover);
+    box-shadow: inset 0 0 0 1px var(--border);
     color: var(--fg-strong);
   }
   /* Cut items dim until pasted or the clipboard is cleared. */
