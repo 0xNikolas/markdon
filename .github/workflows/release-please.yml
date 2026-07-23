@@ -1,0 +1,24 @@
+name: release-please
+
+# On every push to main, release-please reads the Conventional Commits since
+# the last release and maintains a "release PR" that bumps the version and
+# updates the CHANGELOG. Merging that PR tags the release and creates a GitHub
+# Release. The `node` release-type owns package.json + CHANGELOG.md; the
+# extra-files updaters keep the Tauri version sources in lockstep
+# (tauri.conf.json, Cargo.toml, and the app entry in Cargo.lock).
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
