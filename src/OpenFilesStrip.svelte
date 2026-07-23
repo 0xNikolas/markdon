@@ -58,6 +58,11 @@
   // (stripNav.ts holds the pure ArrowUp/Down/Home/End decisions; Enter/Space
   // are native button activation).
   let rows = $derived(stripOrder(openFiles, previewRow))
+  // The preview row renders FIRST (top slot) when present, so DOM
+  // data-strip-index matches `rows` (stripOrder = preview-first): preview is
+  // index 0 and pinned row i is index i + pinOffset. Keeping the two index
+  // spaces aligned is what makes rows.indexOf(activePath) a valid tab anchor.
+  let pinOffset = $derived(previewRow !== null ? 1 : 0)
   let stripEl = $state<HTMLDivElement>()
   // The roving anchor: the last row focus visited, else the active row, else
   // the first — exactly one main button is tabbable at a time.
@@ -212,60 +217,23 @@
        .tree containers whose rows can render the same file names — e2e
        locators need an unambiguous scope for each. -->
   <div class="tree" data-testid="open-files" bind:this={stripEl}>
-    {#each openFiles as path, i (path)}
-      <!-- Two sibling buttons, not a nested button-in-button: the row opens
-           the file, the small trailing button closes it (stopPropagation
-           so a close click never also switches to it first). The row-level
-           contextmenu listener is a right-click-only menu trigger covering
-           both buttons and the gap between them — not an activation, so the
-           div stays role-less (same pattern as the sidebar <nav>'s panel
-           handler). -->
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div
-        class="open-file-row"
-        class:active={path === activePath}
-        oncontextmenu={(e) => onRowContextMenu(e, path)}
-      >
-        <button
-          class="open-file-main"
-          aria-current={path === activePath ? 'true' : undefined}
-          data-strip-index={i}
-          tabindex={tabAnchor === i ? 0 : -1}
-          onclick={() => onOpenFile(path)}
-          onkeydown={(e) => onRowKeydown(e, i)}
-          onfocus={() => (focusedIdx = i)}
-        >
-          <span class="active-bar"></span>
-          <Icon name={fileIcon(basename(path))} size={16} />
-          <span class="name">{basename(path)}</span>
-          {#if dirtyPaths.has(path)}
-            <span class="dirty-dot" role="img" aria-label="Unsaved changes"></span>
-          {/if}
-        </button>
-        <button
-          class="close-file"
-          aria-label="Close {basename(path)}"
-          onclick={(e) => { e.stopPropagation(); onCloseFile(path) }}
-        >
-          <Icon name="x" size={12} />
-        </button>
-      </div>
-    {/each}
     {#if previewRow !== null}
       {@const pv = previewRow}
-      {@const pvIdx = openFiles.length}
-      <!-- The single-click preview: ONE italic row after the pinned ones.
-           Clicking it re-asserts the preview (a no-op while it's already
-           the active doc) rather than pinning — only a tree dblclick, an
-           explicit open, or editing the buffer promotes it. The italics are
-           invisible to a screen reader, so both aria-labels carry the
-           "(preview)" state in words. Enter on the already-active row PINS
-           it — the keyboard's promotion affordance, mirroring the mouse's
+      {@const pvIdx = 0}
+      <!-- The single-click preview renders FIRST (top slot) — it is the most
+           recently opened row under the newest-first order, and data-strip-index
+           0 keeps it aligned with stripOrder (preview-first) so the roving tab
+           anchor lands on the right row. Clicking it re-asserts the preview (a
+           no-op while it's already the active doc) rather than pinning — only a
+           tree dblclick, an explicit open, or editing the buffer promotes it.
+           The italics are invisible to a screen reader, so both aria-labels
+           carry the "(preview)" state in words. Enter on the already-active row
+           PINS it — the keyboard's promotion affordance, mirroring the mouse's
            dblclick (preventDefault keeps the button's synthetic click, which
-           would merely re-preview, from also firing); other keys fall
-           through to the shared arrow-navigation handler. The row div's
-           contextmenu listener is a menu trigger, not an activation (see the
-           pinned row above). -->
+           would merely re-preview, from also firing); other keys fall through to
+           the shared arrow-navigation handler. The row div's contextmenu
+           listener is a menu trigger, not an activation (see the pinned rows
+           below). -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
         class="open-file-row preview"
@@ -302,6 +270,45 @@
         </button>
       </div>
     {/if}
+    {#each openFiles as path, i (path)}
+      <!-- Two sibling buttons, not a nested button-in-button: the row opens
+           the file, the small trailing button closes it (stopPropagation
+           so a close click never also switches to it first). The row-level
+           contextmenu listener is a right-click-only menu trigger covering
+           both buttons and the gap between them — not an activation, so the
+           div stays role-less (same pattern as the sidebar <nav>'s panel
+           handler). -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div
+        class="open-file-row"
+        class:active={path === activePath}
+        oncontextmenu={(e) => onRowContextMenu(e, path)}
+      >
+        <button
+          class="open-file-main"
+          aria-current={path === activePath ? 'true' : undefined}
+          data-strip-index={i + pinOffset}
+          tabindex={tabAnchor === i + pinOffset ? 0 : -1}
+          onclick={() => onOpenFile(path)}
+          onkeydown={(e) => onRowKeydown(e, i + pinOffset)}
+          onfocus={() => (focusedIdx = i + pinOffset)}
+        >
+          <span class="active-bar"></span>
+          <Icon name={fileIcon(basename(path))} size={16} />
+          <span class="name">{basename(path)}</span>
+          {#if dirtyPaths.has(path)}
+            <span class="dirty-dot" role="img" aria-label="Unsaved changes"></span>
+          {/if}
+        </button>
+        <button
+          class="close-file"
+          aria-label="Close {basename(path)}"
+          onclick={(e) => { e.stopPropagation(); onCloseFile(path) }}
+        >
+          <Icon name="x" size={12} />
+        </button>
+      </div>
+    {/each}
   </div>
 {/if}
 

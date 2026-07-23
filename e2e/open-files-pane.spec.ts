@@ -50,6 +50,25 @@ test.describe('Open Files pane: reserved height, no layout shift', () => {
     expect(after!.y).toBe(before!.y)
   })
 
+  test('the preview row renders at the TOP of the strip (newest-first)', async ({ page }) => {
+    // Regression: the newest-first change flipped stripOrder to preview-first
+    // but the template still rendered the preview last, so it drew at the
+    // bottom and the roving tab anchor landed on the wrong row.
+    await treeRow(page, 'ideas.md').dblclick() // pin
+    await treeRow(page, 'guide.md').dblclick() // pin (guide now above ideas)
+    await treeRow(page, 'notes.md').click() // preview
+
+    const rows = openFilesStrip(page).locator('.open-file-row')
+    await expect(rows).toHaveCount(3)
+    // Preview is the first DOM row and carries data-strip-index 0.
+    await expect(rows.first()).toHaveClass(/preview/)
+    await expect(rows.first().locator('[data-strip-index="0"]')).toBeVisible()
+    // The active preview row is the tabbable anchor (tabindex 0), not a pinned row.
+    await expect(
+      openFilesStrip(page).getByRole('button', { name: 'notes.md (preview)', exact: true }),
+    ).toHaveAttribute('tabindex', '0')
+  })
+
   test('a bare tree dblclick pins its own file — no preview-first workaround', async ({
     page,
   }) => {
