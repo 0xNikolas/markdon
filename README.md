@@ -1,7 +1,31 @@
 # markdon
 
-Contributors and coding agents: see [`AGENTS.md`](AGENTS.md) for the
-architecture, commands, and conventions.
+A fast, native markdown editor for macOS and Linux — WYSIWYG editing
+(Milkdown/Crepe) with a CodeMirror source view, built with Tauri and Svelte.
+
+## Download
+
+Every [GitHub Release](https://github.com/0xNikolas/markdon/releases) ships
+prebuilt apps — no toolchain or build step needed. Grab the file for your
+platform:
+
+| Platform | Download |
+| --- | --- |
+| macOS · Apple Silicon | `Markdon_<version>_aarch64.dmg` |
+| macOS · Apple Intel | `Markdon_<version>_x64.dmg` |
+| Linux · x86_64 | `.AppImage` or `.deb` |
+
+**macOS:** open the `.dmg` and drag Markdon to Applications. Builds are not
+notarized yet, so the first launch Gatekeeper will warn — right-click the app
+and choose **Open** once, or clear the quarantine flag:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Markdon.app
+```
+
+**Linux** builds are experimental (they compile but are not yet runtime-tested,
+and PDF export is macOS-only). Make the `.AppImage` executable (`chmod +x`) and
+run it, or install the `.deb`.
 
 ## CLI (`md`)
 
@@ -71,3 +95,18 @@ MARKDON_BIN="$PWD/src-tauri/target/debug/app" md notes.md
 Linux (`/usr/bin/markdon`, `~/.local/bin`, AppImage) and Windows
 (`%LOCALAPPDATA%\Markdon\app.exe`) locations are **not** probed yet — on those
 platforms use `MARKDON_BIN`. (TODO: add native lookups.)
+
+## Releases
+
+Versioning and releases are automated with
+[release-please](https://github.com/googleapis/release-please) driven by
+[Conventional Commits](https://www.conventionalcommits.org). Every push to
+`main` maintains an open **release PR** that bumps the version (across
+`package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`) and
+updates `CHANGELOG.md`. Merging that release PR tags the release, and GitHub
+Actions then builds the per-platform installers (Apple Silicon, Apple Intel,
+Linux x86_64) and attaches them to the GitHub Release automatically — nothing is
+built by hand.
+
+To cut a release: land your `feat:` / `fix:` commits on `main`, then merge the
+release PR that release-please opens.
