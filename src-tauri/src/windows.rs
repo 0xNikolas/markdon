@@ -157,6 +157,9 @@ pub fn wire_window(window: &WebviewWindow, app: &AppHandle) {
             // the remaining per-label bookkeeping. Without this, every open-
             // then-close of a doc-N window leaks a live FS-watcher thread.
             app_close.state::<watcher::FileWatcher>().remove(&lbl_close);
+            app_close
+                .state::<watcher::WorkspaceWatcher>()
+                .remove(&lbl_close);
             release_window_state(
                 &lbl_close,
                 app_close.state::<PendingWindowFile>().inner(),

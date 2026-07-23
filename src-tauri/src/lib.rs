@@ -36,7 +36,8 @@ pub struct OpenedEntry {
 ///
 /// POISON POLICY (one statement covering every `Mutex` behind these state
 /// newtypes — `OpenedFiles`, `FocusedWindow`, `PendingWindowFile`,
-/// `watcher::FileWatcher`, `pdf::PendingPrintHtml`, `launch::StartupWorkspace`,
+/// `watcher::FileWatcher`, `watcher::WorkspaceWatcher`,
+/// `pdf::PendingPrintHtml`, `launch::StartupWorkspace`,
 /// plus `allowlist::AllowedPaths` and `history::HistoryLocks`): each lock is
 /// `unwrap()`'d on poison
 /// deliberately. These are single-process, short-held locks guarding trivial
@@ -197,6 +198,7 @@ pub fn run() {
         .manage(FocusedWindow::default())
         .manage(PendingWindowFile::default())
         .manage(watcher::FileWatcher::default())
+        .manage(watcher::WorkspaceWatcher::default())
         .manage(allowed)
         .manage(launch::StartupWorkspace::new(
             launch_args.workspace,
@@ -315,6 +317,8 @@ pub fn run() {
             windows::open_file_new_instance,
             watcher::watch_file,
             watcher::unwatch,
+            watcher::watch_workspace,
+            watcher::unwatch_workspace,
             dialogs::open_file_dialog,
             dialogs::save_file_dialog,
             dialogs::open_workspace_dialog,

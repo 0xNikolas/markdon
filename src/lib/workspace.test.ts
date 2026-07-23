@@ -3,10 +3,35 @@ import { get } from 'svelte/store'
 
 const invoke = vi.fn()
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
-// window is imported by initWorkspace (onFocusChanged); stub it so the module loads.
+// window is imported by initWorkspace (onFocusChanged) and windowing.ts's
+// currentLabel (the label feeds listenScoped's target filter); stub both.
 vi.mock('@tauri-apps/api/window', () => ({
-  getCurrentWindow: () => ({ onFocusChanged: () => Promise.resolve(() => {}) }),
+  getCurrentWindow: () => ({
+    label: 'main',
+    onFocusChanged: () => Promise.resolve(() => {}),
+  }),
 }))
+// Capture listenScoped registrations so tests can deliver 'workspace:changed'.
+const { eventHandlers } = vi.hoisted(() => ({
+  eventHandlers: new Map<string, ((e: { payload: unknown }) => void)[]>(),
+}))
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn(async (event: string, handler: (e: { payload: unknown }) => void) => {
+    const list = eventHandlers.get(event) ?? []
+    list.push(handler)
+    eventHandlers.set(event, list)
+    return () => {
+      const arr = eventHandlers.get(event) ?? []
+      const i = arr.indexOf(handler)
+      if (i >= 0) arr.splice(i, 1)
+    }
+  }),
+}))
+
+/** Deliver a Tauri event to every captured listener (listenScoped included). */
+function emitEvent(event: string, payload: unknown): void {
+  for (const handler of eventHandlers.get(event) ?? []) handler({ payload })
+}
 
 import {
   isMarkdownFile,
@@ -34,6 +59,7 @@ const tree = (name: string): WorkspaceDir => ({
 
 beforeEach(() => {
   invoke.mockReset()
+  eventHandlers.clear()
   workspace.set({ root: null, tree: null })
   workspaceName.set(null)
   errorMessage.set(null)
@@ -226,6 +252,109 @@ describe('initWorkspace startup ordering', () => {
     expect(invoke).toHaveBeenCalledWith('take_startup_workspace')
     expect(invoke).toHaveBeenCalledWith('restore_workspace')
     teardown()
+  })
+})
+
+describe('initWorkspace workspace watcher', () => {
+  /** Cold launch with nothing to restore: watcher wiring is the only actor. */
+  const coldMock = () =>
+    invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === 'take_startup_workspace' ? { workspace: null, suppress_restore: true } : null,
+    )
+
+  const watchCalls = () => invoke.mock.calls.filter(([cmd]) => cmd === 'watch_workspace')
+  const listCalls = () => invoke.mock.calls.filter(([cmd]) => cmd === 'list_workspace')
+
+  it('installs the Rust watcher when a root is adopted', async () => {
+    coldMock()
+    const teardown = await initWorkspace()
+    workspace.set({ root: '/ws/a', tree: tree('a') })
+    expect(invoke).toHaveBeenCalledWith('watch_workspace', { root: '/ws/a' })
+    teardown()
+  })
+
+  it('re-points the watcher once per root switch, not per refresh', async () => {
+    coldMock()
+    const teardown = await initWorkspace()
+    workspace.set({ root: '/ws/a', tree: tree('a') })
+    workspace.set({ root: '/ws/b', tree: tree('b') })
+    // A plain refresh re-adopts the SAME root (fresh tree object): no re-invoke.
+    workspace.set({ root: '/ws/b', tree: tree('b') })
+    expect(watchCalls().map(([, args]) => args)).toEqual([{ root: '/ws/a' }, { root: '/ws/b' }])
+    teardown()
+  })
+
+  it('drops the watcher when the folder closes (root -> null)', async () => {
+    coldMock()
+    const teardown = await initWorkspace()
+    workspace.set({ root: '/ws/a', tree: tree('a') })
+    workspace.set({ root: null, tree: null })
+    expect(invoke).toHaveBeenCalledWith('unwatch_workspace')
+    teardown()
+  })
+
+  it('one workspace:changed delivery = one list_workspace; bursts in flight are dropped', async () => {
+    let resolveList: ((v: unknown) => void) | undefined
+    invoke.mockImplementation((cmd: unknown) => {
+      if (cmd === 'list_workspace')
+        return new Promise((r) => {
+          resolveList = r
+        })
+      return Promise.resolve(
+        cmd === 'take_startup_workspace' ? { workspace: null, suppress_restore: true } : null,
+      )
+    })
+    const teardown = await initWorkspace()
+    workspace.set({ root: '/ws/a', tree: tree('a') })
+
+    emitEvent('workspace:changed', { target: 'main' })
+    // Second delivery while the first walk is unresolved: dropped, not queued.
+    emitEvent('workspace:changed', { target: 'main' })
+    expect(listCalls()).toHaveLength(1)
+
+    resolveList?.({ root: '/ws/a', tree: tree('a') })
+    await new Promise((r) => setTimeout(r, 0))
+    // With the walk settled, the next burst refreshes again.
+    emitEvent('workspace:changed', { target: 'main' })
+    expect(listCalls()).toHaveLength(2)
+    teardown()
+  })
+
+  it("drops a delivery targeted at another window's label", async () => {
+    coldMock()
+    const teardown = await initWorkspace()
+    workspace.set({ root: '/ws/a', tree: tree('a') })
+    emitEvent('workspace:changed', { target: 'doc-2' })
+    expect(listCalls()).toHaveLength(0)
+    teardown()
+  })
+
+  it('fails open when the watch cannot be installed: logWarn territory, no banner', async () => {
+    invoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === 'watch_workspace') throw 'inotify exhausted'
+      return cmd === 'take_startup_workspace' ? { workspace: null, suppress_restore: true } : null
+    })
+    const teardown = await initWorkspace()
+    workspace.set({ root: '/ws/a', tree: tree('a') })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(get(errorMessage)).toBeNull()
+    expect(get(workspace).root).toBe('/ws/a')
+    teardown()
+  })
+
+  it('teardown stops the Rust watcher and unhooks event + store subscriptions', async () => {
+    coldMock()
+    const teardown = await initWorkspace()
+    workspace.set({ root: '/ws/a', tree: tree('a') })
+    teardown()
+    expect(invoke).toHaveBeenCalledWith('unwatch_workspace')
+    // Listener removed: a later delivery refreshes nothing.
+    emitEvent('workspace:changed', { target: 'main' })
+    expect(listCalls()).toHaveLength(0)
+    // Store subscription removed: a new root no longer re-points the watcher.
+    const watched = watchCalls().length
+    workspace.set({ root: '/ws/b', tree: tree('b') })
+    expect(watchCalls()).toHaveLength(watched)
   })
 })
 

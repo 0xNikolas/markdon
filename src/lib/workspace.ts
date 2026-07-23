@@ -5,6 +5,7 @@ import { doc } from './doc'
 import { reportError } from './errors'
 import { logWarn } from './logging'
 import { workspaceName } from './ui'
+import { listenScoped } from './windowing'
 
 /** A file leaf in the workspace tree (mirrors Rust `WorkspaceFile`). */
 export interface WorkspaceFile {
@@ -123,6 +124,24 @@ export async function refreshWorkspace(): Promise<void> {
   }
 }
 
+let refreshInFlight = false
+
+/**
+ * Watcher-driven refresh (`workspace:changed` deliveries). Bursts arriving
+ * while a walk is already running are DROPPED rather than queued — the Rust
+ * side already coalesces at 500ms, and the focus/doc-change refreshes are the
+ * backstop for anything a dropped burst would have shown.
+ */
+export async function refreshFromWatcher(): Promise<void> {
+  if (refreshInFlight) return
+  refreshInFlight = true
+  try {
+    await refreshWorkspace()
+  } finally {
+    refreshInFlight = false
+  }
+}
+
 /**
  * Restore the last workspace on launch. The root comes from Rust's own config
  * file (never a webview-supplied path), so this cannot mint a grant. A `null`
@@ -172,8 +191,11 @@ export async function takeStartupWorkspace(): Promise<boolean> {
  * (cold) launch — a spawned child starts folder-less rather than adopting its
  * spawner's folder; refresh the tree when the open document's path changes (a
  * Save As into the workspace shows the file immediately) and when the window
- * regains focus (external edits happen while unfocused). Returns an async
- * teardown, matching `initFileSync`.
+ * regains focus (external edits happen while unfocused). Also keeps a Rust-
+ * side recursive watcher pointed at the current root (installed/replaced on
+ * every root transition, torn down on close), whose debounced
+ * `workspace:changed` events refresh the tree WITHOUT a refocus. Returns an
+ * async teardown, matching `initFileSync`.
  */
 export function initWorkspace(): Promise<() => void> {
   takeStartupWorkspace().then((suppressRestore) => {
@@ -187,12 +209,35 @@ export function initWorkspace(): Promise<() => void> {
     if (s.path !== null) refreshWorkspace()
   })
 
+  // Root transitions (dialog open, restore, startup handoff, close) install /
+  // replace / drop the Rust watcher. Every refresh re-adopts the SAME root, so
+  // the guard keeps plain refreshes from re-invoking watch_workspace. Fail
+  // open on error: a folder that can't be watched (e.g. inotify exhaustion)
+  // still refreshes on focus/doc-change, so logWarn — never a banner.
+  let watchedRoot: string | null = get(workspace).root
+  const unsubWs = workspace.subscribe((s) => {
+    if (s.root === watchedRoot) return
+    watchedRoot = s.root
+    if (s.root !== null) {
+      invoke('watch_workspace', { root: s.root }).catch((e) => logWarn('workspace watch failed', e))
+    } else {
+      invoke('unwatch_workspace').catch((e) => logWarn('unwatch_workspace failed', e))
+    }
+  })
+
+  const unlistenChanged = listenScoped('workspace:changed', () => {
+    void refreshFromWatcher()
+  })
+
   const unlistenFocus = getCurrentWindow().onFocusChanged(({ payload: focused }) => {
     if (focused) refreshWorkspace()
   })
 
-  return unlistenFocus.then((unlisten) => () => {
+  return Promise.all([unlistenFocus, unlistenChanged]).then(([offFocus, offChanged]) => () => {
     unsubDoc()
-    unlisten()
+    unsubWs()
+    offFocus()
+    offChanged()
+    invoke('unwatch_workspace').catch((e) => logWarn('unwatch_workspace failed', e))
   })
 }

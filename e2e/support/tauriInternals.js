@@ -132,6 +132,8 @@
     set_readonly_menu_state: () => null,
     watch_file: () => null,
     unwatch: () => null,
+    watch_workspace: () => null,
+    unwatch_workspace: () => null,
     record_history: () => null,
     list_history: () => [],
     load_prefs: () => null,
