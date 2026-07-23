@@ -39,23 +39,37 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS universal (Apple Silicon + Intel). The app is macOS-only
-          # (objc2-app-kit / WKWebView), so no Windows/Linux targets.
-          - platform: macos-14
-            args: '--target universal-apple-darwin'
+          # Three SEPARATE artifacts (not a universal binary): each Mac slice
+          # is a native build, so there is no runtime cost either way — this
+          # just yields smaller per-arch downloads. The macOS-only native code
+          # (objc2/NSPrintOperation for PDF export) is cfg-gated, so Linux
+          # compiles with that feature degraded.
+          - platform: macos-14 # Apple Silicon
+            target: aarch64-apple-darwin
+          - platform: macos-14 # Apple Intel (cross-compiled on the arm64 runner)
+            target: x86_64-apple-darwin
+          - platform: ubuntu-22.04 # Linux AMD64 (22.04 for a lower glibc floor)
+            target: x86_64-unknown-linux-gnu
     runs-on: ${{ matrix.platform }}
     steps:
       # Build the exact tagged release commit, not just the workflow-run SHA.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ needs.release-please.outputs.tag_name }}
+      - name: Install Linux build dependencies (tauri v2)
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - uses: oven-sh/setup-bun@v2
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          key: ${{ matrix.target }}
       - run: bun install --frozen-lockfile
       - name: Build the app and upload it to the release
         uses: tauri-apps/tauri-action@v0
@@ -74,4 +88,4 @@ jobs:
           # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           releaseId: ${{ needs.release-please.outputs.release_id }}
-          args: ${{ matrix.args }}
+          args: --target ${{ matrix.target }}

@@ -11,7 +11,7 @@ jobs:
     # environment, no browser); e2e (WebKit) + rust below need macOS.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun run check
@@ -20,7 +20,7 @@ jobs:
   e2e:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bunx playwright install --with-deps webkit
@@ -40,7 +40,7 @@ jobs:
       run:
         working-directory: src-tauri
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -57,28 +57,42 @@ jobs:
   # frontend forces a re-embed; this job proves the shipped binary actually
   # carries the current dist/assets/index-<hash>.js.
   release-build:
-    runs-on: macos-14
+    # Compile the real release binary on every shipped platform — Rust in
+    # release profile with the frontend embedded via generate_context!() — so a
+    # RELEASE-ONLY break (a compile error behind cfg(not(debug_assertions)), a
+    # bad tauri.conf, a frontend build failure, or a macOS-ism that breaks the
+    # Linux build) fails CI here instead of only at release time. The `rust`
+    # job only compiles in the test profile, so this is the only gate that
+    # exercises the shipped build. Both Mac targets share one OS, so building
+    # the host arch is enough to prove macOS compiles.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-14
+          - platform: ubuntu-22.04
+    runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+      - name: Install Linux build dependencies (tauri v2)
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - uses: oven-sh/setup-bun@v2
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          key: ${{ matrix.platform }}
       - run: bun install --frozen-lockfile
-      # Compile the real release binary — Rust in release profile with the
-      # frontend embedded via generate_context!() — so a RELEASE-ONLY break
-      # (a compile error behind cfg(not(debug_assertions)), a bad tauri.conf,
-      # a frontend build failure) fails CI here instead of only at release
-      # time. The `rust` job only compiles in the test profile, so this is the
-      # only gate that exercises the shipped build. --no-bundle skips DMG
-      # packaging + signing. The structural guard against STALE embedded assets
-      # is build.rs's `cargo:rerun-if-changed=../dist` (verified locally); we do
-      # not re-grep the binary for the asset hash — tauri's release asset-key
-      # storage is not reliably plaintext across environments.
+      # --no-bundle skips DMG/deb/AppImage packaging (not needed to prove the
+      # binary compiles). The structural guard against STALE embedded assets is
+      # build.rs's `cargo:rerun-if-changed=../dist` (verified locally).
       - name: Build the release binary (smoke test)
         run: |
           set -euo pipefail
           bunx tauri build --no-bundle
           test -f src-tauri/target/release/app
-          echo "OK: release binary built"
+          echo "OK: release binary built on ${{ matrix.platform }}"
