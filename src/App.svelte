@@ -46,7 +46,9 @@
     closeTabDecision,
     drainOpenedFiles,
     syncReadonlyMenu,
+    type MenuEventMap,
   } from './lib/appBoot'
+  import type { Routed } from './lib/windowing'
   import { allowsNativeContextMenu } from './lib/contextMenu'
   import Editor from './Editor.svelte'
   import ImageView from './ImageView.svelte'
@@ -63,17 +65,12 @@
   import Sidebar from './Sidebar.svelte'
   import { searchUi, openFind, openReplace, closeFind, shouldForceCloseFind } from './lib/searchPlugin'
   import { openSourceSearch, clearPendingLine } from './lib/sourceEditor'
+  import { split, emptyState, imageView, isMacPlatform } from './lib/ui'
   import {
-    split,
-    emptyState,
-    imageView,
-    isMacPlatform,
-    isGotoLineFallbackKey,
-    isFindReplaceFallbackKey,
-    isQuickOpenKey,
-    fileCycleDirection,
-    isReopenClosedKey,
-  } from './lib/ui'
+    matchKeydown,
+    menuItemIds,
+    type KeydownGuard,
+  } from './lib/keymap'
   import type { StripRowAction } from './OpenFilesStrip.svelte'
   import { activeOverlay, openOverlay, closeOverlay, anyOverlayOpen } from './lib/overlay'
   import {
@@ -516,11 +513,100 @@
     handleOpenFile(path, { inPlace: true })
   }
 
+  // menu:<id> routing table — the exact closures the hand-written menuEvents
+  // map used, now keyed by bare id so the menu subscription can be DERIVED from
+  // the one keymap (keymap.ts's menuItemIds). App still owns these closures
+  // because they close over its stores/helpers. Each per-action guard
+  // (unlessEmpty, the history/readonly/close_tab inline gates) stays INSIDE its
+  // closure: menu routes deliberately gate DIFFERENTLY from the keyboard
+  // fallbacks — e.g. a native Cmd+Alt+F emits menu:find_replace even behind an
+  // overlay (no overlay gate), while the Cmd+Alt+F keydown fallback does gate —
+  // so the two must not share the keydown driver's guard.
+  const menuActions: Record<string, (payload?: Routed | null) => void> = {
+    new: newUntitled,
+    open: openFileDialog,
+    save: unlessEmpty(() => void save()),
+    save_as: unlessEmpty(() => void saveAs()),
+    find: unlessEmpty(routeFind),
+    find_replace: unlessEmpty(routeFindReplace),
+    goto_line: unlessEmpty(() => {
+      // The native Edit menu item isn't disabled by app state (menu.rs has no
+      // such wiring), so it stays clickable while another overlay is up.
+      // openOverlay enforces mutual exclusion at the store: it refuses (no-op)
+      // if one is already open, so Go to Line can't stack its focus trap behind
+      // the discard guard / Settings / History (DEFECT A1).
+      openOverlay({ kind: 'goto' })
+    }),
+    history: () => {
+      // Untitled/never-saved docs have no history — the menu item no-ops. The
+      // same check already covers the empty page (its underlying scratch is
+      // pathless), so no unlessEmpty gate is needed here. openOverlay handles
+      // modal precedence (refuses if any overlay is open).
+      if (get(doc).path === null) return
+      openOverlay({ kind: 'history' })
+    },
+    toggle_readonly: () => {
+      // The native menu item is always clickable, and muda optimistically flips
+      // its check on click before this fires. Read-only isn't itself an overlay
+      // (toggleReadonly may OPEN the discard guard via the dirty path), so this
+      // can't lean on openOverlay's refusal — it gates on anyOverlayOpen()
+      // directly, plus the empty page (no document to lock). When blocked,
+      // re-sync the check to the store's real value to undo muda's optimistic
+      // flip (the store didn't change, so the subscription won't).
+      if (anyOverlayOpen() || get(emptyState)) {
+        syncReadonlyMenu(get(doc).readonly)
+        return
+      }
+      toggleReadonly()
+    },
+    // Deliberately NOT unlessEmpty-gated: Quick Open must work from the empty
+    // page when a workspace exists (see openQuickOpen's own gate).
+    quick_open: openQuickOpen,
+    settings: () => openOverlay({ kind: 'settings' }),
+    open_folder: () => openWorkspace(),
+    close_folder: () => closeWorkspace(),
+    open_recent: (p) => {
+      const root = p?.root
+      if (typeof root === 'string') void openRecentWorkspace(root)
+    },
+    show_log: () => revealLog(),
+    close_tab: () => {
+      // The Cmd+W routing rules live in closeTabDecision (appBoot.ts).
+      const d = closeTabDecision(get(doc).path, get(previewPath), get(openList))
+      switch (d.kind) {
+        case 'close-file':
+          onCloseFile(d.path)
+          break
+        case 'reopen-preview':
+          switchGuarded(() => openPath(d.path, { preview: true }))
+          break
+        case 'reopen-pinned':
+          switchGuarded(() => openPath(d.path))
+          break
+        case 'close-window':
+          closeThisWindow()
+          break
+      }
+    },
+    close_window: closeThisWindow,
+    export: unlessEmpty(() => void exportDocument()),
+  }
+
   // All boot wiring (event subscriptions, startup drains, watcher/workspace
   // init, native-chrome mirrors) lives in appBoot.ts; App supplies only the
-  // UI-flow closures the handlers need.
-  onMount(() =>
-    bootApp({
+  // UI-flow closures the handlers need. The menu:<id> subscriptions are derived
+  // from the keymap so the table is the single source; the two non-menu window
+  // events (native close, Finder open) are added alongside.
+  onMount(() => {
+    const menuEvents: MenuEventMap = {
+      'window:close-requested': closeThisWindow,
+      'file:opened': () => void drainOpenedFiles(openStartupFile),
+    }
+    for (const id of menuItemIds()) {
+      const action = menuActions[id]
+      if (action) menuEvents[`menu:${id}`] = action
+    }
+    return bootApp({
       openStartupFile,
       // A workspace restore (boot settlement or a mid-session root adopt of a
       // clean folder-less window) rebuilds the whole Open Files strip and
@@ -529,80 +615,9 @@
       // Nothing valid remembered: a fresh untitled scratch, the exact
       // File > New closure (switch-guarded newDoc).
       openScratch: newUntitled,
-      menuEvents: {
-        'menu:new': newUntitled,
-        'menu:open': openFileDialog,
-        'menu:save': unlessEmpty(() => void save()),
-        'menu:save_as': unlessEmpty(() => void saveAs()),
-        'menu:find': unlessEmpty(routeFind),
-        'menu:find_replace': unlessEmpty(routeFindReplace),
-        'menu:goto_line': unlessEmpty(() => {
-          // The native Edit menu item isn't disabled by app state (menu.rs has
-          // no such wiring), so it stays clickable while another overlay is up.
-          // openOverlay enforces mutual exclusion at the store: it refuses (no-op)
-          // if one is already open, so Go to Line can't stack its focus trap
-          // behind the discard guard / Settings / History (DEFECT A1).
-          openOverlay({ kind: 'goto' })
-        }),
-        'menu:history': () => {
-          // Untitled/never-saved docs have no history — the menu item no-ops.
-          // The same check already covers the empty page (its underlying
-          // scratch is pathless), so no unlessEmpty gate is needed here.
-          // openOverlay handles modal precedence (refuses if any overlay is open).
-          if (get(doc).path === null) return
-          openOverlay({ kind: 'history' })
-        },
-        'menu:toggle_readonly': () => {
-          // The native menu item is always clickable, and muda optimistically
-          // flips its check on click before this fires. Read-only isn't itself an
-          // overlay (toggleReadonly may OPEN the discard guard via the dirty
-          // path), so this can't lean on openOverlay's refusal — it gates on
-          // anyOverlayOpen() directly, plus the empty page (no document to
-          // lock). When blocked, re-sync the check to the store's real value
-          // to undo muda's optimistic flip (the store didn't change, so the
-          // subscription won't).
-          if (anyOverlayOpen() || get(emptyState)) {
-            syncReadonlyMenu(get(doc).readonly)
-            return
-          }
-          toggleReadonly()
-        },
-        // Deliberately NOT unlessEmpty-gated: Quick Open must work from the
-        // empty page when a workspace exists (see openQuickOpen's own gate).
-        'menu:quick_open': openQuickOpen,
-        'menu:settings': () => openOverlay({ kind: 'settings' }),
-        'menu:open_folder': () => openWorkspace(),
-        'menu:close_folder': () => closeWorkspace(),
-        'menu:open_recent': (p) => {
-          const root = p?.root
-          if (typeof root === 'string') void openRecentWorkspace(root)
-        },
-        'menu:show_log': () => revealLog(),
-        'menu:close_tab': () => {
-          // The Cmd+W routing rules live in closeTabDecision (appBoot.ts).
-          const d = closeTabDecision(get(doc).path, get(previewPath), get(openList))
-          switch (d.kind) {
-            case 'close-file':
-              onCloseFile(d.path)
-              break
-            case 'reopen-preview':
-              switchGuarded(() => openPath(d.path, { preview: true }))
-              break
-            case 'reopen-pinned':
-              switchGuarded(() => openPath(d.path))
-              break
-            case 'close-window':
-              closeThisWindow()
-              break
-          }
-        },
-        'menu:close_window': closeThisWindow,
-        'menu:export': unlessEmpty(() => void exportDocument()),
-        'window:close-requested': closeThisWindow,
-        'file:opened': () => void drainOpenedFiles(openStartupFile),
-      },
-    }),
-  )
+      menuEvents,
+    })
+  })
 
   // Route Cmd+F by view mode: split -> CodeMirror's native search panel;
   // WYSIWYG -> the Milkdown FindBar. openSourceSearch() no-ops (returns false)
@@ -649,80 +664,94 @@
     flushBufferEdits()
   })
 
-  // Esc closes the find bar even when focus is inside the editor (FindBar's
-  // own onkeydown only sees Esc while its input is focused). Also a
-  // Cmd/Ctrl+F fallback for platforms where the native menu accelerator
-  // (src-tauri/src/menu.rs) doesn't reach the webview -- a no-op if the
-  // menu already handled it, since the find command is idempotent while open.
-  // In split mode CodeMirror owns its panel's Esc, so we only close the
-  // FindBar here (WYSIWYG).
+  // Ctrl+Tab / Ctrl+Shift+Tab / CmdOrCtrl+Shift+]/[: cycle the Open Files strip
+  // in row order (see neighbourInStrip — deliberately a wrap-around cycle, not
+  // VS Code's MRU picker). The target keeps its row kind: a pinned row is a
+  // plain openPath (pinOpen is a no-op on an already-pinned path, the preview
+  // slot untouched), the preview row re-opens AS a preview so cycling through
+  // it never promotes it — pin/preview state is unchanged either way, and the
+  // buffer cache makes the switch instant and lossless for dirty rows. `null`:
+  // fewer than 2 rows (with the untitled scratch active, ANY row is a target —
+  // neighbourInStrip enters the cycle at the first/last row).
+  function cycleFiles(dir: 1 | -1) {
+    const target = neighbourInStrip(get(doc).path, get(openList), get(previewPath), dir)
+    if (target === null) return
+    const preview = target === get(previewPath)
+    switchGuarded(() => openPath(target, { preview }))
+  }
+
+  // The keyboard-fallback action for each keymap id that has a JS match. These
+  // are the run() bodies moved verbatim from the old if-chain; the keymap's
+  // match/guard/preventDefault flags decide WHEN each fires (see the driver
+  // below). Distinct from menuActions: the keydown Find/Find-and-Replace/Go-to-
+  // Line runs are UNgated here (the driver applies their overlay/empty guards),
+  // whereas the menu variants wrap themselves in unlessEmpty.
+  const keydownActions: Record<string, () => void> = {
+    quick_open: openQuickOpen,
+    reopen_closed: () => void reopenClosedFile(),
+    file_cycle_next: () => cycleFiles(1),
+    file_cycle_prev: () => cycleFiles(-1),
+    find_replace: routeFindReplace,
+    find: routeFind,
+    goto_line: () => openOverlay({ kind: 'goto' }),
+  }
+
+  // Resolve a matched binding's guard against live app state — the exact
+  // conditions the old if-chain used inline:
+  //   'overlay'       -> Quick Open / Reopen: skip while any overlay is up.
+  //   'overlay-empty' -> file cycle / Find-and-Replace / Go to Line: skip
+  //                      behind an overlay OR on the empty page.
+  //   'empty'         -> Find: only the empty-page gate (it deliberately claims
+  //                      Cmd/Ctrl+F even while other surfaces are open).
+  function keydownGuardOk(guard: KeydownGuard | undefined): boolean {
+    switch (guard) {
+      case 'overlay':
+        return !anyOverlayOpen()
+      case 'overlay-empty':
+        return !anyOverlayOpen() && !get(emptyState)
+      case 'empty':
+        return !get(emptyState)
+      default:
+        return true
+    }
+  }
+
+  // The window keydown driver. The one declarative keymap (keymap.ts) decides
+  // WHAT matches and HOW it is guarded/claimed; this only interprets the flags:
   //
-  // Go to Line's fallback is gated per-platform (isGotoLineFallbackKey):
-  // on mac it's metaKey-ONLY, NEVER ctrlKey too, since @codemirror/commands
-  // binds mac:'Ctrl-l' to selectLine and treating Ctrl+L as Go to Line in
-  // split mode would fight CM's own binding; everywhere else CmdOrCtrl+L IS
-  // Ctrl+L and CM's non-mac selectLine binding is Alt-L (no collision), so
-  // ctrlKey is honored there too -- otherwise the fallback would be
-  // unreachable by keyboard on Windows/Linux. Unlike the ungated Cmd+F
-  // fallback above, this one skips while any overlay is already up
-  // (anyOverlayOpen(): the discard guard, Settings, History, or the popover
-  // itself) so it can't double-open or steal focus from a higher-priority
-  // surface.
+  //  - matchKeydown runs the table in order, first match wins — preserving the
+  //    load-bearing precedence (Find-and-Replace before Find, so Cmd+Alt+F is
+  //    never mis-claimed by the looser Find matcher on platforms where Option
+  //    doesn't remap e.key).
+  //  - preventDefault:'always' claims the combo BEFORE the guard check (so
+  //    Cmd/Ctrl+P, Ctrl+Tab and Cmd+Shift+T/brackets never leak to the
+  //    webview's print/focus-traversal/reopen defaults even when the action
+  //    no-ops); 'onRun' claims it only after the guard passes (Find / Find-and-
+  //    Replace / Go to Line return WITHOUT preventDefault when gated out).
   //
-  // Find and Replace's fallback (isFindReplaceFallbackKey) is checked BEFORE
-  // the plain Cmd+F branch and gated the same way as Go to Line: it must run
-  // first because Cmd+Alt+F would otherwise also satisfy the looser Cmd+F
-  // test below on platforms where Option doesn't remap `e.key` (see
-  // isFindReplaceFallbackKey's doc comment on why it checks e.code instead).
+  // The two Escape fallbacks stay INLINE below (not in the pure table): they
+  // read live $searchUi / $activeOverlay, not just the event. They sit after
+  // the empty-page gate, exactly as before — closing the find bar (WYSIWYG;
+  // CodeMirror owns its own panel's Esc in split mode) or the Go to Line
+  // popover.
   const macPlatform = isMacPlatform()
   function handleWindowKeydown(e: KeyboardEvent) {
-    // Quick Open runs BEFORE the empty-page gate below: with a workspace open
-    // it is the keyboard way OUT of the empty page. The combo is claimed
-    // (preventDefault) even when the open is refused — Cmd/Ctrl+P would
-    // otherwise fall through to the webview's print dialog, which is never
-    // what a ⌘P in this app means. isQuickOpenKey carries the same mac
-    // Ctrl-carve-out as Go to Line (CM binds mac Ctrl-P to cursorLineUp).
-    if (isQuickOpenKey(e, macPlatform)) {
-      e.preventDefault()
-      if (!anyOverlayOpen()) openQuickOpen()
+    const hit = matchKeydown(e, macPlatform)
+    if (hit) {
+      const ok = keydownGuardOk(hit.keydownGuard)
+      if (hit.preventDefault === 'always') {
+        e.preventDefault()
+        if (!ok) return
+      } else {
+        if (!ok) return
+        e.preventDefault()
+      }
+      keydownActions[hit.id]?.()
       return
     }
-    // CmdOrCtrl+Shift+T: reopen the most recently closed strip entry. Runs
-    // BEFORE the empty-page gate — closing the LAST file lands on the empty
-    // page, which is exactly where reopening earns its keep (openPath's doc
-    // load dismisses the page). Claimed even when the stack is empty so the
-    // browser's own reopen-tab default can't fire; inert behind overlays.
-    if (isReopenClosedKey(e, macPlatform)) {
-      e.preventDefault()
-      if (anyOverlayOpen()) return
-      void reopenClosedFile()
-      return
-    }
-    // Ctrl+Tab / Ctrl+Shift+Tab / CmdOrCtrl+Shift+]/[: cycle the Open Files
-    // strip in row order (see neighbourInStrip — deliberately a wrap-around
-    // cycle, not VS Code's MRU picker). Claimed (preventDefault) even when the
-    // switch is refused — Ctrl+Tab would otherwise focus-traverse the webview.
-    // No-ops behind any overlay (same gate as Go to Line) and on the empty
-    // page (no strip). The target keeps its row kind: a pinned row is a plain
-    // openPath (pinOpen is a no-op on an already-pinned path, the preview slot
-    // untouched), the preview row re-opens AS a preview so cycling through it
-    // never promotes it — pin/preview state is unchanged either way, and the
-    // buffer cache makes the switch instant and lossless for dirty rows.
-    const cycleDir = fileCycleDirection(e, macPlatform)
-    if (cycleDir !== null) {
-      e.preventDefault()
-      if (anyOverlayOpen() || get(emptyState)) return
-      const target = neighbourInStrip(get(doc).path, get(openList), get(previewPath), cycleDir)
-      // null: fewer than 2 rows (with the untitled scratch active, ANY row is
-      // a target — neighbourInStrip enters the cycle at the first/last row).
-      if (target === null) return
-      const preview = target === get(previewPath)
-      switchGuarded(() => openPath(target, { preview }))
-      return
-    }
-    // Empty page up: every branch below is a document/editor action (find,
-    // find-replace, go-to-line, or Escape for surfaces that can't be open
-    // while empty) — the same gate the menu routes get via unlessEmpty.
+    // No table match. The remaining Escape fallbacks are document/editor
+    // actions, so the empty page gates them out — the same gate the menu routes
+    // get via unlessEmpty.
     if (get(emptyState)) return
     if (e.key === 'Escape' && $searchUi.open && $activeOverlay?.kind !== 'discard') {
       e.preventDefault()
@@ -731,17 +760,6 @@
       e.preventDefault()
       clearPendingLine()
       closeOverlay()
-    } else if (isFindReplaceFallbackKey(e)) {
-      if (anyOverlayOpen()) return
-      e.preventDefault()
-      routeFindReplace()
-    } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
-      e.preventDefault()
-      routeFind()
-    } else if (isGotoLineFallbackKey(e, macPlatform)) {
-      if (anyOverlayOpen()) return
-      e.preventDefault()
-      openOverlay({ kind: 'goto' })
     }
   }
 

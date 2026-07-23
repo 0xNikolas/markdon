@@ -4,7 +4,12 @@
   import Icon from './Icon.svelte'
   import { closeOverlay } from './lib/overlay'
   import { settings, updateSetting, type Settings } from './lib/settings'
-  import { APP_SHORTCUTS } from './lib/shortcuts'
+  import { settingsList } from './lib/keymap'
+
+  // The Settings Shortcuts rows come straight from the one declarative keymap
+  // (src/lib/keymap.ts) — the same table that drives the window keydown handler
+  // and menu routing — so this panel can never drift from the real bindings.
+  const shortcuts = settingsList()
   import { focusTrap, dialogDismissHandlers } from './lib/focusTrap'
 
   type TabId = 'general' | 'editor' | 'appearance' | 'export' | 'shortcuts'
@@ -294,7 +299,7 @@
         <div id="panel-shortcuts" role="tabpanel" aria-labelledby="tab-shortcuts" class="panel">
           <section class="section shortcuts">
             <h3>Keyboard Shortcuts</h3>
-            {#each APP_SHORTCUTS as s (s.label)}
+            {#each shortcuts as s (s.label)}
               <div class="shortcut-row">
                 <span class="label">
                   {s.label}
