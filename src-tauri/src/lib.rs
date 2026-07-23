@@ -378,6 +378,7 @@ pub fn run() {
             commands::write_file,
             commands::resolve_image_asset,
             commands::reveal_log_file,
+            commands::reveal_path,
             take_opened_files,
             windows::take_window_file,
             set_readonly_menu_state,

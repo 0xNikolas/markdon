@@ -39,6 +39,29 @@ export function removeOpen(list: string[], path: string): string[] {
 }
 
 /**
+ * Insert `path` at `index` (clamped to the list's bounds) — Reopen Closed
+ * File's "back at its old position" re-insert. Already-present paths are a
+ * referential no-op, keeping their current position (the file was manually
+ * reopened in the meantime; a duplicate row must never appear).
+ */
+export function insertOpenAt(list: string[], path: string, index: number): string[] {
+  if (list.includes(path)) return list
+  const i = Math.max(0, Math.min(index, list.length))
+  return [...list.slice(0, i), path, ...list.slice(i)]
+}
+
+/**
+ * The strip's visible row order: the pinned rows plus the preview row
+ * appended last when one is showing — exactly what OpenFilesStrip.svelte
+ * renders (a preview that is also pinned draws no extra row, mirrored here).
+ * Shared by cycling, bulk-close planning, and the close-time index recorded
+ * for Reopen Closed File.
+ */
+export function stripOrder(open: string[], preview: string | null): string[] {
+  return preview !== null && !open.includes(preview) ? [...open, preview] : open
+}
+
+/**
  * Follow a rename/move of any entry (file or an ANCESTOR folder) into
  * openList — mirrors doc.ts's `retargetPath`. Rewrites an exact match, or
  * every entry nested under a moved folder (segment-safe prefix rewrite),
@@ -140,12 +163,62 @@ export function neighbourInStrip(
   preview: string | null,
   dir: 1 | -1,
 ): string | null {
-  const strip = preview !== null && !open.includes(preview) ? [...open, preview] : open
+  const strip = stripOrder(open, preview)
   if (strip.length === 0) return null
   const i = current === null ? -1 : strip.indexOf(current)
   if (i === -1) return dir === 1 ? strip[0] : strip[strip.length - 1]
   if (strip.length < 2) return null
   return strip[(i + dir + strip.length) % strip.length]
+}
+
+// -- strip context-menu bulk closes -------------------------------------------
+
+export type BulkCloseKind = 'others' | 'saved' | 'all'
+
+export interface BulkClosePlan {
+  /** Background rows to close immediately — all guaranteed clean. */
+  close: string[]
+  /** Dirty background rows deliberately kept open (the caller notices them). */
+  keptDirty: string[]
+  /** Close the ACTIVE row too, via the caller's normal guarded close path. */
+  closeActive: boolean
+}
+
+/**
+ * Which strip rows a context-menu bulk close ('Close Others' / 'Close Saved'
+ * / 'Close All' on `target`) actually closes. Deliberately SIMPLER than VS
+ * Code's per-file prompt chain, and honest about it:
+ *
+ * - Dirty BACKGROUND rows (unsaved edits stashed in the buffer cache) are
+ *   never closed by a bulk action — 'others'/'all' SKIP them and report the
+ *   kept count via `keptDirty` (the caller shows one notice), instead of
+ *   walking a sequential prompt chain through the single discard overlay.
+ *   'saved' excludes them by definition (they aren't saved), so it reports no
+ *   `keptDirty` — nothing was skipped that was supposed to close.
+ * - The ACTIVE row is kept by 'others' (even when it isn't `target`) and by
+ *   'saved'; only 'all' closes it — via `closeActive`, which the caller
+ *   routes through its ordinary guarded close so a dirty live doc still gets
+ *   its one prompt. An active doc with no strip row (the untitled scratch)
+ *   yields closeActive=false — 'all' only empties the strip around it.
+ *
+ * `rows` is the strip's visible order (see stripOrder); `dirty` is the
+ * cached-dirty set (bufferCache.dirtyCached — the live doc's dirtiness is the
+ * guarded path's business, not this plan's).
+ */
+export function bulkClosePlan(
+  kind: BulkCloseKind,
+  rows: readonly string[],
+  target: string,
+  active: string | null,
+  dirty: ReadonlySet<string>,
+): BulkClosePlan {
+  const background = rows.filter((p) => p !== active)
+  const candidates = kind === 'others' ? background.filter((p) => p !== target) : background
+  return {
+    close: candidates.filter((p) => !dirty.has(p)),
+    keptDirty: kind === 'saved' ? [] : candidates.filter((p) => dirty.has(p)),
+    closeActive: kind === 'all' && active !== null && rows.includes(active),
+  }
 }
 
 /**

@@ -3,6 +3,9 @@ import { get } from 'svelte/store'
 import {
   addOpen,
   removeOpen,
+  insertOpenAt,
+  stripOrder,
+  bulkClosePlan,
   neighbourAfterClose,
   neighbourInStrip,
   retargetOpen,
@@ -274,5 +277,103 @@ describe('neighbourInStrip', () => {
   it('is null on an empty strip', () => {
     expect(neighbourInStrip(null, [], null, 1)).toBeNull()
     expect(neighbourInStrip('/a.md', [], null, -1)).toBeNull()
+  })
+})
+
+describe('insertOpenAt', () => {
+  it('inserts at the given index, shifting later entries', () => {
+    expect(insertOpenAt(['/a.md', '/c.md'], '/b.md', 1)).toEqual(['/a.md', '/b.md', '/c.md'])
+  })
+
+  it('clamps an out-of-range index to an append (old index no longer fits)', () => {
+    expect(insertOpenAt(['/a.md'], '/b.md', 5)).toEqual(['/a.md', '/b.md'])
+  })
+
+  it('clamps a negative index to the front', () => {
+    expect(insertOpenAt(['/a.md'], '/b.md', -2)).toEqual(['/b.md', '/a.md'])
+  })
+
+  it('is a referential no-op when the path is already present (keeps its position)', () => {
+    const list = ['/a.md', '/b.md']
+    expect(insertOpenAt(list, '/b.md', 0)).toBe(list)
+  })
+
+  it('inserts into an empty list', () => {
+    expect(insertOpenAt([], '/a.md', 3)).toEqual(['/a.md'])
+  })
+})
+
+describe('stripOrder', () => {
+  it('is the pinned list alone with no preview', () => {
+    expect(stripOrder(['/a.md', '/b.md'], null)).toEqual(['/a.md', '/b.md'])
+  })
+
+  it('appends the preview row last', () => {
+    expect(stripOrder(['/a.md'], '/p.md')).toEqual(['/a.md', '/p.md'])
+  })
+
+  it('draws no extra row for a preview that is also pinned', () => {
+    const list = ['/a.md', '/p.md']
+    expect(stripOrder(list, '/p.md')).toBe(list)
+  })
+})
+
+describe('bulkClosePlan', () => {
+  const rows = ['/a.md', '/b.md', '/c.md', '/d.md']
+  const none = new Set<string>()
+
+  it("'others': closes every clean row except target and active", () => {
+    const plan = bulkClosePlan('others', rows, '/b.md', '/b.md', none)
+    expect(plan).toEqual({ close: ['/a.md', '/c.md', '/d.md'], keptDirty: [], closeActive: false })
+  })
+
+  it("'others': keeps the active row even when it is not the target", () => {
+    const plan = bulkClosePlan('others', rows, '/b.md', '/d.md', none)
+    expect(plan.close).toEqual(['/a.md', '/c.md'])
+    expect(plan.closeActive).toBe(false)
+  })
+
+  it("'others': skips dirty background rows, reporting them as kept", () => {
+    const plan = bulkClosePlan('others', rows, '/b.md', '/b.md', new Set(['/c.md']))
+    expect(plan.close).toEqual(['/a.md', '/d.md'])
+    expect(plan.keptDirty).toEqual(['/c.md'])
+  })
+
+  it("'saved': closes clean background rows INCLUDING a clean target, keeps active", () => {
+    const plan = bulkClosePlan('saved', rows, '/b.md', '/d.md', none)
+    expect(plan).toEqual({ close: ['/a.md', '/b.md', '/c.md'], keptDirty: [], closeActive: false })
+  })
+
+  it("'saved': excludes dirty rows by definition — nothing reported as kept", () => {
+    const plan = bulkClosePlan('saved', rows, '/b.md', '/d.md', new Set(['/a.md']))
+    expect(plan.close).toEqual(['/b.md', '/c.md'])
+    expect(plan.keptDirty).toEqual([]) // dirty rows were never supposed to close
+  })
+
+  it("'all': closes clean background rows, keeps dirty ones, and closes the active row via the guard", () => {
+    const plan = bulkClosePlan('all', rows, '/b.md', '/d.md', new Set(['/a.md']))
+    expect(plan).toEqual({
+      close: ['/b.md', '/c.md'],
+      keptDirty: ['/a.md'],
+      closeActive: true,
+    })
+  })
+
+  it("'all': an active doc with no strip row (untitled scratch) yields closeActive=false", () => {
+    expect(bulkClosePlan('all', rows, '/b.md', null, none).closeActive).toBe(false)
+    expect(bulkClosePlan('all', rows, '/b.md', '/zz.md', none).closeActive).toBe(false)
+  })
+
+  it('single-row strip: others is an all-keep no-op, all closes just the active target', () => {
+    expect(bulkClosePlan('others', ['/a.md'], '/a.md', '/a.md', none)).toEqual({
+      close: [],
+      keptDirty: [],
+      closeActive: false,
+    })
+    expect(bulkClosePlan('all', ['/a.md'], '/a.md', '/a.md', none)).toEqual({
+      close: [],
+      keptDirty: [],
+      closeActive: true,
+    })
   })
 })

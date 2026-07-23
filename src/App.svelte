@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { getCurrentWindow } from '@tauri-apps/api/window'
+  import { invoke } from '@tauri-apps/api/core'
   import { get } from 'svelte/store'
   import {
     doc,
@@ -31,9 +32,14 @@
     pinOpen,
     pinPreview,
     removeOpen,
+    insertOpenAt,
+    stripOrder,
+    bulkClosePlan,
     neighbourAfterClose,
     neighbourInStrip,
+    type BulkCloseKind,
   } from './lib/openList'
+  import { recordClosed, takeClosed, MAX_CLOSED } from './lib/closedStack'
   import { conflict, reloadFromDisk, dismissConflict } from './lib/fileSync'
   import {
     bootApp,
@@ -64,10 +70,12 @@
     isFindReplaceFallbackKey,
     isQuickOpenKey,
     fileCycleDirection,
+    isReopenClosedKey,
   } from './lib/ui'
+  import type { StripRowAction } from './OpenFilesStrip.svelte'
   import { activeOverlay, openOverlay, closeOverlay, anyOverlayOpen } from './lib/overlay'
   import { workspace, openWorkspace, openRecentWorkspace, closeWorkspace } from './lib/workspace'
-  import { revealLog } from './lib/errors'
+  import { revealLog, reportError, reportNotice } from './lib/errors'
   import { exportDocument } from './lib/export'
   import { flushBufferEdits } from './lib/bufferFlush'
   import { focusTrap, dialogDismissHandlers } from './lib/focusTrap'
@@ -244,22 +252,32 @@
   // one), so closing an active preview appends it for the lookup — its
   // visual previous neighbour is the last pinned entry, not a blank new doc.
   // Clearing state inside the guard keeps Cancel non-destructive.
+  // Remove a NON-ACTIVE strip row (pinned or preview), evict its cache entry,
+  // and record it for Reopen Closed File — the shared removal step for the
+  // strip close button's background branch and the context menu's bulk closes
+  // (whose plans only ever contain clean background rows). The reopen index
+  // is captured BEFORE removal: a pinned row's list position, a preview row's
+  // after-the-pinned-rows slot.
+  function closeBackgroundRow(path: string) {
+    const isPreview = path === get(previewPath)
+    const index = isPreview ? get(openList).length : get(openList).indexOf(path)
+    if (isPreview) previewPath.set(null)
+    else openList.update((l) => removeOpen(l, path))
+    evict(path)
+    if (index !== -1) recordClosed(path, index)
+  }
+
   function onCloseFile(path: string) {
     if (path !== get(doc).path) {
-      const closeBackground = () => {
-        if (path === get(previewPath)) previewPath.set(null)
-        else openList.update((l) => removeOpen(l, path))
-        evict(path)
-      }
       if (isCachedDirty(path)) {
         pendingPreviewPath = null
         openOverlay({
           kind: 'discard',
-          action: closeBackground,
+          action: () => closeBackgroundRow(path),
           save: () => saveCachedBuffer(path),
         })
       } else {
-        closeBackground()
+        closeBackgroundRow(path)
       }
       return
     }
@@ -273,16 +291,97 @@
       const cur = get(doc)
       if (isDirty(cur)) revertBuffer(cur.savedContent)
       const list = get(openList)
-      const lookup = path === get(previewPath) ? [...list, path] : list
+      const isPreview = path === get(previewPath)
+      const lookup = isPreview ? [...list, path] : list
       const next = neighbourAfterClose(lookup, path, get(doc).path)
+      const closedIndex = isPreview ? list.length : list.indexOf(path)
       previewPath.update((pv) => (pv === path ? null : pv))
       openList.update((l) => removeOpen(l, path))
       evict(path) // close destroys: drop any (defensive) cache entry with the row
+      if (closedIndex !== -1) recordClosed(path, closedIndex)
       // Closing the LAST open file lands on the no-document empty page (VS
       // Code parity) — an explicit Cmd+N from there still yields the scratch.
       if (next === null) showEmptyState()
       else openPath(next)
     })
+  }
+
+  // Reopen Closed File (Cmd/Ctrl+Shift+T): pop the newest recorded close and
+  // restore it PINNED at its old strip index (insertOpenAt clamps; a path
+  // meanwhile reopened by hand keeps its current row). The cache entry was
+  // evicted at close time, so openPath re-reads from disk — reopen never
+  // resurrects discarded edits. Entries whose file no longer exists are
+  // skipped SILENTLY: a cheap read_file probe runs first, so a vanished file
+  // falls through to the next entry instead of spawning an error banner (the
+  // stack is capped at MAX_CLOSED, bounding the loop; a probe-then-open race
+  // still lands in openPath's ordinary error path, acceptable). The open
+  // itself is switch-guarded like every other open — only a dirty untitled
+  // scratch prompts.
+  async function reopenClosedFile() {
+    for (let attempts = 0; attempts < MAX_CLOSED; attempts++) {
+      const entry = takeClosed()
+      if (entry === null) return
+      try {
+        await invoke('read_file', { path: entry.path }) // existence probe
+      } catch {
+        continue // file is gone (deleted/renamed since the close): skip silently
+      }
+      switchGuarded(() => {
+        openList.update((l) => insertOpenAt(l, entry.path, entry.index))
+        void openPath(entry.path)
+      })
+      return
+    }
+  }
+
+  // Strip-row context menu semantics. 'close' routes through onCloseFile —
+  // the exact close-button flow, dirty guard and active-tab revert included.
+  // The bulk closes follow bulkClosePlan's documented semantics: clean
+  // background rows close immediately (recorded for reopen), dirty background
+  // rows are KEPT open behind one notice (no per-file prompt chain), and only
+  // Close All touches the active doc — via the same guarded onCloseFile, so a
+  // dirty live doc still gets its single prompt and the neighbour/empty-state
+  // fallback runs as usual.
+  function handleStripAction(action: StripRowAction, path: string) {
+    switch (action) {
+      case 'close':
+        onCloseFile(path)
+        break
+      case 'close-others':
+      case 'close-saved':
+      case 'close-all': {
+        const kind: BulkCloseKind =
+          action === 'close-others' ? 'others' : action === 'close-saved' ? 'saved' : 'all'
+        const rows = stripOrder(get(openList), get(previewPath))
+        const plan = bulkClosePlan(kind, rows, path, get(doc).path, get(dirtyCached))
+        for (const p of plan.close) closeBackgroundRow(p)
+        if (plan.keptDirty.length > 0) {
+          const n = plan.keptDirty.length
+          reportNotice(
+            n === 1
+              ? '1 file with unsaved changes was kept open'
+              : `${n} files with unsaved changes were kept open`,
+          )
+        }
+        const active = get(doc).path
+        if (plan.closeActive && active !== null) onCloseFile(active)
+        break
+      }
+      case 'copy-path':
+        // Absolute path to the system clipboard; a denied/unavailable
+        // clipboard surfaces honestly rather than silently no-oping.
+        navigator.clipboard
+          .writeText(path)
+          .catch((e) => reportError(`Could not copy path: ${String(e)}`))
+        break
+      case 'reveal':
+        // reveal_path is allowlist-gated in Rust (AllowedPaths::ensure), so
+        // only paths this window was actually granted can be revealed.
+        invoke('reveal_path', { path }).catch((e) =>
+          reportError(`Could not reveal file: ${String(e)}`),
+        )
+        break
+    }
   }
 
   // One close-window action shared by the native close button (Rust
@@ -533,6 +632,17 @@
       if (!anyOverlayOpen()) openQuickOpen()
       return
     }
+    // CmdOrCtrl+Shift+T: reopen the most recently closed strip entry. Runs
+    // BEFORE the empty-page gate — closing the LAST file lands on the empty
+    // page, which is exactly where reopening earns its keep (openPath's doc
+    // load dismisses the page). Claimed even when the stack is empty so the
+    // browser's own reopen-tab default can't fire; inert behind overlays.
+    if (isReopenClosedKey(e, macPlatform)) {
+      e.preventDefault()
+      if (anyOverlayOpen()) return
+      void reopenClosedFile()
+      return
+    }
     // Ctrl+Tab / Ctrl+Shift+Tab / CmdOrCtrl+Shift+]/[: cycle the Open Files
     // strip in row order (see neighbourInStrip — deliberately a wrap-around
     // cycle, not VS Code's MRU picker). Claimed (preventDefault) even when the
@@ -684,6 +794,7 @@
       previewPath={$previewPath}
       onOpenFile={handleOpenFile}
       onCloseFile={onCloseFile}
+      onStripAction={handleStripAction}
       onNewFile={newUntitled}
       dirtyPaths={$dirtyCached}
     />

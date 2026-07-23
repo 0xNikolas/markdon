@@ -27,6 +27,11 @@ export const APP_SHORTCUTS: Shortcut[] = [
     keys: ['Cmd', 'Shift', '['],
     note: 'Same cycle, backwards. Ctrl+Shift+Tab also works.',
   },
+  {
+    label: 'Reopen Closed File',
+    keys: ['Cmd', 'Shift', 'T'],
+    note: 'Restores the most recently closed Open Files entry at its old position.',
+  },
   { label: 'Save', keys: ['Cmd', 'S'] },
   { label: 'Save As…', keys: ['Cmd', 'Shift', 'S'] },
   {

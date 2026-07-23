@@ -3,7 +3,7 @@
   import FileOpsMenu, { type FileOpAction } from './FileOpsMenu.svelte'
   import NameModal from './NameModal.svelte'
   import MoveToModal from './MoveToModal.svelte'
-  import OpenFilesStrip from './OpenFilesStrip.svelte'
+  import OpenFilesStrip, { type StripRowAction } from './OpenFilesStrip.svelte'
   import SidebarHeader from './SidebarHeader.svelte'
   import WorkspaceTree from './WorkspaceTree.svelte'
   import { invoke } from '@tauri-apps/api/core'
@@ -45,6 +45,8 @@
         explicit Open in New Tab action, which bypasses openMode routing. */
     onOpenFile: (path: string, opts?: { preview?: boolean; inPlace?: boolean }) => void
     onCloseFile: (path: string) => void
+    /** Strip-row context-menu action — semantics live in App.handleStripAction. */
+    onStripAction: (action: StripRowAction, path: string) => void
     onNewFile: () => void
   }
   let {
@@ -54,6 +56,7 @@
     dirtyPaths = new Set(),
     onOpenFile,
     onCloseFile,
+    onStripAction,
     onNewFile,
   }: Props = $props()
 
@@ -229,7 +232,15 @@
   onpointerdown={onPanelPointerDown}
   oncontextmenu={onPanelContextMenu}
 >
-  <OpenFilesStrip {openFiles} {previewPath} {activePath} {dirtyPaths} {onOpenFile} {onCloseFile} />
+  <OpenFilesStrip
+    {openFiles}
+    {previewPath}
+    {activePath}
+    {dirtyPaths}
+    {onOpenFile}
+    {onCloseFile}
+    {onStripAction}
+  />
   <SidebarHeader
     {menuOpen}
     {hasRows}

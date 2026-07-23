@@ -159,30 +159,14 @@ pub(crate) fn reveal_invocation(
     }
 }
 
-/// Help > Show Log (and the error banner's "Details…" button): reveal the log
-/// file THIS instance writes in the OS file manager. The filename comes from
-/// the managed `LogFileName` — computed in `run()` from the same handed-off
-/// branch that configured the log plugin, so a per-pid child reveals its own
-/// markdon-<pid>.log, never the primary's. A missing file (fresh install /
-/// rotated away) falls back to revealing the log directory rather than
-/// erroring. Spawn+reap pattern as in windows.rs: dropping the Child would
-/// leave a zombie until waited on, so a throwaway thread reaps it.
-#[tauri::command]
-pub fn reveal_log_file(
-    app: tauri::AppHandle,
-    name: State<'_, crate::LogFileName>,
-) -> Result<(), String> {
-    let dir = app.path().app_log_dir().map_err(|e| e.to_string())?;
-    let path = dir.join(&name.0);
-    let (prog, args) = if path.exists() {
-        reveal_invocation(&path, false)
-    } else {
-        reveal_invocation(&dir, true)
-    };
+/// Spawn a `reveal_invocation` file-manager command and reap it. Spawn+reap
+/// pattern as in windows.rs: dropping the Child would leave a zombie until
+/// waited on, so a throwaway thread reaps it. Windows: the arguments are
+/// pre-quoted for Explorer's own parser (see `reveal_invocation`); `raw_arg`
+/// bypasses std's whole-argument quoting, which would otherwise swallow the
+/// `/select,` switch for spaced paths.
+fn spawn_reveal(prog: &str, args: Vec<std::ffi::OsString>) -> Result<(), String> {
     let mut cmd = std::process::Command::new(prog);
-    // Windows: the arguments are pre-quoted for Explorer's own parser (see
-    // `reveal_invocation`); `raw_arg` bypasses std's whole-argument quoting,
-    // which would otherwise swallow the `/select,` switch for spaced paths.
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -197,6 +181,42 @@ pub fn reveal_log_file(
         let _ = child.wait();
     });
     Ok(())
+}
+
+/// Help > Show Log (and the error banner's "Details…" button): reveal the log
+/// file THIS instance writes in the OS file manager. The filename comes from
+/// the managed `LogFileName` — computed in `run()` from the same handed-off
+/// branch that configured the log plugin, so a per-pid child reveals its own
+/// markdon-<pid>.log, never the primary's. A missing file (fresh install /
+/// rotated away) falls back to revealing the log directory rather than
+/// erroring.
+#[tauri::command]
+pub fn reveal_log_file(
+    app: tauri::AppHandle,
+    name: State<'_, crate::LogFileName>,
+) -> Result<(), String> {
+    let dir = app.path().app_log_dir().map_err(|e| e.to_string())?;
+    let path = dir.join(&name.0);
+    let (prog, args) = if path.exists() {
+        reveal_invocation(&path, false)
+    } else {
+        reveal_invocation(&dir, true)
+    };
+    spawn_reveal(prog, args)
+}
+
+/// Reveal a document in the OS file manager — the Open Files strip's
+/// context-menu "Reveal in Finder". Gated by the strict per-path allowlist
+/// (`AllowedPaths::ensure`, NOT `ensure_root`): only a path the user actually
+/// granted — a dialog pick, an OS open event, or a file inside a granted
+/// workspace — can be revealed, so even a fully compromised webview cannot
+/// use this command to probe or surface arbitrary filesystem locations.
+/// Same platform invocation + spawn/reap as `reveal_log_file`.
+#[tauri::command]
+pub fn reveal_path(path: String, allowed: State<'_, AllowedPaths>) -> Result<(), String> {
+    allowed.ensure(&path)?;
+    let (prog, args) = reveal_invocation(Path::new(&path), false);
+    spawn_reveal(prog, args)
 }
 
 #[tauri::command]

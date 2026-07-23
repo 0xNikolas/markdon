@@ -28,6 +28,7 @@ const {
   isFindReplaceFallbackKey,
   isQuickOpenKey,
   fileCycleDirection,
+  isReopenClosedKey,
 } = await import('./ui')
 
 describe('formatInt', () => {
@@ -419,5 +420,45 @@ describe('fileCycleDirection', () => {
   it('is null for unrelated keys', () => {
     expect(fileCycleDirection(ev({ metaKey: true, key: 'p', code: 'KeyP' }), true)).toBeNull()
     expect(fileCycleDirection(ev({ ctrlKey: true, key: 'f', code: 'KeyF' }), false)).toBeNull()
+  })
+})
+
+describe('isReopenClosedKey', () => {
+  const ev = (over: Partial<Parameters<typeof isReopenClosedKey>[0]>) => ({
+    metaKey: false,
+    ctrlKey: false,
+    altKey: false,
+    shiftKey: false,
+    key: 'T',
+    ...over,
+  })
+
+  it('mac: Cmd+Shift+T fires (Shift reports key "T"; lowercased)', () => {
+    expect(isReopenClosedKey(ev({ metaKey: true, shiftKey: true }), true)).toBe(true)
+    expect(isReopenClosedKey(ev({ metaKey: true, shiftKey: true, key: 't' }), true)).toBe(true)
+  })
+
+  it('mac carve-out: never fires with ctrlKey, even alongside metaKey', () => {
+    expect(isReopenClosedKey(ev({ ctrlKey: true, shiftKey: true }), true)).toBe(false)
+    expect(isReopenClosedKey(ev({ metaKey: true, ctrlKey: true, shiftKey: true }), true)).toBe(
+      false,
+    )
+  })
+
+  it('off mac: Ctrl+Shift+T (or Meta) fires', () => {
+    expect(isReopenClosedKey(ev({ ctrlKey: true, shiftKey: true }), false)).toBe(true)
+    expect(isReopenClosedKey(ev({ metaKey: true, shiftKey: true }), false)).toBe(true)
+  })
+
+  it('requires Shift down and Alt up', () => {
+    expect(isReopenClosedKey(ev({ metaKey: true }), true)).toBe(false)
+    expect(isReopenClosedKey(ev({ metaKey: true, shiftKey: true, altKey: true }), true)).toBe(
+      false,
+    )
+  })
+
+  it('ignores other keys and a bare Shift+T', () => {
+    expect(isReopenClosedKey(ev({ metaKey: true, shiftKey: true, key: 'Y' }), true)).toBe(false)
+    expect(isReopenClosedKey(ev({ shiftKey: true }), true)).toBe(false)
   })
 })

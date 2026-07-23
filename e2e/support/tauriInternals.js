@@ -163,6 +163,9 @@
     // Log-only, like the windowing hand-offs: the call log IS the assertion
     // surface (revealing a file in Finder has no browser-visible effect).
     reveal_log_file: () => null,
+    // Strip context menu "Reveal in Finder": log-only, same as reveal_log_file
+    // (the call log carries the revealed path assertion).
+    reveal_path: () => null,
     watch_file: () => null,
     unwatch: () => null,
     watch_workspace: () => null,

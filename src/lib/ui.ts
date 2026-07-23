@@ -164,6 +164,21 @@ export function fileCycleDirection(
   return null
 }
 
+/**
+ * True when `e` is the CmdOrCtrl+Shift+T Reopen Closed File combo (VS Code /
+ * browser standard). Shift must be DOWN and Alt up; the mac branch carries
+ * the same metaKey-only carve-out as Quick Open / Go to Line, keeping Ctrl
+ * chords free for CodeMirror's emacs-style mac bindings. `e.key` is safe here
+ * (unlike the bracket chords): Shift+T reports 'T', which lowercases cleanly.
+ */
+export function isReopenClosedKey(
+  e: { metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; key: string },
+  mac: boolean,
+): boolean {
+  if (e.key.toLowerCase() !== 't' || !e.shiftKey || e.altKey) return false
+  return mac ? e.metaKey && !e.ctrlKey : e.metaKey || e.ctrlKey
+}
+
 /** Export request counter; the export feature subscribes and acts on ticks. */
 export const exportTick: Writable<number> = writable(0)
 export function requestExport(): void {

@@ -9,6 +9,8 @@ declare global {
     __TAURI_WORKSPACE_ROOT__?: string
     __TAURI_RECENT__?: string[]
     __TAURI_WORKSPACE_UI__?: Record<string, string>
+    /** Clipboard spy installed by specs (navigator.clipboard.writeText override). */
+    __COPIED__?: string | null
     __tauriEmit(event: string, payload?: unknown): void
   }
 }
