@@ -17,7 +17,7 @@ import {
   adoptNormalization,
   showEmptyState,
 } from './doc'
-import { emptyState } from './ui'
+import { emptyState, imageView } from './ui'
 import { recencyOf, resetRecency } from './recency'
 
 describe('doc store', () => {
@@ -477,6 +477,34 @@ describe('empty-state transitions', () => {
     // not couple unrelated transitions to the flag.)
     showEmptyState()
     edit('typed')
+    expect(get(emptyState)).toBe(true)
+  })
+})
+
+describe('image-view clearing (the doc-load chokepoint)', () => {
+  beforeEach(() => {
+    newDoc()
+    imageView.set(null)
+  })
+
+  it('every document load clears the image view: openDoc, restoreDoc, newDoc', () => {
+    imageView.set('/ws/logo.png')
+    openDoc('/tmp/a.md', '# A')
+    expect(get(imageView)).toBeNull()
+
+    imageView.set('/ws/logo.png')
+    restoreDoc('/tmp/a.md', { content: 'x', savedContent: 'x', normalized: null })
+    expect(get(imageView)).toBeNull()
+
+    imageView.set('/ws/logo.png')
+    newDoc()
+    expect(get(imageView)).toBeNull()
+  })
+
+  it('showEmptyState clears the image view too (it loads a pristine scratch first)', () => {
+    imageView.set('/ws/logo.png')
+    showEmptyState()
+    expect(get(imageView)).toBeNull()
     expect(get(emptyState)).toBe(true)
   })
 })

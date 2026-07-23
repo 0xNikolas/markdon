@@ -35,6 +35,7 @@ function emitEvent(event: string, payload: unknown): void {
 
 import {
   isMarkdownFile,
+  isImageFile,
   fileIcon,
   folderIcon,
   workspace,
@@ -89,11 +90,33 @@ describe('isMarkdownFile', () => {
   })
 })
 
+describe('isImageFile', () => {
+  it.each([
+    ['logo.png', true],
+    ['photo.jpg', true],
+    ['photo.jpeg', true],
+    ['anim.gif', true],
+    ['pic.webp', true],
+    ['icon.svg', true],
+    ['LOGO.PNG', true],
+    ['Photo.JPeG', true],
+    ['a.md', false],
+    ['readme.txt', false],
+    ['data.json', false],
+    ['a.png.bak', false],
+    ['noext', false],
+  ])('%s -> %s', (name, expected) => {
+    expect(isImageFile(name)).toBe(expected)
+  })
+})
+
 describe('fileIcon', () => {
   it.each([
     ['notes.md', 'file-code'],
     ['README.MARKDOWN', 'file-code'],
-    ['image.png', 'file-text'],
+    ['image.png', 'image'],
+    ['icon.svg', 'image'],
+    ['Photo.JPEG', 'image'],
     ['data.json', 'file-text'],
     ['Makefile', 'file-text'],
   ])('%s -> %s', (name, expected) => {

@@ -202,6 +202,19 @@ export const workspaceName: Writable<string | null> = writable(null)
  */
 export const emptyState: Writable<boolean> = writable(false)
 
+/**
+ * The image currently VIEWED in the editor area (its absolute path), or null
+ * when a document is shown instead. A distinct non-editable view mode: it
+ * overlays the editor while leaving $doc — and any unsaved buffer — untouched,
+ * so returning to the document restores it with no reload. Set only by App's
+ * showImage (a WorkspaceTree image-row click); cleared at the doc-load
+ * chokepoint (every openDoc/restoreDoc/newDoc), so opening ANY document
+ * dismisses the view without per-call-site wiring. Mutually exclusive with
+ * emptyState — the image view wins over both $doc and $emptyState wherever
+ * the two are read together (Header, window title, the editor-area branch).
+ */
+export const imageView: Writable<string | null> = writable(null)
+
 /** Header breadcrumb: muted segments before the filename, plus the filename itself. */
 export interface FileBreadcrumb {
   crumbs: string[]

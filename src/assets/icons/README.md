@@ -27,8 +27,8 @@ heavy). `src/lib/icons.test.ts` is the regression gate for this contract.
 
 `app-window`, `bold`, `chevron-down`, `chevron-right`, `ellipsis`,
 `file-code`, `file-pen`, `file-plus`, `file-text`, `file-up`, `folder`,
-`folder-open`, `italic`, `keyboard`, `layout-grid`, `link-2`, `settings`,
-`split-square-vertical`, `x`.
+`folder-open`, `history`, `image`, `italic`, `keyboard`, `layout-grid`,
+`link-2`, `moon`, `settings`, `split-square-vertical`, `sun`, `x`.
 
 `ellipsis` is the sidebar "File operations" more-actions button (opens
 `FileOpsMenu.svelte`).
@@ -37,9 +37,11 @@ heavy). `src/lib/icons.test.ts` is the regression gate for this contract.
 preference). `x` is the sidebar's Open Files list close affordance.
 
 Sidebar file-type mapping (`src/lib/workspace.ts`'s `fileIcon`): markdown
-files get `file-code` (matches the design's Icon Set); every other file
-shown for context gets the generic `file-text` so it doesn't read as code.
-Folder rows swap `folder` / `folder-open` on expand via `folderIcon`.
+files get `file-code` (matches the design's Icon Set), image files get
+`image`, and every other file shown for context gets the generic `file-text`
+so it doesn't read as code. Folder rows swap `folder` / `folder-open` on
+expand via `folderIcon`. `moon` / `sun` are the header light/dark toggle;
+`history` is the File History affordance.
 
 `bold` / `italic` / `link-2` are the brand Icon Set's formatting glyphs; they
 override the Crepe selection toolbar's built-in bold/italic/link icons (see

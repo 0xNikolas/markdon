@@ -43,13 +43,27 @@ export function isMarkdownFile(name: string): boolean {
 }
 
 /**
- * Lucide icon name for a sidebar file row. Markdown files (the only openable
- * rows) get `file-code`, matching the design's Icon Set; every other file is
- * shown for context only and gets the generic `file-text` glyph so it doesn't
- * read as another code file.
+ * True for image files the sidebar can VIEW — a distinct non-editable overlay
+ * over the editor area, NOT an editable document. The raster types plus svg
+ * (which renders through <img> like any other), matched on extension
+ * case-insensitively.
  */
-export function fileIcon(name: string): 'file-code' | 'file-text' {
-  return isMarkdownFile(name) ? 'file-code' : 'file-text'
+const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg)$/i
+export function isImageFile(name: string): boolean {
+  return IMAGE_RE.test(name)
+}
+
+/**
+ * Lucide icon name for a sidebar file row. Markdown files (openable as
+ * documents) get `file-code`, matching the design's Icon Set; image files
+ * (viewable) get the `image` glyph; every other file is shown for context
+ * only and gets the generic `file-text` glyph so it doesn't read as another
+ * code file.
+ */
+export function fileIcon(name: string): 'file-code' | 'file-text' | 'image' {
+  if (isMarkdownFile(name)) return 'file-code'
+  if (isImageFile(name)) return 'image'
+  return 'file-text'
 }
 
 /** Lucide icon name for a sidebar folder row's open/closed state. */

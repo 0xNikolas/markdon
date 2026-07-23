@@ -6,7 +6,7 @@ import { openPath, openDrainedEntries, type OpenedEntry } from './files'
 import { initFileSync } from './fileSync'
 import { openList, previewPath } from './openList'
 import { initWorkspace, workspace } from './workspace'
-import { emptyState, exportTick, windowTitle } from './ui'
+import { emptyState, exportTick, windowTitle, imageView } from './ui'
 import { exportDocument } from './export'
 import { reportError } from './errors'
 import { logWarn } from './logging'
@@ -99,10 +99,16 @@ export function initExportOnTick(onExport: () => void = exportDocument): () => v
 export function initWindowTitleSync(): () => void {
   let lastTitle = ''
   const apply = () => {
+    const iv = get(imageView)
+    // The image view wins over both $doc and $emptyState: it titles by the
+    // image's filename, never dirty (an image is not an editable document).
     const s = get(doc)
-    // The empty page has no document: plain "Markdon", no filename (the
-    // pristine scratch underneath would otherwise title as "Untitled").
-    const t = windowTitle(s.path, isDirty(s), get(emptyState))
+    const t =
+      iv !== null
+        ? windowTitle(iv, false)
+        : // The empty page has no document: plain "Markdon", no filename (the
+          // pristine scratch underneath would otherwise title as "Untitled").
+          windowTitle(s.path, isDirty(s), get(emptyState))
     if (t !== lastTitle) {
       lastTitle = t
       setWindowTitle(t)
@@ -110,9 +116,11 @@ export function initWindowTitleSync(): () => void {
   }
   const unsubDoc = doc.subscribe(apply)
   const unsubEmpty = emptyState.subscribe(apply)
+  const unsubImg = imageView.subscribe(apply)
   return () => {
     unsubDoc()
     unsubEmpty()
+    unsubImg()
   }
 }
 

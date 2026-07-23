@@ -50,6 +50,7 @@ const ICONS = [
   'folder',
   'folder-open',
   'history',
+  'image',
   'italic',
   'keyboard',
   'layout-grid',

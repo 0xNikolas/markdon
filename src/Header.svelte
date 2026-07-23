@@ -13,8 +13,11 @@
     dirty: boolean
     /** Empty-state page shown: no document, so no breadcrumb/filename. */
     empty?: boolean
+    /** Image view shown: `path` is the image, so show its filename breadcrumb
+        but never a Saved/Edited badge (an image is not an editable document). */
+    image?: boolean
   }
-  let { path, dirty, empty = false }: Props = $props()
+  let { path, dirty, empty = false, image = false }: Props = $props()
 
   const breadcrumb = $derived(
     empty ? { crumbs: [], filename: '' } : fileBreadcrumb(path, $workspace.root, $workspaceName),
@@ -40,9 +43,9 @@
       <span class="crumb">{breadcrumb.crumbs.join(' / ')} /</span>
     {/if}
     <span class="filename">{breadcrumb.filename}</span>
-    {#if dirty}
+    {#if dirty && !image}
       <span class="badge edited">Edited</span>
-    {:else if path}
+    {:else if path && !image}
       <span class="badge saved">Saved</span>
     {/if}
   </div>

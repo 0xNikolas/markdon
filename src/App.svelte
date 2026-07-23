@@ -49,6 +49,7 @@
   } from './lib/appBoot'
   import { allowsNativeContextMenu } from './lib/contextMenu'
   import Editor from './Editor.svelte'
+  import ImageView from './ImageView.svelte'
   import EmptyState from './EmptyState.svelte'
   import SplitView from './SplitView.svelte'
   import Header from './Header.svelte'
@@ -65,6 +66,7 @@
   import {
     split,
     emptyState,
+    imageView,
     isMacPlatform,
     isGotoLineFallbackKey,
     isFindReplaceFallbackKey,
@@ -74,7 +76,7 @@
   } from './lib/ui'
   import type { StripRowAction } from './OpenFilesStrip.svelte'
   import { activeOverlay, openOverlay, closeOverlay, anyOverlayOpen } from './lib/overlay'
-  import { workspace, openWorkspace, openRecentWorkspace, closeWorkspace } from './lib/workspace'
+  import { workspace, openWorkspace, openRecentWorkspace, closeWorkspace, isImageFile } from './lib/workspace'
   import { revealLog, reportError, reportNotice } from './lib/errors'
   import { exportDocument } from './lib/export'
   import { flushBufferEdits } from './lib/bufferFlush'
@@ -207,16 +209,38 @@
     if (get(previewPath) === s.path && isDirty(s)) pinPreview()
   }
 
+  // The one place imageView is SET: a WorkspaceTree click on an image row.
+  // A distinct non-editable view mode — $doc is NOT stashed, discarded or
+  // mutated, so the live document (and its unsaved buffer) is preserved and
+  // losslessly restored when a later doc open clears imageView. flushBufferEdits()
+  // lands the outgoing editor's pending keystrokes into $doc.content before
+  // <Editor> unmounts (same reason $effect.pre flushes on $split); no discard
+  // guard is needed precisely because nothing is at risk.
+  function showImage(path: string) {
+    flushBufferEdits()
+    imageView.set(path)
+  }
+
   // Single entry point for opening a path from the sidebar (Open Files strip
-  // or Workspace tree alike). A single click asks for a PREVIEW: always
-  // in-place regardless of openMode (a glance must never spawn a window),
-  // parked in the italic preview slot by openPath. A pinned open routes
-  // through openInPreferredTarget (the tab/window choke-point) unless
+  // or Workspace tree alike). An image path routes to the non-editable image
+  // view (showImage) and never touches $doc. A single click asks for a
+  // PREVIEW: always in-place regardless of openMode (a glance must never spawn
+  // a window), parked in the italic preview slot by openPath. A pinned open
+  // routes through openInPreferredTarget (the tab/window choke-point) unless
   // `inPlace` forces this window — that is what the explicit "Open in New
   // Tab" action means even under openMode:'window'. Re-activating the
   // already-active doc without `preview` pins it: that is exactly the
   // dblclick arriving after its own first click already previewed the file.
   function handleOpenFile(path: string, opts: { preview?: boolean; inPlace?: boolean } = {}) {
+    if (isImageFile(path)) {
+      showImage(path)
+      return
+    }
+    // Opening any document dismisses the image view. Explicit here (not only
+    // via doc.ts's clear) to cover the re-click on the doc active UNDERNEATH
+    // the image view: that pins in place and never bumps loadId, so doc.ts's
+    // load-chokepoint clear wouldn't fire.
+    imageView.set(null)
     if (path === get(doc).path) {
       if (!opts.preview) pinOpen(path)
       return
@@ -782,7 +806,12 @@
 
 <main class="app">
   <!-- Header hosts the native traffic-light overlay: nothing may render above it. -->
-  <Header path={$doc.path} dirty={isDirty($doc)} empty={$emptyState} />
+  <Header
+    path={$imageView ?? $doc.path}
+    dirty={$imageView ? false : isDirty($doc)}
+    empty={$emptyState && $imageView === null}
+    image={$imageView !== null}
+  />
   <Banner />
   <div class="body">
     <!-- Always rendered, not gated on whether a workspace is open: Sidebar
@@ -790,7 +819,7 @@
          teaches the feature and gives openWorkspace() a discoverable entry
          point beyond the File menu. -->
     <Sidebar
-      activePath={$doc.path}
+      activePath={$imageView ?? $doc.path}
       openFiles={$openList}
       previewPath={$previewPath}
       onOpenFile={handleOpenFile}
@@ -800,13 +829,16 @@
       dirtyPaths={$dirtyCached}
     />
     <div class="content">
-      {#if $doc.readonly}
+      <!-- Doc-specific chrome is gated on $imageView===null: it keys off $doc/
+           $conflict/$searchUi, which still describe the backgrounded document,
+           and must not bleed over the image view. -->
+      {#if $doc.readonly && $imageView === null}
         <div class="readonly-bar" role="status">
           <span>🔒 Opened read-only</span>
           <button onclick={enableEditing}>Enable editing</button>
         </div>
       {/if}
-      {#if $conflict !== null}
+      {#if $conflict !== null && $imageView === null}
         <div class="reload-bar" role="alert">
           <span>This file changed on disk. You have unsaved changes.</span>
           <div class="reload-actions">
@@ -815,10 +847,14 @@
           </div>
         </div>
       {/if}
-      {#if $searchUi.open}
+      {#if $searchUi.open && $imageView === null}
         <FindBar />
       {/if}
-      {#if $emptyState}
+      {#if $imageView !== null}
+        <!-- A distinct non-editable view mode: the image overlays the editor
+             area while $doc (and any unsaved buffer) stays live underneath. -->
+        <ImageView path={$imageView} />
+      {:else if $emptyState}
         <!-- No document at all: the empty page replaces the editor/split
              surface. Its rows call the same closures as the menu items. -->
         <EmptyState

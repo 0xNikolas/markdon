@@ -44,7 +44,7 @@ import {
 import { doc, docWith, openDoc, resetReadonlyMemory, showEmptyState } from './doc'
 import { openList, previewPath } from './openList'
 import { errorMessage } from './errors'
-import { emptyState, requestExport } from './ui'
+import { emptyState, imageView, requestExport } from './ui'
 import { workspace } from './workspace'
 import { tree } from './test-support/workspaceFixtures'
 
@@ -69,6 +69,7 @@ beforeEach(() => {
   errorMessage.set(null)
   workspace.set({ root: null, tree: null })
   emptyState.set(false)
+  imageView.set(null)
 })
 
 describe('wireEvents', () => {
@@ -260,6 +261,19 @@ describe('initWindowTitleSync', () => {
     openDoc('/w/notes.md', '# n')
     expect(setWindowTitle).toHaveBeenLastCalledWith('notes.md — Markdon')
     teardown()
+  })
+
+  it('titles by the viewed image filename (never dirty), reverting when the view closes', () => {
+    doc.set(docWith({ path: '/w/notes.md', content: 'dirty', savedContent: 'clean' }))
+    const teardown = initWindowTitleSync()
+    expect(setWindowTitle).toHaveBeenLastCalledWith('• notes.md — Markdon')
+    imageView.set('/ws/photo.png')
+    expect(setWindowTitle).toHaveBeenLastCalledWith('photo.png — Markdon') // image wins, no bullet
+    imageView.set(null) // opening a doc clears it; title reverts to the doc underneath
+    expect(setWindowTitle).toHaveBeenLastCalledWith('• notes.md — Markdon')
+    teardown()
+    imageView.set('/ws/other.png')
+    expect(setWindowTitle).toHaveBeenLastCalledWith('• notes.md — Markdon') // unsubscribed
   })
 })
 

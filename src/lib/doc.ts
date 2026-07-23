@@ -2,7 +2,7 @@ import { writable, type Writable } from 'svelte/store'
 import { rewritePrefix, isSelfOrDescendant } from './paths'
 import { readonlyMemory } from './readonlyMemory'
 import { touchRecency } from './recency'
-import { emptyState } from './ui'
+import { emptyState, imageView } from './ui'
 
 export interface DocState {
   path: string | null
@@ -109,8 +109,10 @@ export function openDoc(path: string, content: string, readonly = false): void {
   }))
   // Any document load dismisses the empty page. AFTER the doc update, so
   // subscribers watching both stores (window-title sync) never compute from
-  // a half-transitioned pair.
+  // a half-transitioned pair. Same for the transient image view: opening a
+  // document is exactly what returns from viewing an image.
   emptyState.set(false)
+  imageView.set(null)
 }
 
 /**
@@ -140,6 +142,7 @@ export function restoreDoc(
     loadId: s.loadId + 1,
   }))
   emptyState.set(false) // any document load dismisses the empty page (see openDoc)
+  imageView.set(null) // …and the transient image view (see openDoc)
 }
 
 export function newDoc(): void {
@@ -152,6 +155,7 @@ export function newDoc(): void {
     loadId: s.loadId + 1,
   }))
   emptyState.set(false) // the scratch is a real (editable) document (see openDoc)
+  imageView.set(null) // …and the transient image view (see openDoc)
 }
 
 /**

@@ -24,6 +24,7 @@ const {
   isInsideRoot,
   windowTitle,
   emptyState,
+  imageView,
   isGotoLineFallbackKey,
   isFindReplaceFallbackKey,
   isQuickOpenKey,
@@ -187,6 +188,12 @@ describe('windowTitle', () => {
 describe('emptyState', () => {
   it('starts false: a window is assumed to hold a document until told otherwise', () => {
     expect(get(emptyState)).toBe(false)
+  })
+})
+
+describe('imageView', () => {
+  it('starts null: no image is viewed until a tree image row is clicked', () => {
+    expect(get(imageView)).toBeNull()
   })
 })
 

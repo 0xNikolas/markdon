@@ -4,6 +4,7 @@
   import {
     workspace,
     isMarkdownFile,
+    isImageFile,
     fileIcon,
     folderIcon,
     type WorkspaceDir,
@@ -73,9 +74,10 @@
     )
     if (intent === null) return
     if (intent.kind === 'open') {
-      // Enter on a file row: explicit pinned open (keyboard dblclick).
-      // Non-markdown files keep native activation — a harmless re-select.
-      if (isMarkdownFile(basename(intent.path))) {
+      // Enter on a file row: explicit pinned open (markdown) or view (image).
+      // Other file types keep native activation — a harmless re-select.
+      const name = basename(intent.path)
+      if (isMarkdownFile(name) || isImageFile(name)) {
         e.preventDefault()
         onOpenFile(intent.path, { preview: false, inPlace: true })
       }
@@ -123,14 +125,19 @@
   // App (already active), then onFileDblClick pins it.
   function onFileClick(f: WorkspaceFile) {
     focusRowDom(f.path)
-    if (isMarkdownFile(f.name)) onOpenFile(f.path, { preview: true })
+    // A markdown single click previews the doc; an image single click routes
+    // to the image view (App's showImage ignores the opts). Other types stay
+    // selectable-but-inert.
+    if (isMarkdownFile(f.name) || isImageFile(f.name)) onOpenFile(f.path, { preview: true })
   }
   function onFileDblClick(f: WorkspaceFile) {
     // A tree dblclick means "open in THIS window" by definition — `inPlace`
     // bypasses openMode routing, so a dblclick racing its own first click's
     // still-loading preview can never spawn a duplicate window under
-    // openMode:'window'.
-    if (isMarkdownFile(f.name)) onOpenFile(f.path, { preview: false, inPlace: true })
+    // openMode:'window'. Images ignore the opts (App routes them to the view).
+    if (isMarkdownFile(f.name) || isImageFile(f.name)) {
+      onOpenFile(f.path, { preview: false, inPlace: true })
+    }
   }
   function onFolderClick(d: WorkspaceDir) {
     focusRowDom(d.path)
