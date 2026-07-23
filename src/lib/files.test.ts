@@ -4,7 +4,16 @@ import { get } from 'svelte/store'
 const invoke = vi.fn()
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
 
-import { doc, newDoc, edit, isDirty, openDoc, docWith, resetReadonlyMemory } from './doc'
+import {
+  doc,
+  newDoc,
+  edit,
+  isDirty,
+  openDoc,
+  docWith,
+  revertBuffer,
+  resetReadonlyMemory,
+} from './doc'
 import {
   open,
   save,
@@ -272,6 +281,30 @@ describe('buffer cache: stash on switch-away (stashActive / openPath)', () => {
     expect(get(doc).content).toBe('mine') // the user's edits stay in the buffer
     await vi.waitFor(() => expect(get(conflict)).toBe('theirs'))
   })
+
+  it("the Don't-Save close sequence destroys the buffer for good — no re-pin, no resurrected stash", async () => {
+    // Mirrors App.svelte onCloseFile's guarded action after "Don't Save":
+    // revert the still-dirty doc to disk truth FIRST, then unpin + evict and
+    // switch to the neighbour. The revert is load-bearing — without it,
+    // openPath's stashActive sees a dirty doc no longer in openList,
+    // defensively re-pins it and stashes the buffer the user just discarded
+    // (the closed tab resurrects, and a later Save-all writes the discarded
+    // edits to disk).
+    mockFs({ '/tmp/keep.md': '# keep', '/tmp/gone.md': '# gone' })
+    await openPath('/tmp/keep.md')
+    await openPath('/tmp/gone.md')
+    edit('# gone edited')
+    const cur = get(doc)
+    expect(isDirty(cur)).toBe(true)
+    revertBuffer(cur.savedContent) // Don't Save: back to disk truth
+    openList.update((l) => l.filter((p) => p !== '/tmp/gone.md'))
+    bufferCache.evict('/tmp/gone.md')
+    await openPath('/tmp/keep.md')
+    expect(get(doc).path).toBe('/tmp/keep.md')
+    expect(get(openList)).toEqual(['/tmp/keep.md']) // gone.md was NOT re-pinned
+    expect(bufferCache.peek('/tmp/gone.md')).toBeUndefined() // discarded means gone
+    expect(bufferCache.anyCachedDirty()).toEqual([])
+  })
 })
 
 describe('saveCachedBuffer', () => {
@@ -389,6 +422,41 @@ describe('open', () => {
     invoke.mockResolvedValue(null)
     await open()
     expect(get(openList)).toEqual([])
+  })
+
+  it('re-picking the ACTIVE dirty file preserves the edits and never forks it into the cache', async () => {
+    // File > Open on the already-active path is a natural "reload" gesture.
+    // It must route through openPath's lossless stash-then-take: the naive
+    // stashActive();openDoc() pair would stash the dirty live buffer under p
+    // and then reload p clean from disk — a dirty cache FORK of the LIVE doc
+    // (phantom dirty dot, spurious close prompt, and a window-close Save-all
+    // writing the stale fork over any newer save).
+    invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === 'open_file_dialog'
+        ? { path: '/tmp/active.md', content: '# disk' }
+        : cmd === 'read_file'
+          ? '# disk'
+          : undefined,
+    )
+    openDoc('/tmp/active.md', '# disk')
+    openList.set(['/tmp/active.md'])
+    edit('# disk edited')
+    await open()
+    const s = get(doc)
+    expect(s.path).toBe('/tmp/active.md')
+    expect(s.content).toBe('# disk edited') // the live buffer survives the self-re-pick
+    expect(isDirty(s)).toBe(true)
+    // The LIVE doc must never also sit in the cache (openPath's documented
+    // invariant): no forked entry, nothing cached-dirty.
+    expect(bufferCache.peek('/tmp/active.md')).toBeUndefined()
+    expect(bufferCache.anyCachedDirty()).toEqual([])
+    // And a window-close Save-all writes ONLY the live buffer — no stale fork.
+    edit('# disk edited v2')
+    await expect(saveAllDirty()).resolves.toBe(true)
+    const writes = invoke.mock.calls.filter((c) => c[0] === 'write_file')
+    expect(writes).toEqual([
+      ['write_file', { path: '/tmp/active.md', contents: '# disk edited v2' }],
+    ])
   })
 
   it('a pick that is a CACHED background tab restores its buffer, not the dialog content', async () => {

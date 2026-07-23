@@ -117,10 +117,13 @@ export async function open(): Promise<void> {
     // Honor the openMode preference: 'window' spawns a fresh window for the
     // pick (re-read there); 'tab' opens the already-loaded content in place.
     openInPreferredTarget(picked.path, (p) => {
-      if (bufferCache.peek(p) !== undefined) {
-        // The pick is a cached background tab: restore its buffer (dirty
-        // edits included) instead of clobbering it with the fresh disk read —
-        // openPath's cache-hit path also reconciles with disk in background.
+      if (bufferCache.peek(p) !== undefined || p === get(doc).path) {
+        // The pick is a cached background tab OR the active doc itself:
+        // openPath's stash-then-take round trip keeps the buffer (dirty edits
+        // included) instead of clobbering it with the fresh disk read — or,
+        // for a self-re-pick, forking the live doc into the cache (the LIVE
+        // doc must never also sit there; see openPath's failure path). Disk
+        // divergence surfaces via openPath's background reconcile.
         void openPath(p)
         return
       }

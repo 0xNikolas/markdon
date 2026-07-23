@@ -257,6 +257,14 @@
       return
     }
     guarded(() => {
+      // Don't Save reaches here with the doc STILL dirty (discard() never
+      // reverts) — neutralize it first, mirroring toggleReadonly's action.
+      // Without this, openPath(next)'s stashActive would see a dirty doc no
+      // longer in openList, defensively re-pin it and stash the buffer the
+      // user just chose to destroy — resurrecting the closed tab, and letting
+      // a later window-close Save write the discarded edits to disk.
+      const cur = get(doc)
+      if (isDirty(cur)) revertBuffer(cur.savedContent)
       const list = get(openList)
       const lookup = path === get(previewPath) ? [...list, path] : list
       const next = neighbourAfterClose(lookup, path, get(doc).path)

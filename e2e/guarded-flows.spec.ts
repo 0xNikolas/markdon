@@ -76,8 +76,13 @@ test("closing a dirty tab prompts: Don't Save discards without writing", async (
   await dialog.getByRole('button', { name: "Don't Save" }).click()
 
   // Row gone, nothing written, the neighbour (ideas.md) is active again.
+  // Prefix regex, NOT an exact name: a dirty row's dot span (aria-label
+  // "Unsaved changes") joins the button's accessible name, so an exact-name
+  // toHaveCount(0) would pass vacuously against a resurrected DIRTY row —
+  // exactly the regression this spec pins (Don't-Save close re-stashing the
+  // discarded buffer via stashActive).
   await expect(
-    openFilesStrip(page).getByRole('button', { name: 'notes.md', exact: true }),
+    openFilesStrip(page).getByRole('button', { name: /^notes\.md/ }),
   ).toHaveCount(0)
   await expect(
     openFilesStrip(page).getByRole('button', { name: 'ideas.md', exact: true }),
@@ -95,8 +100,10 @@ test('closing a dirty tab prompts: Save writes the buffer, then the row closes',
   await closeStripRow(page, 'notes.md')
   await discardDialog(page).getByRole('button', { name: 'Save', exact: true }).click()
 
+  // Prefix regex for the same reason as the Don't-Save spec above: an
+  // exact-name locator is blind to a lingering DIRTY row.
   await expect(
-    openFilesStrip(page).getByRole('button', { name: 'notes.md', exact: true }),
+    openFilesStrip(page).getByRole('button', { name: /^notes\.md/ }),
   ).toHaveCount(0)
   await expect(editor(page)).toContainText('idea one')
   const writes = await calls(page, 'write_file')
