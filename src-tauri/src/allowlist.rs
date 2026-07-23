@@ -55,6 +55,23 @@ impl AllowedPaths {
         }
     }
 
+    /// The granted workspace root that owns `canonical` (strictly contains
+    /// it), or `None` for standalone / exact-file-grant paths. The LONGEST
+    /// matching root wins so nested-root edge cases resolve deterministically
+    /// to the closest workspace. Component-wise `starts_with` and the
+    /// root-itself exclusion mirror [`ensure`]'s semantics exactly; `canonical`
+    /// must already be canonical (both sides canonical is what makes the
+    /// comparison sound). Used by history.rs to pick the per-workspace bucket
+    /// directory — a read-only classification, never a grant.
+    pub fn owning_root(&self, canonical: &Path) -> Option<PathBuf> {
+        let roots = self.roots.lock().unwrap();
+        roots
+            .iter()
+            .filter(|r| canonical.starts_with(r) && canonical != r.as_path())
+            .max_by_key(|r| r.components().count())
+            .cloned()
+    }
+
     pub fn ensure(&self, path: &str) -> Result<(), String> {
         if self.files.lock().unwrap().contains(path) {
             return Ok(());
@@ -334,6 +351,46 @@ mod tests {
         a.allow_root(&ws).unwrap();
         // canonicalize resolves the symlink to /…/secret, outside the root.
         assert!(a.ensure_container(link.to_str().unwrap()).is_err());
+    }
+
+    #[test]
+    fn owning_root_returns_the_containing_root() {
+        let dir = tempdir().unwrap();
+        let a = AllowedPaths::default();
+        let canon = a.allow_root(dir.path()).unwrap();
+        let f = canon.join("note.md");
+        fs::write(&f, "x").unwrap();
+        assert_eq!(a.owning_root(&f), Some(canon));
+    }
+
+    #[test]
+    fn owning_root_excludes_the_root_itself_and_ungranted_paths() {
+        let dir = tempdir().unwrap();
+        let a = AllowedPaths::default();
+        let canon = a.allow_root(dir.path()).unwrap();
+        // The root node itself is not "inside" a workspace — same exclusion
+        // as ensure's.
+        assert_eq!(a.owning_root(&canon), None);
+        assert_eq!(a.owning_root(Path::new("/somewhere/else.md")), None);
+    }
+
+    #[test]
+    fn owning_root_prefers_the_longest_nested_root() {
+        let dir = tempdir().unwrap();
+        let outer = dir.path().join("outer");
+        let inner = outer.join("inner");
+        fs::create_dir_all(&inner).unwrap();
+        let a = AllowedPaths::default();
+        let outer_canon = a.allow_root(&outer).unwrap();
+        let inner_canon = a.allow_root(&inner).unwrap();
+        let f = inner_canon.join("deep.md");
+        fs::write(&f, "x").unwrap();
+        // Both roots contain f; the closest (longest) one wins.
+        assert_eq!(a.owning_root(&f), Some(inner_canon.clone()));
+        // A file only in the outer root still resolves to the outer root.
+        let g = outer_canon.join("shallow.md");
+        fs::write(&g, "x").unwrap();
+        assert_eq!(a.owning_root(&g), Some(outer_canon));
     }
 
     #[test]

@@ -4,9 +4,10 @@ import { get } from 'svelte/store'
 const invoke = vi.fn()
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
 
-import { doc, newDoc, openDoc } from './doc'
+import { doc, newDoc, openDoc, edit } from './doc'
 import { settings, DEFAULTS } from './settings'
 import { errorMessage } from './errors'
+import { registerBufferFlush, unregisterBufferFlush } from './bufferFlush'
 import {
   deriveExportFilename,
   docTitle,
@@ -146,6 +147,27 @@ describe('exportDocument orchestration', () => {
       filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }],
     })
     expect(invoke).toHaveBeenCalledWith('write_file', { path: '/a/b/notes.md', contents: '# Hi' })
+  })
+
+  it('markdown format: flushes the pending editor serialization before reading doc.content', async () => {
+    // The editor's debounced emission still holds the newest keystrokes when
+    // the export starts: the registered buffer flush must land them first, or
+    // the exported markdown trails the screen by up to 200ms of typing.
+    openDoc('/a/b/notes.md', '# Hi')
+    settings.set({ ...DEFAULTS, exportFormat: 'md' })
+    const flush = () => edit('# Hi plus pending keystrokes')
+    registerBufferFlush(flush)
+    invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === 'save_file_dialog' ? '/a/b/notes.md' : undefined,
+    )
+
+    await exportDocument()
+
+    expect(invoke).toHaveBeenCalledWith('write_file', {
+      path: '/a/b/notes.md',
+      contents: '# Hi plus pending keystrokes',
+    })
+    unregisterBufferFlush(flush)
   })
 
   it('pdf format: invokes export_pdf with the wrapped HTML and never touches the save dialog or write_file', async () => {

@@ -8,6 +8,7 @@ import {
   scopeDarkCss,
   initTheme,
   themePref,
+  resolvedTheme,
   toggleTheme,
   type ThemePref,
 } from './theme'
@@ -115,6 +116,19 @@ describe('initTheme', () => {
     expect(get(themePref)).toBe('dark')
     expect(env.applyDom).toHaveBeenCalledWith('dark')
     expect(env.applyNative).toHaveBeenCalledWith('dark')
+  })
+
+  it('keeps resolvedTheme in sync through pref and system changes', () => {
+    const env = fakeEnv(null)
+    teardown = initTheme(env)
+    expect(get(resolvedTheme)).toBe('light')
+    themePref.set('dark')
+    expect(get(resolvedTheme)).toBe('dark')
+    themePref.set('system')
+    env.fireSystemChange(true)
+    expect(get(resolvedTheme)).toBe('dark')
+    env.fireSystemChange(false)
+    expect(get(resolvedTheme)).toBe('light')
   })
 
   it('toggleTheme persists and restamps', () => {

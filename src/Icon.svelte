@@ -11,9 +11,12 @@
   import folder from './assets/icons/folder.svg?raw'
   import folderOpen from './assets/icons/folder-open.svg?raw'
   import history from './assets/icons/history.svg?raw'
+  import image from './assets/icons/image.svg?raw'
   import keyboard from './assets/icons/keyboard.svg?raw'
   import layoutGrid from './assets/icons/layout-grid.svg?raw'
+  import moon from './assets/icons/moon.svg?raw'
   import settings from './assets/icons/settings.svg?raw'
+  import sun from './assets/icons/sun.svg?raw'
   import splitSquareVertical from './assets/icons/split-square-vertical.svg?raw'
   import x from './assets/icons/x.svg?raw'
 
@@ -30,9 +33,12 @@
     folder,
     'folder-open': folderOpen,
     history,
+    image,
     keyboard,
     'layout-grid': layoutGrid,
+    moon,
     settings,
+    sun,
     'split-square-vertical': splitSquareVertical,
     x,
   } as const

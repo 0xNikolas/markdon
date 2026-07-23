@@ -1,6 +1,8 @@
 import { writable, type Writable } from 'svelte/store'
 import { rewritePrefix, isSelfOrDescendant } from './paths'
 import { readonlyMemory } from './readonlyMemory'
+import { touchRecency } from './recency'
+import { emptyState, imageView } from './ui'
 
 export interface DocState {
   path: string | null
@@ -94,6 +96,7 @@ export function isDirty(
 }
 
 export function openDoc(path: string, content: string, readonly = false): void {
+  touchRecency(path) // every pathed load feeds Quick Open's recency sort
   if (readonly) readonlyMemory.lock(path)
   const effective = readonly || readonlyMemory.has(path)
   updateDoc((s) => ({
@@ -104,6 +107,42 @@ export function openDoc(path: string, content: string, readonly = false): void {
     readonly: effective,
     loadId: s.loadId + 1,
   }))
+  // Any document load dismisses the empty page. AFTER the doc update, so
+  // subscribers watching both stores (window-title sync) never compute from
+  // a half-transitioned pair. Same for the transient image view: opening a
+  // document is exactly what returns from viewing an image.
+  emptyState.set(false)
+  imageView.set(null)
+}
+
+/**
+ * Restore a stashed buffer from the buffer cache (bufferCache.ts) — like
+ * openDoc, but `savedContent`/`normalized` come from the cached entry instead
+ * of resetting to the loaded content, so dirty edits and the normalization
+ * baseline survive the switch-away/switch-back round trip. `readonly` is
+ * re-derived from readonlyMemory: it is a property of the DOCUMENT and the
+ * cache never stores it. The readonly⇒clean invariant updateDoc asserts holds
+ * here by construction — a readonly doc is clean at stash time (edit() no-ops
+ * while readonly), and lock/unlock only ever happens on the LIVE doc, so a
+ * readonly-locked path can never have accumulated a dirty cache entry.
+ * `loadId` bumps so the {#key} block remounts the editor with the restored
+ * text.
+ */
+export function restoreDoc(
+  path: string,
+  cached: { content: string; savedContent: string; normalized: string | null },
+): void {
+  touchRecency(path) // a cache restore is a load too (see openDoc)
+  updateDoc((s) => ({
+    path,
+    content: cached.content,
+    savedContent: cached.savedContent,
+    normalized: cached.normalized,
+    readonly: readonlyMemory.has(path),
+    loadId: s.loadId + 1,
+  }))
+  emptyState.set(false) // any document load dismisses the empty page (see openDoc)
+  imageView.set(null) // …and the transient image view (see openDoc)
 }
 
 export function newDoc(): void {
@@ -115,6 +154,22 @@ export function newDoc(): void {
     readonly: false,
     loadId: s.loadId + 1,
   }))
+  emptyState.set(false) // the scratch is a real (editable) document (see openDoc)
+  imageView.set(null) // …and the transient image view (see openDoc)
+}
+
+/**
+ * Enter the no-document empty page: reset the buffer to a pristine scratch
+ * (so the header/status chrome and every dirty check read clean) and raise
+ * emptyState AFTER — newDoc, like every document load, clears the flag, so
+ * the order is load-then-raise by construction. Reached from closing the
+ * last open file (App.onCloseFile) and a boot with no workspace at all
+ * (appBoot.maybeRestoreBootDocument); an explicit File > New instead stops
+ * at newDoc() and keeps the editable scratch.
+ */
+export function showEmptyState(): void {
+  newDoc()
+  emptyState.set(true)
 }
 
 export function edit(content: string): void {

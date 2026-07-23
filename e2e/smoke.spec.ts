@@ -43,7 +43,7 @@ test('production bundle boots, accepts typing, renders a pasted image', async ({
   await expect(pm).toBeVisible()
 
   // The seeded open-file pipeline ran end-to-end:
-  // take_opened_files -> guarded openPath -> read_file -> openDoc -> editor.
+  // take_opened_files -> switchGuarded openPath -> read_file -> openDoc -> editor.
   await expect(pm).toContainText('Hello smoke')
 
   // The schema self-check passed in this build: no error banner. (The

@@ -166,4 +166,60 @@ describe('resolveImageSrc', () => {
     expect(resolveImageSrc('x.png', null)).toBe('x.png')
     expect(convertFileSrc).not.toHaveBeenCalled()
   })
+
+  it('percent-decodes a same-dir ref before conversion (no double-encoding downstream)', () => {
+    // The real convertFileSrc encodes the whole path and the asset handler
+    // decodes once, so the DECODED path is the contract at this boundary.
+    expect(resolveImageSrc('my%20image.png', '/ws/notes/note.md')).toBe(
+      'asset://localhost//ws/notes/my image.png',
+    )
+    expect(convertFileSrc).toHaveBeenCalledWith('/ws/notes/my image.png')
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('percent-decodes an absolute path', () => {
+    expect(resolveImageSrc('/ws/my%20img.png', '/ws/note.md')).toBe(
+      'asset://localhost//ws/my img.png',
+    )
+    expect(convertFileSrc).toHaveBeenCalledWith('/ws/my img.png')
+  })
+
+  it('passes the decoded rel to resolve_image_asset for a subdirectory ref', async () => {
+    invoke.mockResolvedValue('/ws/notes/img dir/x y.png')
+    await expect(resolveImageSrc('img%20dir/x%20y.png', '/ws/notes/note.md')).resolves.toBe(
+      'asset://localhost//ws/notes/img dir/x y.png',
+    )
+    expect(invoke).toHaveBeenCalledWith('resolve_image_asset', {
+      docPath: '/ws/notes/note.md',
+      rel: 'img dir/x y.png',
+    })
+  })
+
+  it('classifies an encoded updir ref (%2E%2E/) as async — decode precedes routing', async () => {
+    // Decoding must happen before the same-dir classification, or the escape
+    // would slip onto the synchronous path; the backend still enforces
+    // containment either way.
+    invoke.mockRejectedValue('image path does not resolve inside the document directory')
+    await expect(resolveImageSrc('%2E%2E/secret.png', '/ws/notes/note.md')).resolves.toBe(
+      'asset://localhost//ws/secret.png',
+    )
+    expect(invoke).toHaveBeenCalledWith('resolve_image_asset', {
+      docPath: '/ws/notes/note.md',
+      rel: '../secret.png',
+    })
+  })
+
+  it('keeps a src with a stray literal % verbatim (decode throws, raw fallback)', () => {
+    expect(resolveImageSrc('100%.png', '/ws/notes/note.md')).toBe(
+      'asset://localhost//ws/notes/100%.png',
+    )
+    expect(convertFileSrc).toHaveBeenCalledWith('/ws/notes/100%.png')
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('never decodes a scheme’d URL containing %20', () => {
+    const src = 'https://example.com/my%20image.png'
+    expect(resolveImageSrc(src, '/ws/note.md')).toBe(src)
+    expect(convertFileSrc).not.toHaveBeenCalled()
+  })
 })

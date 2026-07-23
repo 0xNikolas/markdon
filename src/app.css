@@ -69,6 +69,7 @@
   --info-border: #bfdbfe;    /* App.svelte .readonly-bar border-bottom */
   --find-match-bg: rgba(229, 104, 43, 0.2);  /* editor-theme.css .find-match */
   --find-active-bg: rgba(229, 104, 43, 0.45); /* editor-theme.css .find-active */
+  --selection-bg: rgba(229, 104, 43, 0.22);  /* text selection, both editors */
 
   /* Settings-driven editor typography contract (src/lib/settings.ts stamps these
      inline on <html> on every change, outranking these :root defaults). */
@@ -109,6 +110,7 @@
   --info-bg:  #0f1e35;  --info-fg:  #93c5fd;  --info-border: #1e3a5f;
   --find-match-bg: rgba(229, 104, 43, 0.3);
   --find-active-bg: rgba(229, 104, 43, 0.55);
+  --selection-bg: rgba(229, 104, 43, 0.34); /* higher alpha: must clear #0b0f19 */
 }
 html, body { margin: 0; height: 100%; }
 body { background: var(--bg); color: var(--fg); }

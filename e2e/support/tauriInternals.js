@@ -21,6 +21,12 @@
 //   window.__TAURI_WORKSPACE_ROOT__ when set, restore_workspace/list_workspace
 //                                   derive a live Workspace tree from the two
 //                                   maps above (unset -> no workspace, as before)
+//   window.__TAURI_RECENT__         roots served by list_recent_workspaces
+//                                   (unset -> empty; the Recent section hides)
+//   window.__TAURI_WORKSPACE_UI__   root -> last-open file map backing
+//                                   save_workspace_ui / load_workspace_ui
+//                                   (seedable; load applies the Rust-side
+//                                   containment + existence validation)
 //   window.__TAURI_IPC_ERRORS__     cmd -> message; invoke REJECTS with the raw
 //                                   string, mirroring how Rust command errors
 //                                   arrive (checked before overrides)
@@ -48,6 +54,10 @@
   const NO_CLOBBER = 'a file or folder with that name already exists'
 
   const fsMap = () => (window.__TAURI_FS__ ||= {})
+  // Backing store for the `md` CLI installer commands (cli_status / install_cli
+  // / uninstall_cli). Seedable + readable from specs via window.__TAURI_CLI__.
+  const cliState = () =>
+    (window.__TAURI_CLI__ ||= { installed: false, path: '/usr/local/bin/md', on_path: true })
   const dirList = () => (window.__TAURI_DIRS__ ||= [])
   const baseName = (p) => p.slice(p.lastIndexOf('/') + 1)
   const parentDir = (p) => p.slice(0, p.lastIndexOf('/'))
@@ -129,13 +139,81 @@
     },
     list_workspace: (args) => buildWorkspace(args.root),
     close_workspace: () => null,
+    // Mirrors workspace.rs resolve_recent: with a folder already open Rust
+    // spawns a new instance and returns null; a folder-less window adopts the
+    // root in place (specs override for custom Workspace payloads or assert
+    // the spawn path via the call log).
+    open_recent_workspace: (args) => (args.currentRoot ? null : buildWorkspace(args.root)),
+    // Per-workspace ui.json (the whole Open Files strip, v2): persists the
+    // {tabs,preview,active} shape into the seedable __TAURI_WORKSPACE_UI__ map.
+    // Load mirrors workspace.rs load_ui_state's trust posture VERBATIM — every
+    // path must sit strictly under the root AND still exist (in the in-memory
+    // FS), stale entries are dropped, tabs dedupe, a preview colliding with a
+    // surviving tab drops, and a wholly-empty result degrades to null. A bare
+    // STRING seed is tolerated as a v1 lastFile (→ active only), so specs can
+    // seed a single remembered file without spelling out the object.
+    save_workspace_ui: (args) => {
+      ;(window.__TAURI_WORKSPACE_UI__ ||= {})[args.root] = {
+        tabs: args.tabs || [],
+        preview: args.preview ?? null,
+        active: args.active ?? null,
+      }
+      return null
+    },
+    load_workspace_ui: (args) => {
+      const raw = (window.__TAURI_WORKSPACE_UI__ || {})[args.root]
+      if (raw == null) return null
+      const state =
+        typeof raw === 'string' ? { tabs: [], preview: null, active: raw } : raw
+      const root = args.root
+      const valid = (p) =>
+        typeof p === 'string' && p.startsWith(root + '/') && typeof fsMap()[p] === 'string'
+          ? p
+          : null
+      const tabs = []
+      for (const p of state.tabs || []) {
+        const v = valid(p)
+        if (v && !tabs.includes(v)) tabs.push(v)
+      }
+      const pv = valid(state.preview)
+      const preview = pv && !tabs.includes(pv) ? pv : null
+      const active = valid(state.active)
+      if (tabs.length === 0 && preview == null && active == null) return null
+      return { tabs, preview, active }
+    },
+    // Empty page's Recent section: seed roots via __TAURI_RECENT__ (default:
+    // no recents, the section stays hidden).
+    list_recent_workspaces: () => window.__TAURI_RECENT__ || [],
     set_readonly_menu_state: () => null,
+    // Log-only, like the windowing hand-offs: the call log IS the assertion
+    // surface (revealing a file in Finder has no browser-visible effect).
+    reveal_log_file: () => null,
+    // Strip context menu "Reveal in Finder": log-only, same as reveal_log_file
+    // (the call log carries the revealed path assertion).
+    reveal_path: () => null,
     watch_file: () => null,
     unwatch: () => null,
+    watch_workspace: () => null,
+    unwatch_workspace: () => null,
     record_history: () => null,
     list_history: () => [],
     load_prefs: () => null,
     save_prefs: () => null,
+    // `md` CLI installer (src-tauri/src/cli_install.rs): a seedable in-memory
+    // installed-state stands in for the real shim on disk. cli_status reads it;
+    // install/uninstall flip `installed` and return the fresh status — exactly
+    // like the Rust commands, whose replies are the post-change cli_status.
+    // Seed __TAURI_CLI__ from a spec to drive the not-installed / off-PATH
+    // views (default: installed=false, /usr/local/bin, on PATH).
+    cli_status: () => ({ ...cliState() }),
+    install_cli: () => {
+      cliState().installed = true
+      return { ...cliState() }
+    },
+    uninstall_cli: () => {
+      cliState().installed = false
+      return { ...cliState() }
+    },
     // Windowing hand-offs: log-only (the call log IS the assertion surface).
     open_document_window: () => null,
     open_file_new_instance: () => null,

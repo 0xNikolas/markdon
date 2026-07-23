@@ -3,8 +3,9 @@ import type { WorkspaceDir } from './workspace'
 /**
  * Pure workspace-tree and name helpers for the sidebar's file operations:
  * name validation, visible-row flattening, folder enumeration, and paste-
- * target resolution. No stores, no IPC — the modals (NameModal, MoveToModal)
- * depend on this module alone.
+ * target resolution. No stores, no IPC — everything here is a pure function
+ * (workspace.ts contributes only the WorkspaceDir type), so the modals
+ * (NameModal, MoveToModal) can depend on this module alone.
  */
 
 /**

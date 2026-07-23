@@ -12,9 +12,13 @@ import {
   retargetPath,
   detachIfAffected,
   revertBuffer,
+  restoreDoc,
   resetReadonlyMemory,
   adoptNormalization,
+  showEmptyState,
 } from './doc'
+import { emptyState, imageView } from './ui'
+import { recencyOf, resetRecency } from './recency'
 
 describe('doc store', () => {
   beforeEach(() => {
@@ -143,6 +147,44 @@ describe('doc store', () => {
     expect(s.content).toBe('# A')
     expect(s.savedContent).toBe('# A')
     expect(isDirty(s)).toBe(false)
+  })
+})
+
+describe('restoreDoc (buffer-cache restore)', () => {
+  beforeEach(() => {
+    newDoc()
+    resetReadonlyMemory()
+  })
+
+  it('preserves savedContent and normalized from the cached entry (dirty survives)', () => {
+    openDoc('/tmp/other.md', '# other')
+    restoreDoc('/tmp/a.md', { content: 'edited', savedContent: 'disk', normalized: 'norm' })
+    const s = get(doc)
+    expect(s.path).toBe('/tmp/a.md')
+    expect(s.content).toBe('edited')
+    expect(s.savedContent).toBe('disk')
+    expect(s.normalized).toBe('norm')
+    expect(isDirty(s)).toBe(true)
+  })
+
+  it('a restored normalization-baseline buffer reads clean', () => {
+    restoreDoc('/tmp/a.md', { content: '- x\n', savedContent: '* x\n', normalized: '- x\n' })
+    expect(isDirty(get(doc))).toBe(false)
+  })
+
+  it('re-derives readonly from readonlyMemory, not from the entry', () => {
+    openDoc('/tmp/locked.md', '# RO', true) // locks the path
+    openDoc('/tmp/other.md', '# other')
+    restoreDoc('/tmp/locked.md', { content: '# RO', savedContent: '# RO', normalized: null })
+    expect(get(doc).readonly).toBe(true)
+    restoreDoc('/tmp/unlocked.md', { content: 'x', savedContent: 'x', normalized: null })
+    expect(get(doc).readonly).toBe(false)
+  })
+
+  it('bumps loadId so the editor remounts with the restored text', () => {
+    const before = get(doc).loadId
+    restoreDoc('/tmp/a.md', { content: 'x', savedContent: 'x', normalized: null })
+    expect(get(doc).loadId).toBe(before + 1)
   })
 })
 
@@ -394,5 +436,102 @@ describe('adoptNormalization (normalization baseline)', () => {
     adoptNormalization('- x\n')
     markSaved('/tmp/a.md', '- x\n')
     expect(isDirty(get(doc))).toBe(false)
+  })
+})
+
+describe('empty-state transitions', () => {
+  beforeEach(() => {
+    newDoc()
+    resetReadonlyMemory()
+    emptyState.set(false)
+  })
+
+  it('showEmptyState resets the buffer to a pristine scratch and raises the flag', () => {
+    openDoc('/tmp/a.md', '# A')
+    edit('# A typed')
+    showEmptyState()
+    const s = get(doc)
+    expect(s.path).toBeNull()
+    expect(s.content).toBe('')
+    expect(isDirty(s)).toBe(false)
+    expect(get(emptyState)).toBe(true)
+  })
+
+  it('every document load clears the flag: openDoc, restoreDoc, newDoc', () => {
+    showEmptyState()
+    openDoc('/tmp/a.md', '# A')
+    expect(get(emptyState)).toBe(false)
+
+    showEmptyState()
+    restoreDoc('/tmp/a.md', { content: 'x', savedContent: 'x', normalized: null })
+    expect(get(emptyState)).toBe(false)
+
+    showEmptyState()
+    newDoc() // an explicit File > New: the editable scratch, not the page
+    expect(get(emptyState)).toBe(false)
+  })
+
+  it('non-load doc mutations leave the flag alone', () => {
+    // Defensive: only loads dismiss the page. (In production no edit can
+    // arrive while it is up — the editor is unmounted — but the store must
+    // not couple unrelated transitions to the flag.)
+    showEmptyState()
+    edit('typed')
+    expect(get(emptyState)).toBe(true)
+  })
+})
+
+describe('image-view clearing (the doc-load chokepoint)', () => {
+  beforeEach(() => {
+    newDoc()
+    imageView.set(null)
+  })
+
+  it('every document load clears the image view: openDoc, restoreDoc, newDoc', () => {
+    imageView.set('/ws/logo.png')
+    openDoc('/tmp/a.md', '# A')
+    expect(get(imageView)).toBeNull()
+
+    imageView.set('/ws/logo.png')
+    restoreDoc('/tmp/a.md', { content: 'x', savedContent: 'x', normalized: null })
+    expect(get(imageView)).toBeNull()
+
+    imageView.set('/ws/logo.png')
+    newDoc()
+    expect(get(imageView)).toBeNull()
+  })
+
+  it('showEmptyState clears the image view too (it loads a pristine scratch first)', () => {
+    imageView.set('/ws/logo.png')
+    showEmptyState()
+    expect(get(imageView)).toBeNull()
+    expect(get(emptyState)).toBe(true)
+  })
+})
+
+describe('recency wiring (Quick Open sections)', () => {
+  beforeEach(() => {
+    resetRecency()
+  })
+
+  it('openDoc bumps the loaded path to most-recent', () => {
+    openDoc('/tmp/a.md', '# A')
+    openDoc('/tmp/b.md', '# B')
+    expect(recencyOf('/tmp/b.md')).toBeGreaterThan(recencyOf('/tmp/a.md'))
+    expect(recencyOf('/tmp/a.md')).toBeGreaterThan(0)
+  })
+
+  it('restoreDoc (a cache restore) is a load too and bumps recency', () => {
+    openDoc('/tmp/a.md', '# A')
+    restoreDoc('/tmp/b.md', { content: 'x', savedContent: 'x', normalized: null })
+    expect(recencyOf('/tmp/b.md')).toBeGreaterThan(recencyOf('/tmp/a.md'))
+  })
+
+  it('newDoc records nothing — the untitled scratch has no path to rank', () => {
+    openDoc('/tmp/a.md', '# A')
+    newDoc()
+    openDoc('/tmp/b.md', '# B')
+    // The scratch consumed no sequence slot: b lands exactly one past a.
+    expect(recencyOf('/tmp/b.md')).toBe(recencyOf('/tmp/a.md') + 1)
   })
 })

@@ -25,12 +25,19 @@ export interface SeedOptions {
   overrides?: Record<string, unknown>
   /** Per-command forced rejections (stub __TAURI_IPC_ERRORS__). */
   errors?: Record<string, string>
+  /**
+   * Extra ROOT-LEVEL files merged into the seeded tree (basename → content),
+   * for specs that need more rows than the fixture's five markdown files
+   * (e.g. overflowing the capped Open Files pane). Root-level only — nested
+   * paths would also need __TAURI_DIRS__ entries.
+   */
+  extraFiles?: Record<string, string>
 }
 
 export async function seedWorkspace(page: Page, opts: SeedOptions = {}): Promise<void> {
   await page.addInitScript({ path: STUB })
   await page.addInitScript(
-    ({ root, overrides, errors }) => {
+    ({ root, overrides, errors, extraFiles }) => {
       window.__TAURI_WORKSPACE_ROOT__ = root
       window.__TAURI_DIRS__ = [`${root}/sub`]
       window.__TAURI_FS__ = {
@@ -43,17 +50,38 @@ export async function seedWorkspace(page: Page, opts: SeedOptions = {}): Promise
         [`${root}/huge.md`]: '# Huge\n\n' + 'x'.repeat(100_100) + '\n',
         [`${root}/sub/nested.md`]: '# Nested\n\nnested body\n',
       }
+      if (extraFiles) {
+        for (const [name, content] of Object.entries(extraFiles)) {
+          window.__TAURI_FS__[`${root}/${name}`] = content
+        }
+      }
       if (overrides) window.__TAURI_IPC_OVERRIDES__ = overrides
       if (errors) window.__TAURI_IPC_ERRORS__ = errors
     },
-    { root: ROOT, overrides: opts.overrides ?? null, errors: opts.errors ?? null },
+    {
+      root: ROOT,
+      overrides: opts.overrides ?? null,
+      errors: opts.errors ?? null,
+      extraFiles: opts.extraFiles ?? null,
+    },
   )
 }
 
-/** Load the app and wait for the restored workspace tree to render. */
+/**
+ * Load the app and wait for the restored workspace tree to render — plus the
+ * boot document restore to settle: an unclaimed window looks up the
+ * workspace's last-open file (load_workspace_ui), and since these seeds
+ * store none, it lands on the fresh untitled scratch (no strip rows, no
+ * preview — the empty page is reserved for a boot with no workspace at all).
+ * Waiting for the lookup pins the boot state every spec starts from; specs
+ * that SEED a last file drive the boot themselves in last-file.spec.ts.
+ */
 export async function gotoApp(page: Page): Promise<void> {
   await page.goto('/')
   await expect(workspaceTree(page)).toBeVisible()
+  await expect.poll(async () => (await calls(page, 'load_workspace_ui')).length).toBe(1)
+  await expect(page.locator('.filename')).toHaveText('Untitled')
+  await expect(stripRows(page)).toHaveCount(0)
 }
 
 // -- locators -----------------------------------------------------------------
@@ -68,9 +96,16 @@ export function openFilesStrip(page: Page): Locator {
   return page.getByTestId('open-files')
 }
 
-/** A workspace-tree row button by its exact visible name. */
+/** The no-document empty page (rendered in place of the editor). */
+export function emptyPage(page: Page): Locator {
+  return page.getByTestId('empty-state')
+}
+
+/** A workspace-tree row (role=treeitem — ARIA tree pattern) by its exact
+    visible name. The Open Files strip rows stay role=button — it is a list,
+    not a tree — so openFilesStrip getByRole('button') locators are separate. */
 export function treeRow(page: Page, name: string): Locator {
-  return workspaceTree(page).getByRole('button', { name, exact: true })
+  return workspaceTree(page).getByRole('treeitem', { name, exact: true })
 }
 
 /** Every row in the Open Files strip (pinned and preview alike). */
@@ -106,12 +141,14 @@ export function emitTauri(page: Page, event: string, payload: unknown = null): P
 // -- state builders -----------------------------------------------------------
 
 /**
- * Open `name` as a PINNED strip entry. Deliberately preview-first: a bare
- * dblclick on a tree row while the Open Files strip is unmounted is racy —
- * the first click mounts the strip, which pushes the tree rows down between
- * the two physical clicks, so the second click lands on a different row.
- * Previewing first settles the layout; the dblclick then converts the
- * preview in place (same row count, no shift).
+ * Open `name` as a PINNED strip entry. Deliberately preview-first: the Open
+ * Files pane now reserves a 3-row min-height while a workspace is open (a
+ * bare dblclick is safe for the first three rows — open-files-pane.spec.ts
+ * pins that), but the pane still GROWS at the 3→4→5→6 transitions, where a
+ * bare dblclick's first click would shift the tree between the two physical
+ * clicks. Previewing first and awaiting the row settles the layout at ANY
+ * count; the dblclick then converts the preview in place (same row count,
+ * no shift) — so this stays the universally safe builder.
  */
 export async function pinFile(page: Page, name: string): Promise<void> {
   await treeRow(page, name).click()
@@ -122,6 +159,36 @@ export async function pinFile(page: Page, name: string): Promise<void> {
   await expect(
     openFilesStrip(page).getByRole('button', { name, exact: true }),
   ).toHaveAttribute('aria-current', 'true')
+}
+
+/**
+ * Switch to `name` via its workspace-tree row (a single click — a preview
+ * open for unpinned files, an in-place switch for pinned ones) and wait until
+ * its strip row is the active one. With the buffer cache, a switch between
+ * pathed docs never prompts — this helper asserts the LANDED state, so a
+ * regression to prompting shows up as a timeout here.
+ */
+export async function switchTo(page: Page, name: string): Promise<void> {
+  await treeRow(page, name).click()
+  await expect(
+    openFilesStrip(page).getByRole('button', {
+      name: new RegExp(`^${name}( \\(preview\\))?$`),
+    }),
+  ).toHaveAttribute('aria-current', 'true')
+}
+
+/**
+ * Close `name`'s Open Files strip row via its hover close affordance (pinned
+ * or preview row alike). Does NOT wait for the row to disappear — a dirty
+ * cached row opens the discard dialog instead, and the caller owns that
+ * resolution.
+ */
+export async function closeStripRow(page: Page, name: string): Promise<void> {
+  const row = openFilesStrip(page)
+    .locator('.open-file-row')
+    .filter({ hasText: name })
+  await row.hover()
+  await row.getByRole('button', { name: new RegExp(`^Close ${name}`) }).click()
 }
 
 /**

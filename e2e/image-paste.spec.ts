@@ -1,5 +1,11 @@
 import { test, expect, type Page } from '@playwright/test'
-import { seedWorkspace, gotoApp, treeRow, editor, calls } from './support/workspaceFixture.ts'
+import {
+  seedWorkspace,
+  gotoApp,
+  treeRow,
+  editor,
+  calls,
+} from './support/workspaceFixture.ts'
 
 /**
  * Image paste-to-file (the c2d47cb production bug area): the Editor.svelte
@@ -69,12 +75,30 @@ test('a subdirectory image ref resolves through resolve_image_asset (async proxy
   expect(resolves[0].args).toEqual({ docPath: '/ws/pics.md', rel: 'img/shot.png' })
 })
 
+test('a percent-encoded image ref resolves to the decoded on-disk path', async ({ page }) => {
+  await seedWorkspace(page)
+  // URL-encoded markdown src (`my%20shot.png`) referencing a file whose disk
+  // name contains a real space: resolveImageSrc must decode once before path
+  // handling, or the real convertFileSrc would double-encode and 404.
+  await page.addInitScript(() => {
+    const fs = (window.__TAURI_FS__ ||= {})
+    fs['/ws/pics2.md'] = '# P\n\n![shot](my%20shot.png)\n'
+    fs['/ws/my shot.png'] = 'png-bytes'
+  })
+  await gotoApp(page)
+  await treeRow(page, 'pics2.md').click()
+
+  await expect(image(page)).toHaveAttribute('src', 'asset://localhost//ws/my shot.png', {
+    timeout: 10_000,
+  })
+})
+
 test('pasting into an untitled doc stays a session blob: URL, no backend write', async ({
   page,
 }) => {
   await seedWorkspace(page)
-  await gotoApp(page)
-  await expect(editor(page)).toBeVisible() // boot doc is untitled
+  await gotoApp(page) // a fresh-workspace boot lands on the untitled scratch
+  await expect(editor(page)).toBeVisible()
 
   await pasteImage(page)
 

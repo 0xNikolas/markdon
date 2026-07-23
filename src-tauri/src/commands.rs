@@ -97,6 +97,8 @@ pub fn resolve_image_asset(
         .filter(|p| !p.as_os_str().is_empty())
         .ok_or_else(|| IMAGE_RESOLVE_ERR.to_string())?;
     let resolved = resolve_image_under(parent, &rel)?;
+    // Irrevocable for the process lifetime (FsScope has no un-allow — see
+    // lib.rs allow_asset_dir); acceptable: single file, display channel only.
     if let Err(e) = app.asset_protocol_scope().allow_file(&resolved) {
         log::warn!("could not allow resolved image in asset scope: {e}");
     }
@@ -104,6 +106,117 @@ pub fn resolve_image_asset(
         .to_str()
         .map(str::to_string)
         .ok_or_else(|| "non-UTF-8 path".to_string())
+}
+
+/// Platform invocation for revealing `path` in the OS file manager: macOS
+/// selects the file via `open -R`; Windows via `explorer /select,`; Linux
+/// xdg-open has no select, so the containing directory is opened instead.
+/// With `is_dir` (the fallback when the log file doesn't exist yet) the
+/// directory itself is opened everywhere. Pure so each cfg branch is
+/// unit-testable.
+pub(crate) fn reveal_invocation(
+    path: &Path,
+    is_dir: bool,
+) -> (&'static str, Vec<std::ffi::OsString>) {
+    #[cfg(target_os = "macos")]
+    {
+        if is_dir {
+            ("open", vec![path.as_os_str().to_os_string()])
+        } else {
+            ("open", vec!["-R".into(), path.as_os_str().to_os_string()])
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // Explorer does its own command-line parsing (commas split fields), and
+        // std's spawn would wrap any spaced argument in quotes WHOLE — turning
+        // `/select,C:\Users\John Doe\…` into one quoted token Explorer no
+        // longer recognizes as a switch. So quote ONLY the path (Windows paths
+        // cannot contain `"`) and hand the argument to Explorer verbatim via
+        // `raw_arg` — see the cfg(windows) spawn in `reveal_log_file`.
+        let quoted = |p: &Path| {
+            let mut arg = std::ffi::OsString::from("\"");
+            arg.push(p.as_os_str());
+            arg.push("\"");
+            arg
+        };
+        if is_dir {
+            ("explorer", vec![quoted(path)])
+        } else {
+            let mut arg = std::ffi::OsString::from("/select,");
+            arg.push(quoted(path));
+            ("explorer", vec![arg])
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let dir = if is_dir {
+            path
+        } else {
+            path.parent().unwrap_or(path)
+        };
+        ("xdg-open", vec![dir.as_os_str().to_os_string()])
+    }
+}
+
+/// Spawn a `reveal_invocation` file-manager command and reap it. Spawn+reap
+/// pattern as in windows.rs: dropping the Child would leave a zombie until
+/// waited on, so a throwaway thread reaps it. Windows: the arguments are
+/// pre-quoted for Explorer's own parser (see `reveal_invocation`); `raw_arg`
+/// bypasses std's whole-argument quoting, which would otherwise swallow the
+/// `/select,` switch for spaced paths.
+fn spawn_reveal(prog: &str, args: Vec<std::ffi::OsString>) -> Result<(), String> {
+    let mut cmd = std::process::Command::new(prog);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        for arg in args {
+            cmd.raw_arg(arg);
+        }
+    }
+    #[cfg(not(windows))]
+    cmd.args(args);
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
+/// Help > Show Log (and the error banner's "Details…" button): reveal the log
+/// file THIS instance writes in the OS file manager. The filename comes from
+/// the managed `LogFileName` — computed in `run()` from the same handed-off
+/// branch that configured the log plugin, so a per-pid child reveals its own
+/// markdon-<pid>.log, never the primary's. A missing file (fresh install /
+/// rotated away) falls back to revealing the log directory rather than
+/// erroring.
+#[tauri::command]
+pub fn reveal_log_file(
+    app: tauri::AppHandle,
+    name: State<'_, crate::LogFileName>,
+) -> Result<(), String> {
+    let dir = app.path().app_log_dir().map_err(|e| e.to_string())?;
+    let path = dir.join(&name.0);
+    let (prog, args) = if path.exists() {
+        reveal_invocation(&path, false)
+    } else {
+        reveal_invocation(&dir, true)
+    };
+    spawn_reveal(prog, args)
+}
+
+/// Reveal a document in the OS file manager — the Open Files strip's
+/// context-menu "Reveal in Finder". Gated by the strict per-path allowlist
+/// (`AllowedPaths::ensure`, NOT `ensure_root`): only a path the user actually
+/// granted — a dialog pick, an OS open event, or a file inside a granted
+/// workspace — can be revealed, so even a fully compromised webview cannot
+/// use this command to probe or surface arbitrary filesystem locations.
+/// Same platform invocation + spawn/reap as `reveal_log_file`.
+#[tauri::command]
+pub fn reveal_path(path: String, allowed: State<'_, AllowedPaths>) -> Result<(), String> {
+    allowed.ensure(&path)?;
+    let (prog, args) = reveal_invocation(Path::new(&path), false);
+    spawn_reveal(prog, args)
 }
 
 #[tauri::command]
@@ -168,6 +281,68 @@ mod tests {
     fn write_file_rejects_unc_path() {
         let res = write_file_impl(r"\\evil-server\share\x", "x");
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn reject_unsafe_path_rejects_canonical_windows_verbatim_paths() {
+        // Pins WHY watch_workspace must not apply this guard to Rust's own
+        // canonicalize output: on Windows, canonical paths carry the `\\?\`
+        // verbatim prefix, which this guard rejects wholesale. Commands that
+        // receive a canonical root back from the webview must rely on
+        // ensure_root's granted-set membership instead.
+        assert!(reject_unsafe_path(r"\\?\C:\Users\me\notes").is_err());
+    }
+
+    // -- reveal_invocation ----------------------------------------------------
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn reveal_invocation_selects_the_file_and_opens_the_dir_fallback() {
+        let (prog, args) = reveal_invocation(Path::new("/logs/markdon.log"), false);
+        assert_eq!(prog, "open");
+        assert_eq!(args, vec!["-R", "/logs/markdon.log"]);
+        let (prog, args) = reveal_invocation(Path::new("/logs"), true);
+        assert_eq!(prog, "open");
+        assert_eq!(args, vec!["/logs"]);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn reveal_invocation_selects_the_file_and_opens_the_dir_fallback() {
+        // Only the PATH is quoted, never the `/select,` switch: the arguments
+        // go to Explorer verbatim (raw_arg), and a whole-argument quote around
+        // a spaced path would make Explorer drop the switch entirely.
+        let (prog, args) = reveal_invocation(Path::new(r"C:\logs\markdon.log"), false);
+        assert_eq!(prog, "explorer");
+        assert_eq!(args, vec![r#"/select,"C:\logs\markdon.log""#]);
+        let (prog, args) = reveal_invocation(Path::new(r"C:\logs"), true);
+        assert_eq!(prog, "explorer");
+        assert_eq!(args, vec![r#""C:\logs""#]);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn reveal_invocation_quotes_a_spaced_profile_path() {
+        // The common case that broke: a user profile containing a space.
+        let (prog, args) =
+            reveal_invocation(Path::new(r"C:\Users\John Doe\logs\markdon.log"), false);
+        assert_eq!(prog, "explorer");
+        assert_eq!(
+            args,
+            vec![r#"/select,"C:\Users\John Doe\logs\markdon.log""#]
+        );
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[test]
+    fn reveal_invocation_opens_the_containing_dir() {
+        // xdg-open has no select flag: a file ref opens its parent directory.
+        let (prog, args) = reveal_invocation(Path::new("/logs/markdon.log"), false);
+        assert_eq!(prog, "xdg-open");
+        assert_eq!(args, vec!["/logs"]);
+        let (prog, args) = reveal_invocation(Path::new("/logs"), true);
+        assert_eq!(prog, "xdg-open");
+        assert_eq!(args, vec!["/logs"]);
     }
 
     // -- resolve_image_under --------------------------------------------------

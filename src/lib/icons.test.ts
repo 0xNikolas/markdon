@@ -23,12 +23,15 @@ const EXPECTED = [
   'folder-open.svg',
   'folder.svg',
   'history.svg',
+  'image.svg',
   'italic.svg',
   'keyboard.svg',
   'layout-grid.svg',
   'link-2.svg',
+  'moon.svg',
   'settings.svg',
   'split-square-vertical.svg',
+  'sun.svg',
   'x.svg',
 ]
 

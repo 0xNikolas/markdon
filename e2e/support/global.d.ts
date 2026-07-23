@@ -7,6 +7,17 @@ declare global {
     __TAURI_FS__?: Record<string, string>
     __TAURI_DIRS__?: string[]
     __TAURI_WORKSPACE_ROOT__?: string
+    __TAURI_RECENT__?: string[]
+    /** Per-workspace ui.json map: the v2 strip object, or a bare string seed
+        (tolerated as a v1 lastFile → active only) — see tauriInternals.js. */
+    __TAURI_WORKSPACE_UI__?: Record<
+      string,
+      string | { tabs: string[]; preview: string | null; active: string | null }
+    >
+    /** Clipboard spy installed by specs (navigator.clipboard.writeText override). */
+    __COPIED__?: string | null
+    /** Seedable in-memory state backing the `md` CLI installer stub commands. */
+    __TAURI_CLI__?: { installed: boolean; path: string | null; on_path: boolean }
     __tauriEmit(event: string, payload?: unknown): void
   }
 }

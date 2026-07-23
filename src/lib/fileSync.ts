@@ -6,6 +6,7 @@ import { watchStatus } from './ui'
 import { recordExternal } from './history'
 import { logInfo, logWarn } from './logging'
 import { listenScoped } from './windowing'
+import { flushBufferEdits } from './bufferFlush'
 
 /**
  * When set, the open file changed on disk while the buffer had unsaved edits.
@@ -62,6 +63,64 @@ export function dismissConflict(): void {
 }
 
 /**
+ * Test-only: forget a prior "Keep mine" decision. `dismissedDisk` is module
+ * state that outlives any one test (mirrors doc.ts's resetReadonlyMemory);
+ * without a reset, a test that dismisses a conflict silently changes how a
+ * later test classifies the same disk version.
+ */
+export function resetDismissedDisk(): void {
+  dismissedDisk = null
+}
+
+/**
+ * Re-read `path` from disk and react per {@link classifyExternalChange}:
+ * clean+changed → silent reload (recorded to File History), dirty+changed →
+ * conflict bar, otherwise ignore. Shared by the file-watcher listener and by
+ * openPath's cache-hit restore (files.ts), where the restored entry's
+ * savedContent is disk-truth-at-stash-time — so an external change to a
+ * cached-but-inactive buffer surfaces through this same classifier with no
+ * new logic.
+ *
+ * Both the path AND the loadId are re-checked after the await: path equality
+ * alone covers a switch-away, but not a switch-away-and-back — a second
+ * stash/restore of the same path while this read is in flight would otherwise
+ * classify stale disk content against the newly restored buffer. Typing
+ * doesn't bump loadId, so edits made while the read is in flight still
+ * classify correctly (same as before the extraction).
+ */
+export async function reconcileWithDisk(path: string): Promise<void> {
+  const before = get(doc)
+  if (before.path !== path) return
+  const loadId = before.loadId
+  let disk: string
+  try {
+    disk = await invoke<string>('read_file', { path })
+  } catch {
+    // Expected during atomic writes — the file may be mid-write or removed.
+    logInfo('external-change read skipped (file mid-write or removed)')
+    return
+  }
+  // Land any pending (debounced) editor serialization before classifying:
+  // without it a buffer with un-emitted keystrokes reads clean, and a disk
+  // change would silently reload right over them. Flushing doesn't bump
+  // loadId (it routes through edit/adoptNormalization), so the staleness
+  // re-check below still sees this reconcile's own loadId.
+  flushBufferEdits()
+  const current = get(doc)
+  if (current.path !== path || current.loadId !== loadId) return
+  switch (classifyExternalChange(current, disk, dismissedDisk)) {
+    case 'reload':
+      reloadFromDisk(disk)
+      break
+    case 'conflict':
+      conflict.set(disk)
+      break
+    case 'ignore':
+      break
+  }
+}
+
+/**
  * Start syncing the open file with disk: watch it for external changes and
  * react per {@link classifyExternalChange}. Returns a cleanup function.
  */
@@ -92,31 +151,9 @@ export async function initFileSync(): Promise<() => void> {
   })
 
   const unlisten = await listenScoped('file:external-change', async () => {
-    const before = get(doc)
-    if (before.path === null) return
-    let disk: string
-    try {
-      disk = await invoke<string>('read_file', { path: before.path })
-    } catch {
-      // Expected during atomic writes — the file may be mid-write or removed.
-      logInfo('external-change read skipped (file mid-write or removed)')
-      return
-    }
-    // Re-read state after the await: the user may have switched files or typed
-    // while the read was in flight. Acting on the stale snapshot could apply this
-    // file's disk content to a different (or now-edited) buffer — silent data loss.
-    const current = get(doc)
-    if (current.path !== before.path) return
-    switch (classifyExternalChange(current, disk, dismissedDisk)) {
-      case 'reload':
-        reloadFromDisk(disk)
-        break
-      case 'conflict':
-        conflict.set(disk)
-        break
-      case 'ignore':
-        break
-    }
+    const path = get(doc).path
+    if (path === null) return
+    await reconcileWithDisk(path)
   })
 
   return () => {

@@ -388,6 +388,8 @@ pub fn save_pasted_image(
     // already granted; kept as belt-and-braces). Best-effort: a failed grant
     // only degrades display of the (already written, already returned) image,
     // so it must not turn a successful save into an error.
+    // Irrevocable for the process lifetime (FsScope has no un-allow — see
+    // lib.rs allow_asset_dir); acceptable: single file, display channel only.
     if let Err(e) = app.asset_protocol_scope().allow_file(&abs) {
         log::warn!("could not allow pasted image in asset scope: {e}");
     }

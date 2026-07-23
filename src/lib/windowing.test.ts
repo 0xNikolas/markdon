@@ -69,6 +69,17 @@ describe('listenScoped', () => {
     listeners.get('file:opened')!({ payload: {} })
     expect(handler).toHaveBeenCalledTimes(2)
   })
+
+  it('passes the payload through so handlers can read event-specific fields', async () => {
+    // menu:open_recent carries the root alongside the routing target — the
+    // handler must see the delivered payload verbatim (null included).
+    const handler = vi.fn()
+    await listenScoped('menu:open_recent', handler)
+    listeners.get('menu:open_recent')!({ payload: { target: 'main', root: '/ws/notes' } })
+    expect(handler).toHaveBeenCalledWith({ target: 'main', root: '/ws/notes' })
+    listeners.get('menu:open_recent')!({ payload: null })
+    expect(handler).toHaveBeenLastCalledWith(null)
+  })
 })
 
 describe('currentLabel', () => {

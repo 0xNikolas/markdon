@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { leafNameError, visibleRowPaths, folderPaths, folderRows, pasteTargetDir } from './fileTree'
+import {
+  leafNameError,
+  visibleRowPaths,
+  folderPaths,
+  folderRows,
+  pasteTargetDir,
+} from './fileTree'
 import { tree } from './test-support/workspaceFixtures'
 
 describe('leafNameError', () => {

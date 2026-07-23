@@ -33,11 +33,12 @@
   padding: 0;
 }
 
-/* Selection: accent tint in both themes. CM6 paints selection on
-   .cm-selectionBackground (and the native ::selection when unfocused). */
+/* Selection: shared --selection-bg token (same as the WYSIWYG editor). CM6
+   paints selection on .cm-selectionBackground (and the native ::selection
+   when unfocused). */
 .cm-editor .cm-selectionBackground,
 .cm-editor .cm-content ::selection {
-  background: var(--accent-tint);
+  background: var(--selection-bg);
 }
 .cm-cursor,
 .cm-dropCursor {

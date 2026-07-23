@@ -3,7 +3,11 @@ import { get } from 'svelte/store'
 import {
   addOpen,
   removeOpen,
+  insertOpenAt,
+  stripOrder,
+  bulkClosePlan,
   neighbourAfterClose,
+  neighbourInStrip,
   retargetOpen,
   removeOpenSubtree,
   retargetPreview,
@@ -15,21 +19,21 @@ import {
 } from './openList'
 
 describe('addOpen', () => {
-  it('appends a new path to an empty list', () => {
+  it('adds a new path to an empty list', () => {
     expect(addOpen([], '/a.md')).toEqual(['/a.md'])
   })
 
-  it('appends a new path to the end, keeping existing order', () => {
-    expect(addOpen(['/a.md', '/b.md'], '/c.md')).toEqual(['/a.md', '/b.md', '/c.md'])
+  it('prepends a new path to the front (most recently opened first)', () => {
+    expect(addOpen(['/a.md', '/b.md'], '/c.md')).toEqual(['/c.md', '/a.md', '/b.md'])
   })
 
-  it('dedups: re-adding an already-open path is a no-op (keeps first position)', () => {
+  it('dedups: re-adding an already-open path is a no-op (keeps its position)', () => {
     expect(addOpen(['/a.md', '/b.md', '/c.md'], '/b.md')).toEqual(['/a.md', '/b.md', '/c.md'])
   })
 
   it('returns a new array reference even on a no-op dedup miss vs hit (referential purity)', () => {
     const list = ['/a.md']
-    expect(addOpen(list, '/a.md')).toBe(list) // no-op dedup: same reference is fine (append-if-absent)
+    expect(addOpen(list, '/a.md')).toBe(list) // no-op dedup: same reference is fine (prepend-if-absent)
     expect(addOpen(list, '/b.md')).not.toBe(list)
   })
 })
@@ -73,16 +77,16 @@ describe('neighbourAfterClose', () => {
     expect(neighbourAfterClose(['/a.md', '/b.md'], '/a.md', null)).toBeNull()
   })
 
-  it('an active PREVIEW appended after the pinned list falls back to the last pinned entry', () => {
-    // The preview path never lives in openList but renders as the LAST row;
-    // App.svelte appends it before the lookup so closing it activates the
-    // last pinned entry instead of blanking to a new doc.
-    expect(neighbourAfterClose(['/a.md', '/b.md', '/peek.md'], '/peek.md', '/peek.md')).toBe(
-      '/b.md',
+  it('an active PREVIEW prepended before the pinned list falls back to the first pinned entry', () => {
+    // The preview path never lives in openList but renders as the TOP row;
+    // App.svelte prepends it before the lookup so closing it activates the
+    // first (most recent) pinned entry instead of blanking to a new doc.
+    expect(neighbourAfterClose(['/peek.md', '/a.md', '/b.md'], '/peek.md', '/peek.md')).toBe(
+      '/a.md',
     )
   })
 
-  it('an active preview appended to an EMPTY pinned list still yields null (nothing to fall back to)', () => {
+  it('an active preview prepended to an EMPTY pinned list still yields null (nothing to fall back to)', () => {
     expect(neighbourAfterClose(['/peek.md'], '/peek.md', '/peek.md')).toBeNull()
   })
 })
@@ -187,7 +191,7 @@ describe('pinOpen / pinPreview (store transitions)', () => {
     previewPath.set(null)
   })
 
-  it('pinOpen appends to openList and vacates a matching preview', () => {
+  it('pinOpen prepends to openList and vacates a matching preview', () => {
     previewPath.set('/a.md')
     pinOpen('/a.md')
     expect(get(openList)).toEqual(['/a.md'])
@@ -207,11 +211,11 @@ describe('pinOpen / pinPreview (store transitions)', () => {
     expect(get(openList)).toEqual(['/a.md', '/b.md'])
   })
 
-  it('pinPreview promotes the current preview to the end of the pinned list', () => {
+  it('pinPreview promotes the current preview to the FRONT of the pinned list (top row)', () => {
     openList.set(['/a.md'])
     previewPath.set('/peek.md')
     pinPreview()
-    expect(get(openList)).toEqual(['/a.md', '/peek.md'])
+    expect(get(openList)).toEqual(['/peek.md', '/a.md'])
     expect(get(previewPath)).toBeNull()
   })
 
@@ -220,5 +224,158 @@ describe('pinOpen / pinPreview (store transitions)', () => {
     pinPreview()
     expect(get(openList)).toEqual(['/a.md'])
     expect(get(previewPath)).toBeNull()
+  })
+})
+
+describe('neighbourInStrip', () => {
+  const open = ['/a.md', '/b.md', '/c.md']
+
+  it('steps forward through the pinned rows', () => {
+    expect(neighbourInStrip('/a.md', open, null, 1)).toBe('/b.md')
+    expect(neighbourInStrip('/b.md', open, null, 1)).toBe('/c.md')
+  })
+
+  it('steps backward through the pinned rows', () => {
+    expect(neighbourInStrip('/c.md', open, null, -1)).toBe('/b.md')
+    expect(neighbourInStrip('/b.md', open, null, -1)).toBe('/a.md')
+  })
+
+  it('wraps forward off the last row and backward off the first', () => {
+    expect(neighbourInStrip('/c.md', open, null, 1)).toBe('/a.md')
+    expect(neighbourInStrip('/a.md', open, null, -1)).toBe('/c.md')
+  })
+
+  it('includes the preview row, prepended before every pinned row (top)', () => {
+    expect(neighbourInStrip('/c.md', open, '/peek.md', 1)).toBe('/peek.md') // wrap off the bottom onto the top preview
+    expect(neighbourInStrip('/peek.md', open, '/peek.md', 1)).toBe('/a.md') // step down to the first pinned row
+    expect(neighbourInStrip('/peek.md', open, '/peek.md', -1)).toBe('/c.md') // wrap off the top onto the bottom row
+    expect(neighbourInStrip('/a.md', open, '/peek.md', -1)).toBe('/peek.md') // step up onto the preview
+  })
+
+  it('ignores a preview that is also pinned (the strip hides that row)', () => {
+    expect(neighbourInStrip('/c.md', open, '/a.md', 1)).toBe('/a.md') // plain wrap, no duplicate row
+    expect(neighbourInStrip('/a.md', open, '/a.md', -1)).toBe('/c.md')
+  })
+
+  it('enters the cycle from the untitled scratch (no row): next=first (top), previous=last (bottom)', () => {
+    expect(neighbourInStrip(null, open, null, 1)).toBe('/a.md')
+    expect(neighbourInStrip(null, open, null, -1)).toBe('/c.md')
+    // previous from the scratch lands on the bottom row — the preview now sits
+    // at the TOP, so the last row is the last pinned entry.
+    expect(neighbourInStrip(null, open, '/peek.md', -1)).toBe('/c.md')
+  })
+
+  it('reaches even a single row from the untitled scratch', () => {
+    expect(neighbourInStrip(null, ['/a.md'], null, 1)).toBe('/a.md')
+    expect(neighbourInStrip(null, [], '/peek.md', -1)).toBe('/peek.md')
+  })
+
+  it('is null on a single row that is already active (nowhere to go)', () => {
+    expect(neighbourInStrip('/a.md', ['/a.md'], null, 1)).toBeNull()
+    expect(neighbourInStrip('/a.md', ['/a.md'], null, -1)).toBeNull()
+    expect(neighbourInStrip('/peek.md', [], '/peek.md', 1)).toBeNull()
+  })
+
+  it('is null on an empty strip', () => {
+    expect(neighbourInStrip(null, [], null, 1)).toBeNull()
+    expect(neighbourInStrip('/a.md', [], null, -1)).toBeNull()
+  })
+})
+
+describe('insertOpenAt', () => {
+  it('inserts at the given index, shifting later entries', () => {
+    expect(insertOpenAt(['/a.md', '/c.md'], '/b.md', 1)).toEqual(['/a.md', '/b.md', '/c.md'])
+  })
+
+  it('clamps an out-of-range index to an append (old index no longer fits)', () => {
+    expect(insertOpenAt(['/a.md'], '/b.md', 5)).toEqual(['/a.md', '/b.md'])
+  })
+
+  it('clamps a negative index to the front', () => {
+    expect(insertOpenAt(['/a.md'], '/b.md', -2)).toEqual(['/b.md', '/a.md'])
+  })
+
+  it('is a referential no-op when the path is already present (keeps its position)', () => {
+    const list = ['/a.md', '/b.md']
+    expect(insertOpenAt(list, '/b.md', 0)).toBe(list)
+  })
+
+  it('inserts into an empty list', () => {
+    expect(insertOpenAt([], '/a.md', 3)).toEqual(['/a.md'])
+  })
+})
+
+describe('stripOrder', () => {
+  it('is the pinned list alone with no preview', () => {
+    expect(stripOrder(['/a.md', '/b.md'], null)).toEqual(['/a.md', '/b.md'])
+  })
+
+  it('prepends the preview row first (top of the strip)', () => {
+    expect(stripOrder(['/a.md'], '/p.md')).toEqual(['/p.md', '/a.md'])
+  })
+
+  it('draws no extra row for a preview that is also pinned', () => {
+    const list = ['/a.md', '/p.md']
+    expect(stripOrder(list, '/p.md')).toBe(list)
+  })
+})
+
+describe('bulkClosePlan', () => {
+  const rows = ['/a.md', '/b.md', '/c.md', '/d.md']
+  const none = new Set<string>()
+
+  it("'others': closes every clean row except target and active", () => {
+    const plan = bulkClosePlan('others', rows, '/b.md', '/b.md', none)
+    expect(plan).toEqual({ close: ['/a.md', '/c.md', '/d.md'], keptDirty: [], closeActive: false })
+  })
+
+  it("'others': keeps the active row even when it is not the target", () => {
+    const plan = bulkClosePlan('others', rows, '/b.md', '/d.md', none)
+    expect(plan.close).toEqual(['/a.md', '/c.md'])
+    expect(plan.closeActive).toBe(false)
+  })
+
+  it("'others': skips dirty background rows, reporting them as kept", () => {
+    const plan = bulkClosePlan('others', rows, '/b.md', '/b.md', new Set(['/c.md']))
+    expect(plan.close).toEqual(['/a.md', '/d.md'])
+    expect(plan.keptDirty).toEqual(['/c.md'])
+  })
+
+  it("'saved': closes clean background rows INCLUDING a clean target, keeps active", () => {
+    const plan = bulkClosePlan('saved', rows, '/b.md', '/d.md', none)
+    expect(plan).toEqual({ close: ['/a.md', '/b.md', '/c.md'], keptDirty: [], closeActive: false })
+  })
+
+  it("'saved': excludes dirty rows by definition — nothing reported as kept", () => {
+    const plan = bulkClosePlan('saved', rows, '/b.md', '/d.md', new Set(['/a.md']))
+    expect(plan.close).toEqual(['/b.md', '/c.md'])
+    expect(plan.keptDirty).toEqual([]) // dirty rows were never supposed to close
+  })
+
+  it("'all': closes clean background rows, keeps dirty ones, and closes the active row via the guard", () => {
+    const plan = bulkClosePlan('all', rows, '/b.md', '/d.md', new Set(['/a.md']))
+    expect(plan).toEqual({
+      close: ['/b.md', '/c.md'],
+      keptDirty: ['/a.md'],
+      closeActive: true,
+    })
+  })
+
+  it("'all': an active doc with no strip row (untitled scratch) yields closeActive=false", () => {
+    expect(bulkClosePlan('all', rows, '/b.md', null, none).closeActive).toBe(false)
+    expect(bulkClosePlan('all', rows, '/b.md', '/zz.md', none).closeActive).toBe(false)
+  })
+
+  it('single-row strip: others is an all-keep no-op, all closes just the active target', () => {
+    expect(bulkClosePlan('others', ['/a.md'], '/a.md', '/a.md', none)).toEqual({
+      close: [],
+      keptDirty: [],
+      closeActive: false,
+    })
+    expect(bulkClosePlan('all', ['/a.md'], '/a.md', '/a.md', none)).toEqual({
+      close: [],
+      keptDirty: [],
+      closeActive: true,
+    })
   })
 })

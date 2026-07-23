@@ -3,16 +3,25 @@
   import { workspaceName, fileBreadcrumb, split, toggleSplit, requestExport } from './lib/ui'
   import { openOverlay } from './lib/overlay'
   import { workspace } from './lib/workspace'
+  import { resolvedTheme } from './lib/theme'
+  import { updateSetting } from './lib/settings'
   import wordmarkLight from './assets/brand/wordmark-light.svg?raw'
   import wordmarkDark from './assets/brand/wordmark-dark.svg?raw'
 
   interface Props {
     path: string | null
     dirty: boolean
+    /** Empty-state page shown: no document, so no breadcrumb/filename. */
+    empty?: boolean
+    /** Image view shown: `path` is the image, so show its filename breadcrumb
+        but never a Saved/Edited badge (an image is not an editable document). */
+    image?: boolean
   }
-  let { path, dirty }: Props = $props()
+  let { path, dirty, empty = false, image = false }: Props = $props()
 
-  const breadcrumb = $derived(fileBreadcrumb(path, $workspace.root, $workspaceName))
+  const breadcrumb = $derived(
+    empty ? { crumbs: [], filename: '' } : fileBreadcrumb(path, $workspace.root, $workspaceName),
+  )
 </script>
 
 <!-- data-tauri-drag-region="deep": the whole bar drags the window and
@@ -34,9 +43,9 @@
       <span class="crumb">{breadcrumb.crumbs.join(' / ')} /</span>
     {/if}
     <span class="filename">{breadcrumb.filename}</span>
-    {#if dirty}
+    {#if dirty && !image}
       <span class="badge edited">Edited</span>
-    {:else if path}
+    {:else if path && !image}
       <span class="badge saved">Saved</span>
     {/if}
   </div>
@@ -48,6 +57,16 @@
     <button class="btn" onclick={requestExport}>
       <Icon name="file-up" />
       Export
+    </button>
+    <!-- Two-state flip on the RESOLVED theme: clicking always sets an explicit
+         light/dark pref (persisted via settings, the themePref single writer);
+         'system' remains available in Settings. -->
+    <button
+      class="btn icon-only"
+      aria-label={$resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+      onclick={() => updateSetting('theme', $resolvedTheme === 'dark' ? 'light' : 'dark')}
+    >
+      <Icon name={$resolvedTheme === 'dark' ? 'sun' : 'moon'} />
     </button>
     <!-- openOverlay refuses (silent no-op) if any overlay is already up — that
          refusal IS the fix for the gear stacking a second focus trap. -->

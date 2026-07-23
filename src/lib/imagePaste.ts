@@ -87,6 +87,15 @@ export async function uploadPastedImage(file: File): Promise<string> {
  *   inside a workspace the recursive root grant still renders it; anywhere
  *   else the asset protocol fails closed exactly as before.
  *
+ * Percent-decoding: markdown srcs are URLs, so editors write `my image.png`
+ * as `my%20image.png` — but convertFileSrc encodeURIComponent-encodes the
+ * whole path and the Rust asset handler decodes exactly once, so passing the
+ * still-encoded src through would double-encode (`my%2520image.png`) and 404
+ * against the on-disk `my image.png`. Non-scheme'd srcs are therefore decoded
+ * once here before any path handling. The flip side is standard URL
+ * semantics: a file literally NAMED `my%20image.png` must be referenced as
+ * `my%2520image.png`.
+ *
  * A resolved path whose file is missing (or ungranted) fails the asset
  * scope/read silently: the <img> errors and Crepe shows its broken-image
  * state — no banner, no retry; the image appears only once the node
@@ -94,15 +103,32 @@ export async function uploadPastedImage(file: File): Promise<string> {
  */
 export function resolveImageSrc(src: string, docPath: string | null): string | Promise<string> {
   if (src === '' || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(src)) return src
-  if (src.startsWith('/')) return convertFileSrc(src)
+  const decoded = decodePercent(src)
+  if (decoded.startsWith('/')) return convertFileSrc(decoded)
   // No doc path (untitled) -> nothing to resolve against; return unchanged
   // (the link is broken either way, but never fabricate a path).
   if (docPath === null) return src
   const dir = docPath.slice(0, docPath.lastIndexOf('/'))
-  const joined = joinRelative(dir, src)
+  const joined = joinRelative(dir, decoded)
   if (joined.slice(0, joined.lastIndexOf('/')) === dir) return convertFileSrc(joined)
-  return invoke<string>('resolve_image_asset', { docPath, rel: src }).then(
+  return invoke<string>('resolve_image_asset', { docPath, rel: decoded }).then(
     (resolved) => convertFileSrc(resolved),
     () => convertFileSrc(joined),
   )
+}
+
+// decodeURIComponent, not decodeURI: this only runs AFTER the scheme'd-URL
+// passthrough, so the string is a bare file path where URI-reserved
+// characters carry no structural meaning — decodeURI would leave %3F/%23
+// encoded even though `?` and `#` are legal macOS filename chars, and a
+// decoded %2F just behaves as a path separator (containment is enforced by
+// resolve_image_asset's canonicalization, not by string shape). A stray `%`
+// without two hex digits (`100%.png`) makes decodeURIComponent throw, and
+// such srcs are kept verbatim so those files keep rendering.
+function decodePercent(src: string): string {
+  try {
+    return decodeURIComponent(src)
+  } catch {
+    return src
+  }
 }

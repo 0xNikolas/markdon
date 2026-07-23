@@ -29,6 +29,10 @@ tauri = { version = "2.11.3", features = ["protocol-asset"] }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
 notify = "6"
+# 500ms coalescing for the recursive workspace-root watcher (watcher.rs):
+# one callback per burst of FS events instead of a hand-rolled debounce
+# thread. Resolves to the same notify 6.1 the direct dependency pins.
+notify-debouncer-mini = "0.4"
 tempfile = "3"
 # File History (task 24): SHA-256 of the canonical file path (bucket key) and of
 # snapshot content (dedupe), hex-encoded into the bucket directory name. Both were

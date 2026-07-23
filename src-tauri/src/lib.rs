@@ -1,4 +1,5 @@
 mod allowlist;
+mod cli_install;
 mod commands;
 mod dialogs;
 mod fileops;
@@ -36,7 +37,8 @@ pub struct OpenedEntry {
 ///
 /// POISON POLICY (one statement covering every `Mutex` behind these state
 /// newtypes — `OpenedFiles`, `FocusedWindow`, `PendingWindowFile`,
-/// `watcher::FileWatcher`, `pdf::PendingPrintHtml`, `launch::StartupWorkspace`,
+/// `watcher::FileWatcher`, `watcher::WorkspaceWatcher`,
+/// `pdf::PendingPrintHtml`, `launch::StartupWorkspace`,
 /// plus `allowlist::AllowedPaths` and `history::HistoryLocks`): each lock is
 /// `unwrap()`'d on poison
 /// deliberately. These are single-process, short-held locks guarding trivial
@@ -72,6 +74,10 @@ impl OpenedFiles {
 /// trust boundary is unchanged. Mirrors save_pasted_image's posture: a failed
 /// grant merely degrades image display, so it must never fail the operation
 /// that granted.
+///
+/// Tauri's FsScope has no un-allow; every grant below lives until process
+/// exit — kept tolerable by granting file-granular (allow_file) or
+/// non-recursive wherever possible, display-channel only.
 pub(crate) fn allow_asset_dir(app: &tauri::AppHandle, dir: &std::path::Path, recursive: bool) {
     if let Err(e) = app.asset_protocol_scope().allow_directory(dir, recursive) {
         log::warn!("could not add {dir:?} to asset scope: {e}");
@@ -86,6 +92,39 @@ pub(crate) fn allow_asset_dir(app: &tauri::AppHandle, dir: &std::path::Path, rec
 /// tauri marks it Send+Sync; `set_checked` dispatches to the main thread itself,
 /// so no extra lock is needed.
 pub struct ReadonlyMenuItem(pub tauri::menu::CheckMenuItem<tauri::Wry>);
+
+/// Handle to the File-menu "Open Recent" submenu plus the id->root lookup
+/// table for click routing. Stashed at menu-build time for the same
+/// `Menu::get`-can't-reach-nested-items reason as `ReadonlyMenuItem`.
+/// `roots` is the snapshot the currently visible `menu:recent:<i>` items were
+/// built from — `menu::sync_recent_menu` replaces items and snapshot together
+/// on the main thread, and `on_menu_event` (also main thread) resolves clicks
+/// against it, so a click always resolves against exactly what the menu
+/// showed. Deliberately NOT re-read from workspace.json at click time: another
+/// instance may have reordered the file since this menu was built.
+pub struct RecentMenu {
+    pub submenu: tauri::menu::Submenu<tauri::Wry>,
+    pub roots: Mutex<Vec<String>>,
+}
+
+/// The log filename THIS instance writes (`markdon.log`, or the per-pid
+/// `markdon-<pid>.log` of a handed-off child — see the log-plugin setup).
+/// Managed once in `run()` from the same `handed_off` branch that configures
+/// the plugin, so `reveal_log_file` can never drift from what the plugin was
+/// actually pointed at.
+pub struct LogFileName(pub String);
+
+/// Final on-disk log filename for this instance. Pure so the
+/// primary-vs-handed-off naming is unit-testable; the plugin itself appends
+/// ".log" to the stem it is configured with, so callers trim it back off when
+/// configuring `TargetKind::LogDir`.
+pub(crate) fn log_file_name(handed_off: bool, pid: u32) -> String {
+    if handed_off {
+        format!("markdon-{pid}.log")
+    } else {
+        "markdon.log".to_string()
+    }
+}
 
 /// Drain and return any pending file-open entries (path + per-entry readonly).
 /// The frontend calls this on mount (cold start) and whenever a `file:opened`
@@ -197,6 +236,7 @@ pub fn run() {
         .manage(FocusedWindow::default())
         .manage(PendingWindowFile::default())
         .manage(watcher::FileWatcher::default())
+        .manage(watcher::WorkspaceWatcher::default())
         .manage(allowed)
         .manage(launch::StartupWorkspace::new(
             launch_args.workspace,
@@ -239,17 +279,20 @@ pub fn run() {
             // Release error sink: everything log:: (Rust) and the webview's
             // forwarded console/errors (src/lib/logging.ts) land in
             // <app-log-dir>/markdon.log, capped at ~1 MB with one rotation.
-            // Deliberately NO TargetKind::Webview (and no attachConsole in
-            // JS): the frontend forwards console.warn/error INTO this plugin,
-            // so echoing plugin output back to the webview console would loop.
-            // Handed-off instances write markdon-<pid>.log instead: the
-            // plugin's size-cap rotation unlinks the live file, so two
-            // processes sharing one file silently lose whichever side kept
-            // the stale descriptor — exactly the crash lines this sink
-            // exists to preserve. The primary sweeps stale per-pid files.
-            let log_file = if handed_off {
-                Some(format!("markdon-{}", std::process::id()))
-            } else {
+            // The name is pinned explicitly (not left to the plugin's
+            // productName default, which would title-case it) and managed as
+            // LogFileName so Help > Show Log reveals the exact file THIS
+            // instance writes. Deliberately NO TargetKind::Webview (and no
+            // attachConsole in JS): the frontend forwards console.warn/error
+            // INTO this plugin, so echoing plugin output back to the webview
+            // console would loop. Handed-off instances write
+            // markdon-<pid>.log instead: the plugin's size-cap rotation
+            // unlinks the live file, so two processes sharing one file
+            // silently lose whichever side kept the stale descriptor —
+            // exactly the crash lines this sink exists to preserve. The
+            // primary sweeps stale per-pid files.
+            let log_file = log_file_name(handed_off, std::process::id());
+            if !handed_off {
                 if let Ok(dir) = app.path().app_log_dir() {
                     if let Ok(entries) = std::fs::read_dir(&dir) {
                         for entry in entries.flatten() {
@@ -261,15 +304,16 @@ pub fn run() {
                         }
                     }
                 }
-                None
-            };
+            }
+            app.manage(LogFileName(log_file.clone()));
             app.handle().plugin(
                 tauri_plugin_log::Builder::default()
                     .level(log::LevelFilter::Info)
                     .targets([
                         Target::new(TargetKind::Stdout),
                         Target::new(TargetKind::LogDir {
-                            file_name: log_file,
+                            // The plugin appends ".log" to the stem it is given.
+                            file_name: Some(log_file.trim_end_matches(".log").to_string()),
                         }),
                     ])
                     .max_file_size(1_000_000)
@@ -277,18 +321,44 @@ pub fn run() {
                     .build(),
             )?;
 
-            let (menu, readonly_item) = menu::build(app)?;
+            let (menu, readonly_item, recent_submenu) = menu::build(app)?;
             app.set_menu(menu)?;
             // Stash the "Read Only" CheckMenuItem so set_readonly_menu_state can
-            // drive its checked state from the doc store.
+            // drive its checked state from the doc store, and the "Open Recent"
+            // submenu (+ its click-routing table) for sync_recent_menu.
             app.manage(ReadonlyMenuItem(readonly_item));
+            app.manage(RecentMenu {
+                submenu: recent_submenu,
+                roots: Mutex::new(Vec::new()),
+            });
+            menu::sync_recent_menu(app.handle());
             app.on_menu_event(|app_handle, event| {
+                let focused = app_handle.state::<FocusedWindow>().get();
+                let target = menu_target(&focused);
+                // Open Recent clicks resolve their index against the roots
+                // snapshot the visible items were built from (see RecentMenu)
+                // and route as one shared event carrying the root.
+                if let Some(i) = menu::recent_index(event.id().0.as_str()) {
+                    let root = app_handle
+                        .state::<RecentMenu>()
+                        .roots
+                        .lock()
+                        .unwrap()
+                        .get(i)
+                        .cloned();
+                    if let Some(root) = root {
+                        let _ = app_handle.emit_to(
+                            EventTarget::webview_window(&target),
+                            "menu:open_recent",
+                            serde_json::json!({ "target": target, "root": root }),
+                        );
+                    }
+                    return;
+                }
                 // Menu item ids ARE the event names (e.g. "menu:open"). An app-
                 // global macOS menu bar carries no window identity, so route the
                 // command to the focused window rather than broadcasting it (in
                 // MODE B a broadcast would fire in every window at once).
-                let focused = app_handle.state::<FocusedWindow>().get();
-                let target = menu_target(&focused);
                 let _ = app_handle.emit_to(
                     EventTarget::webview_window(&target),
                     event.id().0.as_str(),
@@ -308,6 +378,8 @@ pub fn run() {
             commands::read_file,
             commands::write_file,
             commands::resolve_image_asset,
+            commands::reveal_log_file,
+            commands::reveal_path,
             take_opened_files,
             windows::take_window_file,
             set_readonly_menu_state,
@@ -315,6 +387,8 @@ pub fn run() {
             windows::open_file_new_instance,
             watcher::watch_file,
             watcher::unwatch,
+            watcher::watch_workspace,
+            watcher::unwatch_workspace,
             dialogs::open_file_dialog,
             dialogs::save_file_dialog,
             dialogs::open_workspace_dialog,
@@ -322,7 +396,11 @@ pub fn run() {
             workspace::list_workspace,
             workspace::restore_workspace,
             workspace::close_workspace,
+            workspace::open_recent_workspace,
             workspace::take_startup_workspace,
+            workspace::list_recent_workspaces,
+            workspace::save_workspace_ui,
+            workspace::load_workspace_ui,
             fileops::create_file,
             fileops::create_folder,
             fileops::rename_entry,
@@ -336,6 +414,9 @@ pub fn run() {
             history::read_history_version,
             prefs::load_prefs,
             prefs::save_prefs,
+            cli_install::cli_status,
+            cli_install::install_cli,
+            cli_install::uninstall_cli,
             pdf::export_pdf
         ])
         .build(tauri::generate_context!())
@@ -387,6 +468,15 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![("/finder.md", true), ("/argv.md", false)]
         );
+    }
+
+    #[test]
+    fn log_file_name_is_pinned_for_primary_and_per_pid_for_handoffs() {
+        // The primary writes literally markdon.log (not the plugin's
+        // productName-derived default); a handed-off child writes its own
+        // per-pid file — the one Help > Show Log must reveal for THAT child.
+        assert_eq!(log_file_name(false, 1234), "markdon.log");
+        assert_eq!(log_file_name(true, 1234), "markdon-1234.log");
     }
 
     #[test]

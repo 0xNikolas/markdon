@@ -1,11 +1,21 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { get } from 'svelte/store'
-import { logPluginMocks } from './test-support/tauriMocks'
-import { errorMessage, notice, reportError, reportNotice, clearError, clearNotice } from './errors'
+import { invoke, logPluginMocks } from './test-support/tauriMocks'
+import {
+  errorMessage,
+  notice,
+  reportError,
+  reportNotice,
+  clearError,
+  clearNotice,
+  revealLog,
+} from './errors'
 
 describe('error sink funnel', () => {
   beforeEach(() => {
+    invoke.mockReset()
     logPluginMocks.info.mockClear()
+    logPluginMocks.warn.mockClear()
     logPluginMocks.error.mockClear()
     clearError()
     clearNotice()
@@ -28,5 +38,21 @@ describe('error sink funnel', () => {
     clearNotice()
     expect(logPluginMocks.error).not.toHaveBeenCalled()
     expect(logPluginMocks.info).not.toHaveBeenCalled()
+  })
+
+  it('revealLog invokes reveal_log_file exactly once, with no args', () => {
+    invoke.mockResolvedValue(null)
+    revealLog()
+    expect(invoke).toHaveBeenCalledTimes(1)
+    expect(invoke).toHaveBeenCalledWith('reveal_log_file')
+  })
+
+  it('revealLog swallows a rejection into logWarn — never a banner (no re-fail loop)', async () => {
+    invoke.mockRejectedValueOnce('nope')
+    revealLog()
+    // Flush the microtask queue: an unhandled rejection would fail the run.
+    await new Promise((r) => setTimeout(r, 0))
+    expect(logPluginMocks.warn.mock.calls).toEqual([['Could not reveal log file: nope']])
+    expect(get(errorMessage)).toBeNull()
   })
 })

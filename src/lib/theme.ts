@@ -9,6 +9,13 @@ const STORAGE_KEY = 'markdon.themePref'
 /** Current preference. 'system' follows the OS; 'light'/'dark' are explicit. */
 export const themePref: Writable<ThemePref> = writable('system')
 
+/**
+ * The theme actually in effect ('system' resolved against the OS). Kept in
+ * sync by initTheme's stamp(); read-only for consumers (the Header toggle
+ * derives its icon and target from it).
+ */
+export const resolvedTheme: Writable<Theme> = writable('light')
+
 /** What to actually render, given a preference and whether the OS is in dark mode. */
 export function resolveTheme(pref: ThemePref, systemDark: boolean): Theme {
   return pref === 'system' ? (systemDark ? 'dark' : 'light') : pref
@@ -71,7 +78,11 @@ export function initTheme(env: ThemeEnv = realEnv()): () => void {
   const initial: ThemePref = stored === 'light' || stored === 'dark' ? stored : 'system'
 
   let pref: ThemePref = initial
-  const stamp = () => env.applyDom(resolveTheme(pref, env.systemDark.matches))
+  const stamp = () => {
+    const theme = resolveTheme(pref, env.systemDark.matches)
+    resolvedTheme.set(theme)
+    env.applyDom(theme)
+  }
   const onSystemChange = () => {
     if (pref === 'system') stamp()
   }

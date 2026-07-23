@@ -30,9 +30,15 @@ export function setWindowTitle(title: string): void {
   }
 }
 
-/** Payload shape of every MODE-B-routed event: the intended target's label. */
-interface Routed {
+/**
+ * Payload shape of every MODE-B-routed event: the intended target's label,
+ * plus whatever event-specific fields ride along (e.g. `menu:open_recent`'s
+ * `root`). Exported so handler maps (appBoot's MenuEventMap) can type their
+ * payload parameter.
+ */
+export interface Routed {
   target?: string | null
+  [key: string]: unknown
 }
 
 /**
@@ -52,12 +58,17 @@ export function isForWindow(target: string | null | undefined, label: string): b
  * webview — but each of those payloads also carries its `target` label and we
  * filter on it here, as defensive insurance against that scoping assumption.
  * Untargeted events (no `target`, e.g. a broadcast) pass through unchanged,
- * so single-window behavior is unaffected.
+ * so single-window behavior is unaffected. The payload is passed through to
+ * the handler for events that carry data beyond the routing label (most
+ * handlers ignore it — a zero-arg handler remains assignable).
  */
-export function listenScoped(event: string, handler: () => void): Promise<UnlistenFn> {
+export function listenScoped(
+  event: string,
+  handler: (payload: Routed | null) => void,
+): Promise<UnlistenFn> {
   const label = currentLabel()
   return listen<Routed | null>(event, (e) => {
     if (!isForWindow(e.payload?.target, label)) return
-    handler()
+    handler(e.payload)
   })
 }

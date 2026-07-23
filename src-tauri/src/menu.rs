@@ -1,14 +1,18 @@
 use tauri::menu::{
-    CheckMenuItem, CheckMenuItemBuilder, Menu, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder,
+    CheckMenuItem, CheckMenuItemBuilder, Menu, MenuItemBuilder, PredefinedMenuItem, Submenu,
+    SubmenuBuilder,
 };
-use tauri::{App, Wry};
+use tauri::{App, AppHandle, Manager, Wry};
 
 /// Builds the app menu and returns it alongside the "Read Only" CheckMenuItem
-/// handle. `Menu::get` only walks top-level submenus, not nested
-/// items, so the readonly item can't be looked up by id after the fact — the
-/// caller stores this handle in managed state and drives its checked state from
-/// the doc store (the single source of truth) via `set_readonly_menu_state`.
-pub fn build(app: &App) -> tauri::Result<(Menu<Wry>, CheckMenuItem<Wry>)> {
+/// and the "Open Recent" Submenu handles. `Menu::get` only walks top-level
+/// submenus, not nested items, so neither can be looked up by id after the
+/// fact — the caller stores both handles in managed state: the readonly item's
+/// checked state is driven from the doc store via `set_readonly_menu_state`,
+/// and the Open Recent submenu's items are rebuilt from workspace.json via
+/// `sync_recent_menu`.
+#[allow(clippy::type_complexity)]
+pub fn build(app: &App) -> tauri::Result<(Menu<Wry>, CheckMenuItem<Wry>, Submenu<Wry>)> {
     let new = MenuItemBuilder::with_id("menu:new", "New")
         .accelerator("CmdOrCtrl+N")
         .build(app)?;
@@ -17,6 +21,20 @@ pub fn build(app: &App) -> tauri::Result<(Menu<Wry>, CheckMenuItem<Wry>)> {
         .build(app)?;
     let open_folder = MenuItemBuilder::with_id("menu:open_folder", "Open Folder…")
         .accelerator("CmdOrCtrl+Shift+O")
+        .build(app)?;
+    // Built empty: sync_recent_menu fills it from workspace.json at setup and
+    // after every MRU change. Items are click-only (no accelerators), so the
+    // accelerator-collision tests below stay untouched.
+    let open_recent =
+        SubmenuBuilder::with_id(app, "menu:open_recent_submenu", "Open Recent").build()?;
+    // Quick Open (VS Code's Go to File): lives with the other open actions in
+    // the File menu — there is no Go menu here, and the palette is an open
+    // affordance, not an edit one. CmdOrCtrl+P is free: no other item claims
+    // it, and none of the PredefinedMenuItems this app builds defaults to it
+    // (the collision tests below cover both). The frontend no-ops the event
+    // while no workspace is open (nothing to list).
+    let quick_open = MenuItemBuilder::with_id("menu:quick_open", "Quick Open…")
+        .accelerator("CmdOrCtrl+P")
         .build(app)?;
     let save = MenuItemBuilder::with_id("menu:save", "Save")
         .accelerator("CmdOrCtrl+S")
@@ -71,6 +89,9 @@ pub fn build(app: &App) -> tauri::Result<(Menu<Wry>, CheckMenuItem<Wry>)> {
         .accelerator("CmdOrCtrl+Shift+W")
         .build(app)?;
     let close_folder = MenuItemBuilder::with_id("menu:close_folder", "Close Folder").build(app)?;
+    // No accelerator: a rare diagnostic action, matching the readonly /
+    // close_folder precedent — keeps the accelerator-collision tests untouched.
+    let show_log = MenuItemBuilder::with_id("menu:show_log", "Show Log").build(app)?;
 
     let app_menu = SubmenuBuilder::new(app, "Markdon")
         .item(&settings)
@@ -82,6 +103,8 @@ pub fn build(app: &App) -> tauri::Result<(Menu<Wry>, CheckMenuItem<Wry>)> {
         .item(&new)
         .item(&open)
         .item(&open_folder)
+        .item(&open_recent)
+        .item(&quick_open)
         .separator()
         .item(&save)
         .item(&save_as)
@@ -112,8 +135,94 @@ pub fn build(app: &App) -> tauri::Result<(Menu<Wry>, CheckMenuItem<Wry>)> {
         .item(&goto_line)
         .build()?;
 
-    let menu = Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu])?;
-    Ok((menu, readonly))
+    // A plain submenu titled "Help": macOS's native Help-search field would
+    // need muda's set_as_help_menu_for_nsapp, deliberately skipped this sprint.
+    let help_menu = SubmenuBuilder::new(app, "Help").item(&show_log).build()?;
+
+    let menu = Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &help_menu])?;
+    Ok((menu, readonly, open_recent))
+}
+
+/// Index of an Open Recent click: parses `menu:recent:<n>` ids (the position
+/// into the `RecentMenu` roots snapshot), `None` for every other menu id.
+pub(crate) fn recent_index(id: &str) -> Option<usize> {
+    id.strip_prefix("menu:recent:")?.parse().ok()
+}
+
+/// Menu label for a recent root: basename, then an em-dash-separated parent
+/// directory abbreviated with `~` when under `home`. Deliberately dumb string
+/// work so it stays unit-testable without an AppHandle.
+pub(crate) fn recent_label(root: &str, home: Option<&str>) -> String {
+    let p = std::path::Path::new(root);
+    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or(root);
+    let parent = p.parent().and_then(|d| d.to_str()).unwrap_or("");
+    let parent = match home.filter(|h| !h.is_empty()) {
+        Some(h) if parent == h => "~".to_string(),
+        Some(h) if parent.starts_with(&format!("{h}/")) => format!("~{}", &parent[h.len()..]),
+        _ => parent.to_string(),
+    };
+    if parent.is_empty() {
+        name.to_string()
+    } else {
+        format!("{name} — {parent}")
+    }
+}
+
+/// Rebuild the "Open Recent" submenu from workspace.json's MRU. Fire-and-
+/// forget: a menu refresh must never fail an open, so every failure is
+/// swallowed with a warning. The whole rebuild is dispatched to the MAIN
+/// thread: each Submenu item op self-dispatches there anyway (blocking, via
+/// tauri's run_item_main_thread), and menu click/focus handlers already run
+/// there — so doing the item ops AND the `RecentMenu` roots-snapshot update in
+/// one main-thread closure keeps the id->root lookup table atomic with the
+/// visible items (a click always resolves against exactly what the menu
+/// showed) WITHOUT ever holding the roots lock across a cross-thread dispatch
+/// (which could deadlock against a main-thread sync waiting on that lock).
+pub fn sync_recent_menu(app: &AppHandle) {
+    let app = app.clone();
+    let dispatched = app.clone().run_on_main_thread(move || {
+        if let Err(e) = sync_recent_menu_on_main(&app) {
+            log::warn!("could not refresh the Open Recent menu: {e}");
+        }
+    });
+    if let Err(e) = dispatched {
+        log::warn!("could not refresh the Open Recent menu: {e}");
+    }
+}
+
+/// The main-thread body of [`sync_recent_menu`].
+fn sync_recent_menu_on_main(app: &AppHandle) -> Result<(), String> {
+    let state = app
+        .try_state::<crate::RecentMenu>()
+        .ok_or_else(|| "RecentMenu state not managed yet".to_string())?;
+    let file = crate::workspace::state_file(app)?;
+    let roots = crate::workspace::load_state(&file).roots;
+    let submenu = &state.submenu;
+    while submenu.remove_at(0).map_err(|e| e.to_string())?.is_some() {}
+    if roots.is_empty() {
+        let placeholder = MenuItemBuilder::new("No Recent Workspaces")
+            .enabled(false)
+            .build(app)
+            .map_err(|e| e.to_string())?;
+        submenu.append(&placeholder).map_err(|e| e.to_string())?;
+    } else {
+        let home = app
+            .path()
+            .home_dir()
+            .ok()
+            .and_then(|h| h.to_str().map(str::to_string));
+        for (i, root) in roots.iter().enumerate() {
+            let item = MenuItemBuilder::with_id(
+                format!("menu:recent:{i}"),
+                recent_label(root, home.as_deref()),
+            )
+            .build(app)
+            .map_err(|e| e.to_string())?;
+            submenu.append(&item).map_err(|e| e.to_string())?;
+        }
+    }
+    *state.roots.lock().unwrap() = roots;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -125,6 +234,45 @@ mod tests {
     // strings used above directly against muda so a typo in CmdOrCtrl+,
     // (or any other accelerator here) fails loudly instead of silently.
     use std::str::FromStr;
+
+    use super::{recent_index, recent_label};
+
+    #[test]
+    fn recent_index_parses_only_recent_ids() {
+        assert_eq!(recent_index("menu:recent:0"), Some(0));
+        assert_eq!(recent_index("menu:recent:7"), Some(7));
+        assert_eq!(recent_index("menu:recent:"), None);
+        assert_eq!(recent_index("menu:recent:x"), None);
+        assert_eq!(recent_index("menu:recent:-1"), None);
+        assert_eq!(recent_index("menu:open_recent_submenu"), None);
+        assert_eq!(recent_index("menu:open"), None);
+        assert_eq!(recent_index(""), None);
+    }
+
+    #[test]
+    fn recent_label_is_basename_plus_tilde_abbreviated_parent() {
+        assert_eq!(
+            recent_label("/Users/me/notes", Some("/Users/me")),
+            "notes — ~"
+        );
+        assert_eq!(
+            recent_label("/Users/me/dev/proj", Some("/Users/me")),
+            "proj — ~/dev"
+        );
+        // Outside home (or with no home known): the raw parent.
+        assert_eq!(
+            recent_label("/srv/data/ws", Some("/Users/me")),
+            "ws — /srv/data"
+        );
+        assert_eq!(recent_label("/srv/data/ws", None), "ws — /srv/data");
+        // A sibling sharing home as a string prefix must NOT abbreviate.
+        assert_eq!(
+            recent_label("/Users/melon/ws", Some("/Users/me")),
+            "ws — /Users/melon"
+        );
+        // Degenerate roots fall back to something legible.
+        assert_eq!(recent_label("/", Some("/Users/me")), "/");
+    }
 
     #[test]
     fn settings_accelerator_parses() {
@@ -138,6 +286,7 @@ mod tests {
             "CmdOrCtrl+N",
             "CmdOrCtrl+O",
             "CmdOrCtrl+Shift+O",
+            "CmdOrCtrl+P",
             "CmdOrCtrl+S",
             "CmdOrCtrl+Shift+S",
             "CmdOrCtrl+Shift+E",
@@ -171,6 +320,7 @@ mod tests {
             "CmdOrCtrl+N",
             "CmdOrCtrl+O",
             "CmdOrCtrl+Shift+O",
+            "CmdOrCtrl+P",
             "CmdOrCtrl+S",
             "CmdOrCtrl+Shift+S",
             "CmdOrCtrl+Shift+E",
@@ -216,6 +366,7 @@ mod tests {
             ("menu:new", "CmdOrCtrl+N"),
             ("menu:open", "CmdOrCtrl+O"),
             ("menu:open_folder", "CmdOrCtrl+Shift+O"),
+            ("menu:quick_open", "CmdOrCtrl+P"),
             ("menu:save", "CmdOrCtrl+S"),
             ("menu:save_as", "CmdOrCtrl+Shift+S"),
             ("menu:history", "CmdOrCtrl+Shift+H"),

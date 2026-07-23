@@ -1,10 +1,19 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { get } from 'svelte/store'
 
 const invoke = vi.fn()
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
 
-import { doc, newDoc, edit, isDirty, openDoc, docWith } from './doc'
+import {
+  doc,
+  newDoc,
+  edit,
+  isDirty,
+  openDoc,
+  docWith,
+  revertBuffer,
+  resetReadonlyMemory,
+} from './doc'
 import {
   open,
   save,
@@ -13,9 +22,15 @@ import {
   openInPreferredTarget,
   openInNewWindow,
   openDrainedEntries,
+  stashActive,
+  saveCachedBuffer,
+  saveAllDirty,
 } from './files'
 import { errorMessage } from './errors'
 import { openList, previewPath } from './openList'
+import { conflict } from './fileSync'
+import * as bufferCache from './bufferCache'
+import { registerBufferFlush, unregisterBufferFlush } from './bufferFlush'
 import { settings, DEFAULTS } from './settings'
 
 beforeEach(() => {
@@ -23,6 +38,9 @@ beforeEach(() => {
   newDoc()
   openList.set([])
   previewPath.set(null)
+  bufferCache.reset()
+  resetReadonlyMemory()
+  conflict.set(null)
   settings.set({ ...DEFAULTS }) // openMode: 'tab' (MODE A) unless a test opts in
 })
 
@@ -119,6 +137,260 @@ describe('openPath preview semantics', () => {
   })
 })
 
+describe('buffer cache: stash on switch-away (stashActive / openPath)', () => {
+  /** read_file returns per-path content; every other command resolves null. */
+  function mockFs(fs: Record<string, string>) {
+    invoke.mockImplementation(async (cmd: unknown, args?: unknown) => {
+      if (cmd === 'read_file') {
+        const p = (args as { path: string }).path
+        if (p in fs) return fs[p]
+        throw `no such file: ${p}`
+      }
+      return null
+    })
+  }
+
+  it('switching between pinned docs stashes the dirty buffer and restores it', async () => {
+    mockFs({ '/tmp/a.md': '# a', '/tmp/b.md': '# b' })
+    await openPath('/tmp/a.md')
+    edit('# a edited')
+    await openPath('/tmp/b.md')
+    expect(bufferCache.peek('/tmp/a.md')).toMatchObject({
+      content: '# a edited',
+      savedContent: '# a',
+    })
+    await openPath('/tmp/a.md')
+    const s = get(doc)
+    expect(s.content).toBe('# a edited')
+    expect(s.savedContent).toBe('# a') // restored, not re-read as a fresh load
+    expect(isDirty(s)).toBe(true)
+    expect(bufferCache.peek('/tmp/a.md')).toBeUndefined() // take() consumed it
+  })
+
+  it('a cache hit restores synchronously — read_file only reconciles in background', async () => {
+    mockFs({ '/tmp/a.md': '# a', '/tmp/b.md': '# b' })
+    await openPath('/tmp/a.md')
+    edit('# a edited')
+    await openPath('/tmp/b.md')
+    invoke.mockClear()
+    const p = openPath('/tmp/a.md') // NOT awaited: the restore must not need it
+    expect(get(doc).content).toBe('# a edited')
+    await p
+    // The only read is the background reconcile of the restored path.
+    const reads = invoke.mock.calls.filter((c) => c[0] === 'read_file')
+    expect(reads).toEqual([['read_file', { path: '/tmp/a.md' }]])
+  })
+
+  it('a clean preview is dropped on switch-away (volatile, not stashed)', async () => {
+    mockFs({ '/tmp/peek.md': '# peek', '/tmp/b.md': '# b' })
+    await openPath('/tmp/peek.md', { preview: true })
+    await openPath('/tmp/b.md')
+    expect(bufferCache.peek('/tmp/peek.md')).toBeUndefined()
+  })
+
+  it('a dirty pathed doc NOT in openList is defensively pinned, then stashed', async () => {
+    mockFs({ '/tmp/p.md': '# p', '/tmp/b.md': '# b' })
+    await openPath('/tmp/p.md', { preview: true })
+    edit('# p edited') // App would pin here; the choke-point must not rely on it
+    await openPath('/tmp/b.md')
+    expect(get(openList)).toContain('/tmp/p.md')
+    expect(bufferCache.isCachedDirty('/tmp/p.md')).toBe(true)
+  })
+
+  it('the untitled scratch is never stashed (no cache key)', async () => {
+    mockFs({ '/tmp/b.md': '# b' })
+    newDoc()
+    edit('draft')
+    stashActive()
+    expect(bufferCache.anyCachedDirty()).toEqual([])
+  })
+
+  it('a self-switch round-trips the dirty buffer identically', async () => {
+    mockFs({ '/tmp/a.md': '# a' })
+    await openPath('/tmp/a.md')
+    edit('# a edited')
+    await openPath('/tmp/a.md')
+    const s = get(doc)
+    expect(s.content).toBe('# a edited')
+    expect(isDirty(s)).toBe(true)
+  })
+
+  it('a failed open evicts the speculative stash (the live doc must never also be cached)', async () => {
+    mockFs({ '/tmp/a.md': '# a' })
+    await openPath('/tmp/a.md')
+    edit('# a edited')
+    errorMessage.set(null)
+    await openPath('/tmp/missing.md')
+    expect(get(errorMessage)).toContain('Could not open file')
+    expect(get(doc).content).toBe('# a edited') // still live…
+    expect(bufferCache.peek('/tmp/a.md')).toBeUndefined() // …and not forked in the cache
+  })
+
+  it('a readonly open of a CLEAN cached entry restores read-only', async () => {
+    mockFs({ '/tmp/ro.md': '# ro' })
+    openList.set(['/tmp/ro.md'])
+    bufferCache.stash('/tmp/ro.md', {
+      content: '# ro',
+      savedContent: '# ro',
+      normalized: null,
+      view: null,
+    })
+    await openPath('/tmp/ro.md', { readonly: true })
+    expect(get(doc).readonly).toBe(true)
+  })
+
+  it('a readonly open of a DIRTY cached entry keeps the edits editable (edits win)', async () => {
+    mockFs({ '/tmp/ro.md': '# ro' })
+    openList.set(['/tmp/ro.md'])
+    bufferCache.stash('/tmp/ro.md', {
+      content: '# ro edited',
+      savedContent: '# ro',
+      normalized: null,
+      view: null,
+    })
+    await openPath('/tmp/ro.md', { readonly: true })
+    const s = get(doc)
+    expect(s.readonly).toBe(false)
+    expect(s.content).toBe('# ro edited')
+  })
+
+  it('an external change while cached: clean entry silently reloads on restore', async () => {
+    mockFs({ '/tmp/a.md': 'newer from disk' })
+    openList.set(['/tmp/a.md'])
+    bufferCache.stash('/tmp/a.md', {
+      content: 'old',
+      savedContent: 'old',
+      normalized: null,
+      view: null,
+    })
+    await openPath('/tmp/a.md')
+    await vi.waitFor(() => expect(get(doc).content).toBe('newer from disk'))
+    expect(isDirty(get(doc))).toBe(false)
+  })
+
+  it('an external change while cached: dirty entry raises the conflict bar', async () => {
+    mockFs({ '/tmp/a.md': 'theirs' })
+    openList.set(['/tmp/a.md'])
+    bufferCache.stash('/tmp/a.md', {
+      content: 'mine',
+      savedContent: 'base',
+      normalized: null,
+      view: null,
+    })
+    await openPath('/tmp/a.md')
+    expect(get(doc).content).toBe('mine') // the user's edits stay in the buffer
+    await vi.waitFor(() => expect(get(conflict)).toBe('theirs'))
+  })
+
+  it("the Don't-Save close sequence destroys the buffer for good — no re-pin, no resurrected stash", async () => {
+    // Mirrors App.svelte onCloseFile's guarded action after "Don't Save":
+    // revert the still-dirty doc to disk truth FIRST, then unpin + evict and
+    // switch to the neighbour. The revert is load-bearing — without it,
+    // openPath's stashActive sees a dirty doc no longer in openList,
+    // defensively re-pins it and stashes the buffer the user just discarded
+    // (the closed tab resurrects, and a later Save-all writes the discarded
+    // edits to disk).
+    mockFs({ '/tmp/keep.md': '# keep', '/tmp/gone.md': '# gone' })
+    await openPath('/tmp/keep.md')
+    await openPath('/tmp/gone.md')
+    edit('# gone edited')
+    const cur = get(doc)
+    expect(isDirty(cur)).toBe(true)
+    revertBuffer(cur.savedContent) // Don't Save: back to disk truth
+    openList.update((l) => l.filter((p) => p !== '/tmp/gone.md'))
+    bufferCache.evict('/tmp/gone.md')
+    await openPath('/tmp/keep.md')
+    expect(get(doc).path).toBe('/tmp/keep.md')
+    expect(get(openList)).toEqual(['/tmp/keep.md']) // gone.md was NOT re-pinned
+    expect(bufferCache.peek('/tmp/gone.md')).toBeUndefined() // discarded means gone
+    expect(bufferCache.anyCachedDirty()).toEqual([])
+  })
+})
+
+describe('saveCachedBuffer', () => {
+  const dirtyEntry = { content: 'edited', savedContent: 'base', normalized: null, view: null }
+
+  it('writes the cached content, marks the entry clean, and records history', async () => {
+    invoke.mockResolvedValue(undefined)
+    bufferCache.stash('/tmp/bg.md', { ...dirtyEntry })
+    await expect(saveCachedBuffer('/tmp/bg.md')).resolves.toBe(true)
+    expect(invoke).toHaveBeenCalledWith('write_file', { path: '/tmp/bg.md', contents: 'edited' })
+    expect(invoke).toHaveBeenCalledWith('record_history', { path: '/tmp/bg.md', trigger: 'save' })
+    expect(bufferCache.isCachedDirty('/tmp/bg.md')).toBe(false)
+    expect(bufferCache.peek('/tmp/bg.md')?.savedContent).toBe('edited')
+  })
+
+  it('reports and returns false on a write failure, keeping the entry dirty', async () => {
+    errorMessage.set(null)
+    invoke.mockRejectedValue('disk full')
+    bufferCache.stash('/tmp/bg.md', { ...dirtyEntry })
+    await expect(saveCachedBuffer('/tmp/bg.md')).resolves.toBe(false)
+    expect(get(errorMessage)).toContain('Could not save file')
+    expect(bufferCache.isCachedDirty('/tmp/bg.md')).toBe(true)
+  })
+
+  it('is trivially true for a clean or absent entry — no write', async () => {
+    bufferCache.stash('/tmp/clean.md', {
+      content: 'x',
+      savedContent: 'x',
+      normalized: null,
+      view: null,
+    })
+    await expect(saveCachedBuffer('/tmp/clean.md')).resolves.toBe(true)
+    await expect(saveCachedBuffer('/tmp/absent.md')).resolves.toBe(true)
+    expect(invoke).not.toHaveBeenCalledWith('write_file', expect.anything())
+  })
+})
+
+describe('saveAllDirty', () => {
+  it('saves the dirty active doc AND every dirty cached buffer', async () => {
+    invoke.mockResolvedValue(undefined)
+    doc.set(docWith({ path: '/tmp/active.md', content: 'live', savedContent: 'old' }))
+    bufferCache.stash('/tmp/bg.md', {
+      content: 'bg edit',
+      savedContent: 'bg',
+      normalized: null,
+      view: null,
+    })
+    await expect(saveAllDirty()).resolves.toBe(true)
+    expect(invoke).toHaveBeenCalledWith('write_file', { path: '/tmp/active.md', contents: 'live' })
+    expect(invoke).toHaveBeenCalledWith('write_file', { path: '/tmp/bg.md', contents: 'bg edit' })
+    expect(isDirty(get(doc))).toBe(false)
+    expect(bufferCache.anyCachedDirty()).toEqual([])
+  })
+
+  it('returns false when any write fails, leaving that buffer dirty', async () => {
+    invoke.mockImplementation(async (cmd: unknown, args?: unknown) => {
+      if (cmd === 'write_file' && (args as { path: string }).path === '/tmp/bad.md') {
+        throw 'disk full'
+      }
+      return undefined
+    })
+    doc.set(docWith({ path: '/tmp/active.md', content: 'live', savedContent: 'old' }))
+    bufferCache.stash('/tmp/bad.md', {
+      content: 'edit',
+      savedContent: 'base',
+      normalized: null,
+      view: null,
+    })
+    await expect(saveAllDirty()).resolves.toBe(false)
+    expect(isDirty(get(doc))).toBe(false) // the active save still landed
+    expect(bufferCache.isCachedDirty('/tmp/bad.md')).toBe(true) // retry has the set intact
+  })
+
+  it('a cancelled Save As for a dirty untitled reports not-clean', async () => {
+    newDoc()
+    edit('draft')
+    invoke.mockResolvedValue(null) // save_file_dialog cancelled
+    await expect(saveAllDirty()).resolves.toBe(false)
+  })
+
+  it('is trivially true when nothing is dirty', async () => {
+    await expect(saveAllDirty()).resolves.toBe(true)
+    expect(invoke).not.toHaveBeenCalledWith('write_file', expect.anything())
+  })
+})
+
 describe('open', () => {
   it('loads the file picked via the Rust dialog into the store', async () => {
     invoke.mockImplementation(async (cmd: unknown) =>
@@ -150,6 +422,63 @@ describe('open', () => {
     invoke.mockResolvedValue(null)
     await open()
     expect(get(openList)).toEqual([])
+  })
+
+  it('re-picking the ACTIVE dirty file preserves the edits and never forks it into the cache', async () => {
+    // File > Open on the already-active path is a natural "reload" gesture.
+    // It must route through openPath's lossless stash-then-take: the naive
+    // stashActive();openDoc() pair would stash the dirty live buffer under p
+    // and then reload p clean from disk — a dirty cache FORK of the LIVE doc
+    // (phantom dirty dot, spurious close prompt, and a window-close Save-all
+    // writing the stale fork over any newer save).
+    invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === 'open_file_dialog'
+        ? { path: '/tmp/active.md', content: '# disk' }
+        : cmd === 'read_file'
+          ? '# disk'
+          : undefined,
+    )
+    openDoc('/tmp/active.md', '# disk')
+    openList.set(['/tmp/active.md'])
+    edit('# disk edited')
+    await open()
+    const s = get(doc)
+    expect(s.path).toBe('/tmp/active.md')
+    expect(s.content).toBe('# disk edited') // the live buffer survives the self-re-pick
+    expect(isDirty(s)).toBe(true)
+    // The LIVE doc must never also sit in the cache (openPath's documented
+    // invariant): no forked entry, nothing cached-dirty.
+    expect(bufferCache.peek('/tmp/active.md')).toBeUndefined()
+    expect(bufferCache.anyCachedDirty()).toEqual([])
+    // And a window-close Save-all writes ONLY the live buffer — no stale fork.
+    edit('# disk edited v2')
+    await expect(saveAllDirty()).resolves.toBe(true)
+    const writes = invoke.mock.calls.filter((c) => c[0] === 'write_file')
+    expect(writes).toEqual([
+      ['write_file', { path: '/tmp/active.md', contents: '# disk edited v2' }],
+    ])
+  })
+
+  it('a pick that is a CACHED background tab restores its buffer, not the dialog content', async () => {
+    invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === 'open_file_dialog'
+        ? { path: '/tmp/cached.md', content: '# disk' }
+        : cmd === 'read_file'
+          ? '# disk'
+          : undefined,
+    )
+    openList.set(['/tmp/cached.md'])
+    bufferCache.stash('/tmp/cached.md', {
+      content: '# dirty edits',
+      savedContent: '# disk',
+      normalized: null,
+      view: null,
+    })
+    await open()
+    const s = get(doc)
+    expect(s.path).toBe('/tmp/cached.md')
+    expect(s.content).toBe('# dirty edits') // never clobbered by the fresh read
+    expect(isDirty(s)).toBe(true)
   })
 })
 
@@ -237,6 +566,25 @@ describe('saveAs', () => {
     )
     await saveAs()
     expect(get(previewPath)).toBe('/tmp/other-peek.md')
+  })
+
+  it('evicts a cached background tab the Save As just overwrote', async () => {
+    // The stale cache entry must not later restore pre-overwrite content.
+    openList.set(['/tmp/target.md'])
+    bufferCache.stash('/tmp/target.md', {
+      content: 'stale',
+      savedContent: 'stale',
+      normalized: null,
+      view: null,
+    })
+    newDoc()
+    edit('overwriting draft')
+    invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === 'save_file_dialog' ? '/tmp/target.md' : undefined,
+    )
+    await saveAs()
+    expect(bufferCache.peek('/tmp/target.md')).toBeUndefined()
+    expect(get(doc).path).toBe('/tmp/target.md')
   })
 })
 
@@ -435,5 +783,79 @@ describe('readonly', () => {
     expect(s.path).toBe('/tmp/copy.md')
     expect(s.readonly).toBe(false)
     expect(isDirty(s)).toBe(false)
+  })
+})
+
+describe('flush-before-read (the stale-save window)', () => {
+  // Simulates the editors' debounced serialization: the registered flush
+  // holds keystrokes that have NOT yet landed in doc.content. Every read
+  // point below must run it before trusting the store.
+  let flush: (() => void) | null = null
+  function pendingKeystrokes(md: string) {
+    flush = () => edit(md)
+    registerBufferFlush(flush)
+  }
+  afterEach(() => {
+    if (flush) unregisterBufferFlush(flush)
+    flush = null
+  })
+
+  it('save() lands the pending serialization before writing', async () => {
+    openDoc('/tmp/a.md', 'saved')
+    edit('saved plus older emission')
+    pendingKeystrokes('saved plus newest keystrokes')
+    invoke.mockResolvedValue(undefined)
+    await save()
+    expect(invoke).toHaveBeenCalledWith('write_file', {
+      path: '/tmp/a.md',
+      contents: 'saved plus newest keystrokes',
+    })
+    // …and the buffer is clean afterwards (no re-dirty when the debounced
+    // emission would have landed post-save).
+    expect(get(doc).savedContent).toBe('saved plus newest keystrokes')
+    expect(isDirty(get(doc))).toBe(false)
+  })
+
+  it('saveAs() flushes before reading the buffer', async () => {
+    openDoc('/tmp/a.md', 'saved')
+    pendingKeystrokes('newest')
+    invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === 'save_file_dialog' ? '/tmp/copy.md' : undefined,
+    )
+    await saveAs()
+    expect(invoke).toHaveBeenCalledWith('write_file', {
+      path: '/tmp/copy.md',
+      contents: 'newest',
+    })
+  })
+
+  it('stashActive() flushes so the cache never snapshots a stale buffer', () => {
+    openDoc('/tmp/a.md', 'saved')
+    openList.set(['/tmp/a.md'])
+    pendingKeystrokes('newest')
+    stashActive()
+    expect(bufferCache.peek('/tmp/a.md')?.content).toBe('newest')
+  })
+
+  it('saveAllDirty() flushes before the dirty check, not just inside save()', async () => {
+    // Without the up-front flush the active doc reads CLEAN here and is
+    // skipped entirely — the pending keystrokes would die with the window.
+    openDoc('/tmp/a.md', 'saved')
+    pendingKeystrokes('saved plus pending')
+    invoke.mockResolvedValue(undefined)
+    const allClean = await saveAllDirty()
+    expect(allClean).toBe(true)
+    expect(invoke).toHaveBeenCalledWith('write_file', {
+      path: '/tmp/a.md',
+      contents: 'saved plus pending',
+    })
+  })
+
+  it('a flush with nothing registered leaves every path working (no-op)', async () => {
+    openDoc('/tmp/a.md', 'saved')
+    edit('typed')
+    invoke.mockResolvedValue(undefined)
+    await save()
+    expect(invoke).toHaveBeenCalledWith('write_file', { path: '/tmp/a.md', contents: 'typed' })
   })
 })

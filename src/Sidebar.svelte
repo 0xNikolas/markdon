@@ -3,24 +3,16 @@
   import FileOpsMenu, { type FileOpAction } from './FileOpsMenu.svelte'
   import NameModal from './NameModal.svelte'
   import MoveToModal from './MoveToModal.svelte'
+  import OpenFilesStrip, { type StripRowAction } from './OpenFilesStrip.svelte'
+  import SidebarHeader from './SidebarHeader.svelte'
+  import WorkspaceTree from './WorkspaceTree.svelte'
   import { invoke } from '@tauri-apps/api/core'
-  import {
-    workspace,
-    isMarkdownFile,
-    fileIcon,
-    folderIcon,
-    openWorkspace,
-    closeWorkspace,
-    type WorkspaceDir,
-    type WorkspaceFile,
-  } from './lib/workspace'
+  import { workspace, openWorkspace, closeWorkspace } from './lib/workspace'
   import { openInNewWindow } from './lib/files'
   import { reportError } from './lib/errors'
   import {
     selection,
     focused,
-    clipboard,
-    focusRow,
     cutSelection,
     copySelection,
     selectVisible,
@@ -30,15 +22,14 @@
     paste,
     performCreateFile,
     performCreateFolder,
-    performRename,
     performDuplicate,
     performMove,
     performDelete,
   } from './lib/fileMutations'
-  import { pasteTargetDir, folderPaths, leafNameError } from './lib/fileTree'
+  import { pasteTargetDir, folderPaths } from './lib/fileTree'
+  import { collapsed, startRename, stemLength } from './lib/treeState'
   import { focusTrap } from './lib/focusTrap'
   import { portal } from './lib/portal'
-  import { ancestorDirs } from './lib/paths'
   import { get } from 'svelte/store'
   import { selectionForContextMenu, isSelectionClearingTarget } from './lib/sidebarMenu'
 
@@ -47,18 +38,27 @@
     openFiles: string[]
     /** The single-click preview slot (openList.ts) — the strip's italic row. */
     previewPath: string | null
+    /** Paths whose CACHED (background) buffers hold unsaved edits — the
+        strip renders a dirty dot on those rows (bufferCache.dirtyCached). */
+    dirtyPaths?: ReadonlySet<string>
     /** `preview` = single-click glance (always in-place); `inPlace` = the
         explicit Open in New Tab action, which bypasses openMode routing. */
     onOpenFile: (path: string, opts?: { preview?: boolean; inPlace?: boolean }) => void
     onCloseFile: (path: string) => void
+    /** Strip-row context-menu action — semantics live in App.handleStripAction. */
+    onStripAction: (action: StripRowAction, path: string) => void
     onNewFile: () => void
   }
-  let { activePath, openFiles, previewPath, onOpenFile, onCloseFile, onNewFile }: Props =
-    $props()
-
-  // Collapse state keyed by dir path. Absent/false = expanded (matches the
-  // design's open folders); toggled per folder, local to this component.
-  let collapsed = $state<Record<string, boolean>>({})
+  let {
+    activePath,
+    openFiles,
+    previewPath,
+    dirtyPaths = new Set(),
+    onOpenFile,
+    onCloseFile,
+    onStripAction,
+    onNewFile,
+  }: Props = $props()
 
   // File-operations menu + modal state (local to the sidebar chrome).
   let menuOpen = $state(false)
@@ -75,24 +75,6 @@
   let moveSources = $state<string[] | null>(null)
   let deleteConfirm = $state<{ paths: string[]; label: string } | null>(null)
 
-  // Inline rename (VS Code style — no modal): the row whose name is being
-  // edited plus the live input value. One rename at a time; NameModal stays
-  // for New File / New Folder only.
-  let renaming = $state<string | null>(null)
-  let renameValue = $state('')
-
-  // The italic preview row, rendered only while the previewed path isn't
-  // pinned — pinning moves it into openFiles and the slot clears, so a
-  // lingering equal value must not draw a duplicate row.
-  let previewRow = $derived(
-    previewPath !== null && !openFiles.includes(previewPath) ? previewPath : null,
-  )
-
-  // Cut items dim until pasted or the clipboard is cleared.
-  let cutSet = $derived(
-    $clipboard?.mode === 'cut' ? new Set($clipboard.paths) : new Set<string>(),
-  )
-
   // Directory a New/Paste lands in: focused folder, focused file's parent, else root.
   function targetDir(): string | null {
     return pasteTargetDir($focused, folderPaths($workspace.tree), $workspace.root)
@@ -100,12 +82,6 @@
 
   function isFolder(path: string): boolean {
     return folderPaths($workspace.tree).has(path)
-  }
-
-  // The offset of the extension dot, so a rename preselects just the stem.
-  function stemLength(name: string): number {
-    const dot = name.lastIndexOf('.')
-    return dot > 0 ? dot : name.length
   }
 
   function promptNew(kind: 'file' | 'folder') {
@@ -121,60 +97,6 @@
         if (kind === 'file') performCreateFile(dir, value)
         else performCreateFolder(dir, value)
       },
-    }
-  }
-
-  function startRename(path: string) {
-    // Expand every collapsed ancestor first (VS Code behavior): the rename
-    // input only exists for VISIBLE rows, so arming a hidden one would leave
-    // an input that mounts later, steals focus, and can commit stale.
-    const root = get(workspace).root
-    if (root !== null) for (const dir of ancestorDirs(root, path)) collapsed[dir] = false
-    renameValue = basename(path)
-    renaming = path
-  }
-
-  // A workspace switch invalidates any in-flight rename — the armed path
-  // belongs to the OLD tree, and its input could otherwise mount against an
-  // unrelated same-named row later. Tracked against the ROOT only: refreshes
-  // of the same folder (refocus, file ops) must not cancel the user's typing.
-  let renameRoot: string | null = get(workspace).root
-  $effect(() => {
-    if ($workspace.root !== renameRoot) {
-      renameRoot = $workspace.root
-      renaming = null
-    }
-  })
-
-  // Focus the fresh rename input and preselect the stem (files) or the whole
-  // name (folders) — Svelte action, runs once per input mount.
-  function renameSetup(node: HTMLInputElement, selectTo: number | null) {
-    node.focus()
-    if (selectTo !== null) node.setSelectionRange(0, selectTo)
-    else node.select()
-  }
-
-  // Commit = performRename, which already retargets the doc/openList/preview
-  // and refreshes + reselects. An unchanged or invalid name commits as a
-  // cancel (VS Code drops the edit silently; the input's red border already
-  // gave live feedback). The `renaming !== path` gate makes this idempotent:
-  // Enter/Escape resolve the rename first, and the input's teardown blur
-  // then no-ops instead of double-committing.
-  function commitRename(path: string) {
-    if (renaming !== path) return
-    renaming = null
-    const next = renameValue.trim()
-    if (next === basename(path) || leafNameError(next) !== null) return
-    performRename(path, next)
-  }
-
-  function onRenameKeydown(e: KeyboardEvent, path: string) {
-    if (e.key === 'Enter') {
-      e.preventDefault()
-      commitRename(path)
-    } else if (e.key === 'Escape') {
-      e.stopPropagation() // keep the window-level Escape handler (find bar) out of it
-      renaming = null
     }
   }
 
@@ -208,6 +130,13 @@
       case 'new-folder':
         promptNew('folder')
         break
+      case 'open':
+        // Open the file in this window: a markdown doc lands in the current
+        // tab (inPlace), an image routes to the image view — handleOpenFile
+        // detects the image type and diverts before touching $doc, so one
+        // call covers both. Non-openable types never reach here (Open hidden).
+        if (sel.length === 1) onOpenFile(sel[0], { inPlace: true })
+        break
       case 'open-tab':
         // "New tab" = pinned AND in this window by definition — `inPlace`
         // bypasses the openMode routing that a plain pinned open honors.
@@ -227,6 +156,33 @@
             reportError(`Could not open a new app instance: ${String(e)}`),
           )
         }
+        break
+      case 'reveal':
+        // Reveal in Finder. reveal_path is allowlist-gated in Rust
+        // (AllowedPaths::ensure), and opening the workspace already granted its
+        // root — so any file inside it, even one only ever LISTED and never
+        // opened, is accepted. A file deleted from disk after listing fails
+        // ensure's canonicalize and surfaces the banner rather than crashing.
+        if (sel.length === 1) {
+          invoke('reveal_path', { path: sel[0] }).catch((e) =>
+            reportError(`Could not reveal file: ${String(e)}`),
+          )
+        }
+        break
+      case 'copy-path':
+        // Absolute path to the system clipboard; a denied/unavailable clipboard
+        // surfaces honestly rather than silently no-oping (mirrors the strip).
+        if (sel.length === 1) {
+          navigator.clipboard
+            .writeText(sel[0])
+            .catch((e) => reportError(`Could not copy path: ${String(e)}`))
+        }
+        break
+      case 'close':
+        // Route through App's guarded onCloseFile (dirty-guard + neighbour /
+        // empty-state fallback) — the same path the strip's close button uses.
+        // Only offered while the file is in the strip (FileOpsMenu gating).
+        if (sel.length === 1) onCloseFile(sel[0])
         break
       case 'rename':
         if (sel.length === 1) startRename(sel[0])
@@ -253,32 +209,12 @@
         requestDelete(sel)
         break
       case 'select-all':
-        selectVisible($workspace.tree, collapsed)
+        selectVisible($workspace.tree, get(collapsed))
         break
       case 'close-folder':
         closeWorkspace()
         break
     }
-  }
-
-  // Row click: single-select + focus (the paste/new anchor). A markdown
-  // file's single click additionally PREVIEWS it (VS Code semantics: italic
-  // strip row, always in-place); the second click of a dblclick no-ops in
-  // App (already active), then onFileDblClick pins it.
-  function onFileClick(f: WorkspaceFile) {
-    focusRow(f.path)
-    if (isMarkdownFile(f.name)) onOpenFile(f.path, { preview: true })
-  }
-  function onFileDblClick(f: WorkspaceFile) {
-    // A tree dblclick means "open in THIS window" by definition — `inPlace`
-    // bypasses openMode routing, so a dblclick racing its own first click's
-    // still-loading preview can never spawn a duplicate window under
-    // openMode:'window'.
-    if (isMarkdownFile(f.name)) onOpenFile(f.path, { preview: false, inPlace: true })
-  }
-  function onFolderClick(d: WorkspaceDir) {
-    focusRow(d.path)
-    collapsed[d.path] = !collapsed[d.path]
   }
 
   // Right-click on a tree row: Finder semantics — keep the selection if the
@@ -323,95 +259,12 @@
     ($workspace.tree?.dirs.length ?? 0) + ($workspace.tree?.files.length ?? 0) > 0,
   )
 
-  function basename(path: string): string {
-    return path.split('/').filter(Boolean).pop() ?? path
-  }
+  // Paths currently in the Open Files strip (pinned rows + the italic preview
+  // row) — the row context menu's Close item shows only for a file that's open.
+  let openPaths = $derived(
+    new Set(previewPath !== null ? [...openFiles, previewPath] : openFiles),
+  )
 </script>
-
-{#snippet fileRow(f: WorkspaceFile)}
-  {#if renaming === f.path}
-    <!-- Inline rename swaps the row's <button> for a div: an input inside a
-         button is invalid HTML. The .rename-input class is load-bearing —
-         isSelectionClearingTarget matches it so caret clicks don't deselect. -->
-    <div class="file-row renaming">
-      <span class="active-bar"></span>
-      <Icon name={fileIcon(f.name)} size={16} />
-      <input
-        class="rename-input"
-        class:invalid={leafNameError(renameValue) !== null}
-        bind:value={renameValue}
-        type="text"
-        autocomplete="off"
-        spellcheck="false"
-        aria-label="Rename {f.name}"
-        use:renameSetup={stemLength(f.name)}
-        onkeydown={(e) => onRenameKeydown(e, f.path)}
-        onblur={() => commitRename(f.path)}
-      />
-    </div>
-  {:else}
-    <button
-      class="file-row"
-      class:active={f.path === activePath}
-      class:selected={$selection.has(f.path) && f.path !== activePath}
-      class:cut={cutSet.has(f.path)}
-      aria-current={f.path === activePath ? 'true' : undefined}
-      onclick={() => onFileClick(f)}
-      ondblclick={() => onFileDblClick(f)}
-      oncontextmenu={(e) => onRowContextMenu(e, f.path)}
-    >
-      <span class="active-bar"></span>
-      <Icon name={fileIcon(f.name)} size={16} />
-      <span class="name">{f.name}</span>
-    </button>
-  {/if}
-{/snippet}
-
-{#snippet dirRows(d: WorkspaceDir)}
-  {#if renaming === d.path}
-    <!-- Same div-for-button swap as the file row; folders preselect the whole
-         name (no extension stem to protect). -->
-    <div class="folder-row renaming">
-      <span class="chevron" class:open={!collapsed[d.path]}>
-        <Icon name="chevron-right" size={12} />
-      </span>
-      <Icon name={folderIcon(!collapsed[d.path])} size={16} />
-      <input
-        class="rename-input"
-        class:invalid={leafNameError(renameValue) !== null}
-        bind:value={renameValue}
-        type="text"
-        autocomplete="off"
-        spellcheck="false"
-        aria-label="Rename {d.name}"
-        use:renameSetup={null}
-        onkeydown={(e) => onRenameKeydown(e, d.path)}
-        onblur={() => commitRename(d.path)}
-      />
-    </div>
-  {:else}
-    <button
-      class="folder-row"
-      class:selected={$selection.has(d.path)}
-      class:cut={cutSet.has(d.path)}
-      aria-expanded={!collapsed[d.path]}
-      onclick={() => onFolderClick(d)}
-      oncontextmenu={(e) => onRowContextMenu(e, d.path)}
-    >
-      <span class="chevron" class:open={!collapsed[d.path]}>
-        <Icon name="chevron-right" size={12} />
-      </span>
-      <Icon name={folderIcon(!collapsed[d.path])} size={16} />
-      <span class="name">{d.name}</span>
-    </button>
-  {/if}
-  {#if !collapsed[d.path]}
-    <div class="indent">
-      {#each d.dirs as sub (sub.path)}{@render dirRows(sub)}{/each}
-      {#each d.files as f (f.path)}{@render fileRow(f)}{/each}
-    </div>
-  {/if}
-{/snippet}
 
 <nav
   class="sidebar"
@@ -419,120 +272,34 @@
   onpointerdown={onPanelPointerDown}
   oncontextmenu={onPanelContextMenu}
 >
-  {#if openFiles.length > 0 || previewRow !== null}
-    <!-- VS Code "Open Editors"-style strip: every opened document, in- or
-         out-of-workspace, so there's one consistent surface for "what's on
-         screen" rather than the tree alone. Paths-only --
-         the single-doc model is unchanged, this is just a switch list. -->
-    <div class="header">
-      <span class="label">Open Files</span>
-    </div>
-    <!-- data-testid: the strip and the workspace tree are visually identical
-         .tree containers whose rows can render the same file names — e2e
-         locators need an unambiguous scope for each. -->
-    <div class="tree" data-testid="open-files">
-      {#each openFiles as path (path)}
-        <!-- Two sibling buttons, not a nested button-in-button: the row opens
-             the file, the small trailing button closes it (stopPropagation
-             so a close click never also switches to it first). -->
-        <div class="open-file-row" class:active={path === activePath}>
-          <button
-            class="open-file-main"
-            aria-current={path === activePath ? 'true' : undefined}
-            onclick={() => onOpenFile(path)}
-          >
-            <span class="active-bar"></span>
-            <Icon name={fileIcon(basename(path))} size={16} />
-            <span class="name">{basename(path)}</span>
-          </button>
-          <button
-            class="close-file"
-            aria-label="Close {basename(path)}"
-            onclick={(e) => { e.stopPropagation(); onCloseFile(path) }}
-          >
-            <Icon name="x" size={12} />
-          </button>
-        </div>
-      {/each}
-      {#if previewRow !== null}
-        {@const pv = previewRow}
-        <!-- The single-click preview: ONE italic row after the pinned ones.
-             Clicking it re-asserts the preview (a no-op while it's already
-             the active doc) rather than pinning — only a tree dblclick, an
-             explicit open, or editing the buffer promotes it. The italics are
-             invisible to a screen reader, so both aria-labels carry the
-             "(preview)" state in words. Enter on the already-active row PINS
-             it — the keyboard's promotion affordance, mirroring the mouse's
-             dblclick (preventDefault keeps the button's synthetic click, which
-             would merely re-preview, from also firing). -->
-        <div class="open-file-row preview" class:active={pv === activePath}>
-          <button
-            class="open-file-main"
-            aria-label="{basename(pv)} (preview)"
-            aria-current={pv === activePath ? 'true' : undefined}
-            onclick={() => onOpenFile(pv, { preview: true })}
-            onkeydown={(e) => {
-              if (e.key === 'Enter' && pv === activePath) {
-                e.preventDefault()
-                onOpenFile(pv, { preview: false, inPlace: true })
-              }
-            }}
-          >
-            <span class="active-bar"></span>
-            <Icon name={fileIcon(basename(pv))} size={16} />
-            <span class="name">{basename(pv)}</span>
-          </button>
-          <button
-            class="close-file"
-            aria-label="Close {basename(pv)} (preview)"
-            onclick={(e) => { e.stopPropagation(); onCloseFile(pv) }}
-          >
-            <Icon name="x" size={12} />
-          </button>
-        </div>
-      {/if}
-    </div>
-  {/if}
-  <div class="header">
-    <span class="label">Workspace</span>
-    <div class="header-actions">
-      <button class="new-file" aria-label="New file" onclick={onNewFile}>
-        <Icon name="file-plus" size={14} />
-      </button>
-      <div class="fileops-anchor">
-        <button
-          class="new-file"
-          aria-label="File operations"
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          onclick={() => { ctxMenu = null; menuOpen = !menuOpen }}
-        >
-          <Icon name="ellipsis" size={14} />
-        </button>
-        {#if menuOpen}
-          <FileOpsMenu
-            {hasRows}
-            onAction={handleAction}
-            onClose={() => (menuOpen = false)}
-          />
-        {/if}
-      </div>
-    </div>
-  </div>
+  <OpenFilesStrip
+    {openFiles}
+    {previewPath}
+    {activePath}
+    {dirtyPaths}
+    {onOpenFile}
+    {onCloseFile}
+    {onStripAction}
+  />
+  <SidebarHeader
+    {menuOpen}
+    {hasRows}
+    {onNewFile}
+    onToggleMenu={() => { ctxMenu = null; menuOpen = !menuOpen }}
+    onCloseMenu={() => (menuOpen = false)}
+    onAction={handleAction}
+  />
   {#if ctxMenu}
     <FileOpsMenu
       {hasRows}
+      {openPaths}
       at={ctxMenu}
       onAction={handleAction}
       onClose={() => (ctxMenu = null)}
     />
   {/if}
   {#if $workspace.tree}
-    <!-- data-testid: see the Open Files strip's note above. -->
-    <div class="tree" data-testid="workspace-tree">
-      {#each $workspace.tree.dirs as d (d.path)}{@render dirRows(d)}{/each}
-      {#each $workspace.tree.files as f (f.path)}{@render fileRow(f)}{/each}
-    </div>
+    <WorkspaceTree {activePath} {onOpenFile} {onRowContextMenu} />
   {:else if docOpen}
     <!-- A file is open: the big empty-state panel would just shout at a user
          who is already reading a document, so offer a quiet row instead. -->
@@ -615,258 +382,6 @@
     background: var(--bg);
     border-right: 1px solid var(--border);
     overflow-y: auto;
-  }
-  .header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 8px;
-  }
-  .label {
-    font: 700 11px var(--font-ui);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--fg-faint);
-  }
-  .new-file {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 4px;
-    border: 0;
-    border-radius: 4px;
-    background: none;
-    color: var(--fg-faint);
-    cursor: pointer;
-    transition: background-color 0.1s ease, color 0.1s ease;
-  }
-  .new-file:hover {
-    background: var(--surface-hover);
-    color: var(--fg-secondary);
-  }
-  .new-file:active {
-    background: var(--surface-active);
-  }
-  .header-actions {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-  }
-  /* Positioning context for the FileOpsMenu dropdown anchored under the button. */
-  .fileops-anchor {
-    position: relative;
-    display: inline-flex;
-  }
-
-  .tree {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-  .indent {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding-left: 12px;
-  }
-
-  .folder-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 6px 12px 6px 8px;
-    border: 0;
-    border-radius: 6px;
-    background: none;
-    color: var(--fg-secondary);
-    font: 500 13px var(--font-ui);
-    cursor: pointer;
-    text-align: left;
-    transition: background-color 0.1s ease;
-  }
-  .folder-row:hover {
-    background: var(--surface-hover);
-  }
-  .folder-row:active {
-    background: var(--surface-active);
-  }
-  .chevron {
-    display: inline-flex;
-    flex-shrink: 0;
-    transition: transform 0.12s ease;
-  }
-  .chevron.open {
-    transform: rotate(90deg);
-  }
-
-  .file-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 8px 12px 8px 16px;
-    border: 0;
-    border-radius: 6px;
-    background: none;
-    color: var(--fg-muted);
-    font: 400 13px var(--font-ui);
-    cursor: pointer;
-    text-align: left;
-    transition: background-color 0.1s ease, color 0.1s ease;
-  }
-  /* Non-markdown rows (.nonmd) are now selectable buttons (focus/cut/copy/
-     move/delete) but never open a document; they read as slightly muted via
-     their file-text icon. Hover/active applies to every non-open row. */
-  .file-row:not(.active):hover {
-    background: var(--surface-hover);
-    color: var(--fg-secondary);
-  }
-  .file-row:not(.active):active {
-    background: var(--surface-active);
-  }
-  .file-row.active {
-    background: var(--accent-tint);
-    color: var(--fg-strong);
-    font-weight: 600;
-  }
-  .file-row.active:hover,
-  .file-row.active:active {
-    background: var(--accent-tint-strong);
-  }
-  /* Selected-but-not-open rows (multi-select via Select All, or a focused
-     folder/non-md file): a quiet surface fill distinct from the accent-tinted
-     open row. */
-  .file-row.selected:not(.active),
-  .folder-row.selected {
-    background: var(--surface-hover);
-    color: var(--fg-strong);
-  }
-  /* Cut items dim until pasted or the clipboard is cleared. */
-  .file-row.cut,
-  .folder-row.cut {
-    opacity: 0.5;
-  }
-  .active-bar {
-    width: 3px;
-    height: 14px;
-    border-radius: 1.5px;
-    background: transparent;
-    flex-shrink: 0;
-  }
-  .file-row.active .active-bar {
-    background: var(--accent);
-  }
-
-  .name {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  /* Inline rename: the row swaps its <button> for a div+input pair, so kill
-     the row-button affordances (pointer cursor, hover fill) for its duration.
-     Placed after the hover rules above so the equal-specificity override wins. */
-  .file-row.renaming,
-  .folder-row.renaming {
-    cursor: default;
-  }
-  .file-row.renaming:hover,
-  .folder-row.renaming:hover {
-    background: none;
-  }
-  .rename-input {
-    flex: 1;
-    min-width: 0;
-    padding: 2px 6px;
-    border: 1px solid var(--accent);
-    border-radius: 4px;
-    background: var(--bg);
-    color: var(--fg);
-    font: 400 13px var(--font-ui);
-  }
-  .rename-input:focus-visible {
-    outline: none;
-  }
-  /* Live leafNameError feedback; a commit with this border showing cancels. */
-  .rename-input.invalid {
-    border-color: var(--danger);
-  }
-
-  /* Open Files row: two sibling buttons (open-file-main + close-file) inside
-     a plain div, not a nested button-in-button. Matches .file-row's look but
-     the row itself carries no click handler -- only its children do. */
-  .open-file-row {
-    display: flex;
-    align-items: center;
-    width: 100%;
-    border-radius: 6px;
-    transition: background-color 0.1s ease;
-  }
-  .open-file-row:hover {
-    background: var(--surface-hover);
-  }
-  .open-file-row.active {
-    background: var(--accent-tint);
-  }
-  .open-file-row.active:hover {
-    background: var(--accent-tint-strong);
-  }
-  .open-file-main {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex: 1;
-    min-width: 0;
-    padding: 8px 4px 8px 16px;
-    border: 0;
-    background: none;
-    color: var(--fg-muted);
-    font: 400 13px var(--font-ui);
-    cursor: pointer;
-    text-align: left;
-  }
-  .open-file-row.active .open-file-main {
-    color: var(--fg-strong);
-    font-weight: 600;
-  }
-  .open-file-row.active .open-file-main .active-bar {
-    background: var(--accent);
-  }
-  /* Hidden until the row is hovered/focused, but always in the tab order
-     (keyboard-reachable per the close-affordance requirement). */
-  .close-file {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    width: 20px;
-    height: 20px;
-    margin-right: 8px;
-    padding: 0;
-    border: 0;
-    border-radius: 4px;
-    background: none;
-    color: var(--fg-faint);
-    cursor: pointer;
-    opacity: 0;
-    transition: opacity 0.1s ease, background-color 0.1s ease, color 0.1s ease;
-  }
-  .open-file-row:hover .close-file,
-  .open-file-row:focus-within .close-file,
-  .close-file:focus-visible {
-    opacity: 1;
-  }
-  .close-file:hover {
-    background: var(--surface-active);
-    color: var(--fg-secondary);
-  }
-  /* The preview row's name renders italic — VS Code's "this tab is a glance,
-     not a commitment" signal. Everything else matches a pinned row. */
-  .open-file-row.preview .name {
-    font-style: italic;
   }
 
   /* Ghost panel shown when no workspace is open -- discoverable entry point

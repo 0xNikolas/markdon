@@ -12,6 +12,7 @@ import {
   clearPreviewInSubtree,
 } from './openList'
 import { readonlyMemory } from './readonlyMemory'
+import * as bufferCache from './bufferCache'
 import { isSelfOrDescendant } from './paths'
 import { selection, focused, clipboard } from './fileOpsState'
 import { pasteTargetDir, folderPaths } from './fileTree'
@@ -81,6 +82,7 @@ export async function performRename(path: string, newName: string): Promise<void
     retargetPath(path, p) // follow the open doc if it (or an ancestor) moved
     openList.update((l) => retargetOpen(l, path, p)) // keep the Open Files strip in sync
     previewPath.update((pv) => retargetPreview(pv, path, p)) // …and its preview row
+    bufferCache.retarget(path, p) // …and any stashed background buffers
     await refreshWorkspace()
     afterMutation([p])
   } catch (e) {
@@ -111,6 +113,7 @@ export async function performMove(paths: string[], destDir: string): Promise<voi
       retargetPath(src, p)
       openList.update((l) => retargetOpen(l, src, p))
       previewPath.update((pv) => retargetPreview(pv, src, p))
+      bufferCache.retarget(src, p)
       moved.push(p)
     }
   } catch (e) {
@@ -149,6 +152,7 @@ export async function paste(): Promise<void> {
         retargetPath(src, p)
         openList.update((l) => retargetOpen(l, src, p))
         previewPath.update((pv) => retargetPreview(pv, src, p))
+        bufferCache.retarget(src, p)
         results.push(p)
         movedCount++
       }
@@ -186,6 +190,17 @@ export async function performDelete(paths: string[]): Promise<void> {
   // document (DEFECT A2). detachIfAffected re-reads state inside doc.update.
   if (detachIfAffected(paths)) {
     reportNotice('This file was moved to Trash — it is now an unsaved document.')
+  }
+  // A DIRTY cached background buffer whose file was just trashed is dropped
+  // with its strip row (its detached-buffer alternative needs multi-untitled
+  // support, out of scope) — the one lossy edge here, so at least say so.
+  // Checked before the eviction below actually discards them.
+  const droppedDirty = bufferCache
+    .anyCachedDirty()
+    .filter((cp) => paths.some((p) => isSelfOrDescendant(cp, p)))
+  bufferCache.evictSubtree(paths)
+  if (droppedDirty.length > 0) {
+    reportNotice('Moved to Trash — unsaved changes in a background tab were discarded.')
   }
   // Prune readonly memory for every trashed path unconditionally — detach only
   // covers the open doc, so a locked-but-not-open deleted file would otherwise

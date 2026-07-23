@@ -15,7 +15,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
   import { Crepe } from '@milkdown/crepe'
-  import { schemaCtx } from '@milkdown/kit/core'
+  import { commandsCtx, editorViewCtx, schemaCtx } from '@milkdown/kit/core'
+  import { TextSelection } from '@milkdown/kit/prose/state'
   import { getHTML } from '@milkdown/kit/utils'
   import { uploadConfig } from '@milkdown/kit/plugin/upload'
   import '@milkdown/crepe/theme/common/style.css'
@@ -24,7 +25,14 @@
   import { get } from 'svelte/store'
   import { searchPlugin } from './lib/searchPlugin'
   import { registerHtmlSource, unregisterHtmlSource } from './lib/export'
+  import { registerBufferFlush, unregisterBufferFlush } from './lib/bufferFlush'
   import { doc } from './lib/doc'
+  import {
+    registerViewStateProvider,
+    unregisterViewStateProvider,
+    consumePendingViewState,
+    type ViewState,
+  } from './lib/bufferCache'
   import { uploadPastedImage, resolveImageSrc } from './lib/imagePaste'
   import { checkEditorSchema } from './lib/schemaCheck'
   import boldIcon from './assets/icons/bold.svg?raw'
@@ -48,6 +56,15 @@
   // registers a closure over an already-destroyed Crepe instance -- that
   // stale closure would throw when export later called it.
   let destroyed = false
+  // Cursor/scroll snapshot provider for the buffer cache (stash-on-switch);
+  // registered post-create like `source` since it reads editorViewCtx.
+  let viewStateProvider: (() => ViewState) | undefined
+  // Buffer-flush hook (bufferFlush.ts): Crepe's hardwired listener plugin
+  // serializes on a 200ms trailing debounce, so doc.content can miss the
+  // newest keystrokes; save/export/guard/stash call flushBufferEdits() and
+  // this closure lands the current editor text through the SAME onChange
+  // path (onEditorChange), keeping adoptNormalization semantics intact.
+  let bufferFlush: (() => void) | undefined
 
   onMount(async () => {
     crepe = new Crepe({
@@ -100,11 +117,40 @@
     await crepe.create()
     if (destroyed) return // unmounted while create() was in flight -- don't register
     // Dev/release parity self-check: fail loudly at mount if the built
-    // schema lost a node type the app depends on (the uploader above already
-    // works around one such prod-only regression).
-    checkEditorSchema(() => crepe!.editor.ctx.get(schemaCtx))
+    // schema lost a node/mark type or command the app depends on (the
+    // uploader above already works around one such prod-only regression).
+    // Safe to read here: create() resolved, so CommandsReady is done.
+    checkEditorSchema(() => {
+      const ctx = crepe!.editor.ctx
+      const commands = ctx.get(commandsCtx)
+      return { schema: ctx.get(schemaCtx), getCommand: (name: string) => commands.get(name) }
+    })
     source = () => crepe!.editor.action(getHTML())
     registerHtmlSource(source)
+    bufferFlush = () => onChange(crepe!.getMarkdown())
+    registerBufferFlush(bufferFlush)
+    // Buffer-cache view state: capture on demand (stashActive reads the live
+    // view at switch time)…
+    viewStateProvider = () => {
+      const view = crepe!.editor.ctx.get(editorViewCtx)
+      return { mode: 'wysiwyg', cursor: view.state.selection.head, scroll: el.scrollTop }
+    }
+    registerViewStateProvider(viewStateProvider)
+    // …and restore the pending hand-off, if a cache-hit open parked one for
+    // this mode. Best-effort: clamped, and a throw must never break the open.
+    const vs = consumePendingViewState('wysiwyg')
+    if (vs !== null) {
+      try {
+        const view = crepe.editor.ctx.get(editorViewCtx)
+        const pos = Math.max(0, Math.min(vs.cursor, view.state.doc.content.size))
+        view.dispatch(
+          view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(pos))),
+        )
+        el.scrollTop = vs.scroll
+      } catch {
+        /* view-state restore is cosmetic; the buffer itself is already live */
+      }
+    }
   })
 
   // Toggle in place (no remount) when Enable editing lifts the flag.
@@ -115,6 +161,8 @@
   onDestroy(() => {
     destroyed = true
     if (source) unregisterHtmlSource(source)
+    if (bufferFlush) unregisterBufferFlush(bufferFlush)
+    if (viewStateProvider) unregisterViewStateProvider(viewStateProvider)
     crepe?.destroy()
   })
 </script>

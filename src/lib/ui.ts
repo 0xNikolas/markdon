@@ -114,6 +114,71 @@ export function isFindReplaceFallbackKey(
   return (e.metaKey || e.ctrlKey) && e.altKey && e.code === 'KeyF'
 }
 
+// -- Quick Open keyboard fallback ---------------------------------------------
+
+/**
+ * True when `e` is the CmdOrCtrl+P Quick Open keyboard fallback for the given
+ * platform. Same mac carve-out as Go to Line's Cmd+L: on mac, ctrlKey is
+ * EXCLUDED even alongside metaKey — CodeMirror's standard keymap binds mac
+ * Ctrl-P (the emacs-style `mac: 'Ctrl-p'`) to cursorLineUp, so claiming it
+ * here would fight CM's own binding in split mode; everywhere else
+ * CmdOrCtrl+P IS Ctrl+P and CM has no non-mac Ctrl-P binding, so ctrlKey is
+ * honored there. Shift and Alt must be UP: Cmd+Shift+P is reserved (VS
+ * Code's command palette; shortcuts.ts pencils it in for split-preview), and
+ * a looser check would swallow it.
+ */
+export function isQuickOpenKey(
+  e: { metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; key: string },
+  mac: boolean,
+): boolean {
+  if (e.key.toLowerCase() !== 'p' || e.altKey || e.shiftKey) return false
+  return mac ? e.metaKey && !e.ctrlKey : e.metaKey || e.ctrlKey
+}
+
+// -- Open-file cycling keys ----------------------------------------------------
+
+/**
+ * The file-cycling direction `e` asks for, or null when `e` is not a cycling
+ * combo. Two families, both VS Code's standard bindings:
+ *
+ * - Ctrl+Tab (+1) / Ctrl+Shift+Tab (-1) on EVERY platform — physical Ctrl,
+ *   never Cmd (Cmd+Tab is the macOS app switcher and can't reach the webview
+ *   anyway). Alt and Meta must be up so browser/OS chords don't leak in.
+ * - CmdOrCtrl+Shift+] (+1) / CmdOrCtrl+Shift+[ (-1) — Cmd on mac (with the
+ *   same ctrlKey carve-out as Quick Open / Go to Line, keeping Ctrl chords
+ *   free for CodeMirror's emacs-style mac bindings), Ctrl elsewhere. Checked
+ *   against `e.code` ('BracketRight'/'BracketLeft'), not `e.key`: Shift
+ *   remaps the bracket characters ('}'/'{' on US layouts, other glyphs
+ *   elsewhere), while the physical key is stable — the same rationale as
+ *   isFindReplaceFallbackKey's KeyF check.
+ */
+export function fileCycleDirection(
+  e: { metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; key: string; code: string },
+  mac: boolean,
+): 1 | -1 | null {
+  if (e.key === 'Tab' && e.ctrlKey && !e.metaKey && !e.altKey) return e.shiftKey ? -1 : 1
+  if (e.shiftKey && !e.altKey && (e.code === 'BracketRight' || e.code === 'BracketLeft')) {
+    const mod = mac ? e.metaKey && !e.ctrlKey : e.metaKey || e.ctrlKey
+    if (mod) return e.code === 'BracketRight' ? 1 : -1
+  }
+  return null
+}
+
+/**
+ * True when `e` is the CmdOrCtrl+Shift+T Reopen Closed File combo (VS Code /
+ * browser standard). Shift must be DOWN and Alt up; the mac branch carries
+ * the same metaKey-only carve-out as Quick Open / Go to Line, keeping Ctrl
+ * chords free for CodeMirror's emacs-style mac bindings. `e.key` is safe here
+ * (unlike the bracket chords): Shift+T reports 'T', which lowercases cleanly.
+ */
+export function isReopenClosedKey(
+  e: { metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; key: string },
+  mac: boolean,
+): boolean {
+  if (e.key.toLowerCase() !== 't' || !e.shiftKey || e.altKey) return false
+  return mac ? e.metaKey && !e.ctrlKey : e.metaKey || e.ctrlKey
+}
+
 /** Export request counter; the export feature subscribes and acts on ticks. */
 export const exportTick: Writable<number> = writable(0)
 export function requestExport(): void {
@@ -122,6 +187,33 @@ export function requestExport(): void {
 
 /** Open workspace folder basename for the Header breadcrumb; set by workspace. */
 export const workspaceName: Writable<string | null> = writable(null)
+
+/**
+ * True while the window shows the no-document empty page (EmptyState.svelte)
+ * instead of an editor — VS Code's no-editor state. Raised by
+ * doc.showEmptyState(), reached from exactly two flows: a boot with no
+ * workspace at all (appBoot's maybeRestoreBootDocument — a workspace boot
+ * instead restores its last-open file or a scratch) and closing the last
+ * open file (App's onCloseFile). Cleared at the doc-load chokepoint — every
+ * openDoc/restoreDoc/newDoc — so ANY route to a document (menu, sidebar,
+ * startup drain, Cmd+N) dismisses the page without per-call-site wiring.
+ * An explicit File > New never shows it: Cmd+N is newDoc(), the editable
+ * scratch.
+ */
+export const emptyState: Writable<boolean> = writable(false)
+
+/**
+ * The image currently VIEWED in the editor area (its absolute path), or null
+ * when a document is shown instead. A distinct non-editable view mode: it
+ * overlays the editor while leaving $doc — and any unsaved buffer — untouched,
+ * so returning to the document restores it with no reload. Set only by App's
+ * showImage (a WorkspaceTree image-row click); cleared at the doc-load
+ * chokepoint (every openDoc/restoreDoc/newDoc), so opening ANY document
+ * dismisses the view without per-call-site wiring. Mutually exclusive with
+ * emptyState — the image view wins over both $doc and $emptyState wherever
+ * the two are read together (Header, window title, the editor-area branch).
+ */
+export const imageView: Writable<string | null> = writable(null)
 
 /** Header breadcrumb: muted segments before the filename, plus the filename itself. */
 export interface FileBreadcrumb {
@@ -179,8 +271,13 @@ export function fileBreadcrumb(
  * Control entries stay identifiable. The dirty marker lives in the title text
  * because Tauri 2's JS API has no setDocumentEdited (macOS proxy-icon)
  * equivalent.
+ *
+ * `empty` (the emptyState store) wins over everything: the empty page has no
+ * document at all, so the title is plain "Markdon" — not "Untitled", which
+ * names a real (editable) scratch buffer.
  */
-export function windowTitle(path: string | null, dirty: boolean): string {
+export function windowTitle(path: string | null, dirty: boolean, empty = false): string {
+  if (empty) return 'Markdon'
   const segments = path?.split('/').filter(Boolean) ?? []
   const name = segments[segments.length - 1] ?? 'Untitled'
   return `${dirty ? '• ' : ''}${name} — Markdon`

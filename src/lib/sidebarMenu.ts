@@ -13,6 +13,51 @@ export function selectionForContextMenu(
 }
 
 /**
+ * The single tree-row the file-level context-menu actions target: exactly one
+ * NON-FOLDER selection, tagged with the type + open-state the gating reads.
+ * `isFile` is false for a folder, a multi-selection, or an empty selection —
+ * none of the file actions apply then.
+ */
+export interface FileMenuTarget {
+  /** A single, non-folder selection — the precondition for every file action. */
+  isFile: boolean
+  isMarkdown: boolean
+  isImage: boolean
+  /** Currently listed in the Open Files strip (pinned OR the preview row). */
+  isOpen: boolean
+}
+
+/** Which of the row menu's file-level actions to SHOW for a {@link FileMenuTarget}. */
+export interface FileMenuVisibility {
+  open: boolean
+  reveal: boolean
+  copyPath: boolean
+  close: boolean
+}
+
+/**
+ * Gate the tree row context menu's file-level actions by file type + open
+ * state (the only place this decision lives — the FileOpsMenu items array and
+ * its tests both read it):
+ *   - Open        — only an OPENABLE file (markdown → current tab, image →
+ *                   image view); hidden for any other type.
+ *   - Reveal /    — any single file regardless of type or open state (Finder
+ *     Copy Path     reveal + clipboard both work for a merely-listed file).
+ *   - Close       — only when the file is currently in the Open Files strip.
+ * All four require a single non-folder selection, so a folder, a multi-select,
+ * or an empty selection yields all-false (nothing to act on).
+ */
+export function fileMenuVisibility(t: FileMenuTarget): FileMenuVisibility {
+  if (!t.isFile) return { open: false, reveal: false, copyPath: false, close: false }
+  return {
+    open: t.isMarkdown || t.isImage,
+    reveal: true,
+    copyPath: true,
+    close: t.isOpen,
+  }
+}
+
+/**
  * Keep a context menu of the given size fully inside the viewport: shift left/
  * up when it would overflow the right/bottom edge, flooring at 0 so an
  * oversized menu pins to the top-left rather than escaping negative.

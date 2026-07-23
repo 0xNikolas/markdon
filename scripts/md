@@ -1,0 +1,76 @@
+#!/usr/bin/env node
+// `md` — terminal launcher for the Markdon app.
+//
+//   md notes.md      opens the file
+//   md ./project     opens the folder as a workspace
+//   md --help        prints usage
+//
+// Each launch starts a NEW APP INSTANCE (a separate process). This app already
+// treats "open in new instance" as its new-window primitive: the Rust side
+// re-execs the binary with `--workspace <dir>` and/or positional file args and
+// the child adopts them via src-tauri/src/launch.rs (parse_launch_args). This
+// launcher just invokes the installed binary with those same args, so no Rust
+// change is needed and the tested hand-off is reused verbatim.
+//
+// A true new-window-in-the-RUNNING-instance (no second process) is the larger
+// alternative: it would need tauri-plugin-single-instance to catch the second
+// launch and forward its argv over IPC to the primary instance, which would
+// then spawn a doc-* window (see open_document_window in windows.rs). That is
+// intentionally out of scope here — this launcher stays a thin argv shim.
+//
+// The pure argv/binary logic lives in ./mdCli.mjs so it is unit-tested from
+// src/lib/mdCli.test.ts; this file only wires real fs/os/process into it and
+// spawns the binary detached.
+
+import { spawn } from 'node:child_process'
+import { existsSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { buildArgv, findBinary, MdError, USAGE } from './mdCli.mjs'
+
+/** Classify an absolute path for buildArgv's `probe`: file, dir, or missing. */
+function probe(absPath) {
+  try {
+    const st = statSync(absPath)
+    if (st.isDirectory()) return 'dir'
+    if (st.isFile()) return 'file'
+    // Sockets/fifos/etc. are not openable targets; treat as missing.
+    return null
+  } catch {
+    return null
+  }
+}
+
+function main() {
+  const args = process.argv.slice(2)
+
+  if (args.includes('-h') || args.includes('--help')) {
+    process.stdout.write(USAGE + '\n')
+    return
+  }
+
+  let argv
+  let bin
+  try {
+    argv = buildArgv(args, { cwd: process.cwd(), probe })
+    bin = findBinary({ env: process.env, home: homedir(), exists: existsSync })
+  } catch (err) {
+    if (err instanceof MdError) {
+      process.stderr.write(`md: ${err.message}\n`)
+      // A bare `md` with no path is a usage error — show how to use it.
+      if (err.code === 'no-path') process.stderr.write('\n' + USAGE + '\n')
+      process.exit(2)
+    }
+    throw err
+  }
+
+  // Launch detached so the terminal returns immediately and the app outlives
+  // the shell: no stdio wiring, and unref() drops it from our event loop.
+  const child = spawn(bin, argv, { detached: true, stdio: 'ignore' })
+  child.on('error', (err) => {
+    process.stderr.write(`md: failed to launch Markdon: ${err.message}\n`)
+    process.exit(1)
+  })
+  child.unref()
+}
+
+main()
