@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { seedWorkspace, gotoApp } from './support/workspaceFixture'
+import { seedWorkspace, gotoApp } from './support/workspaceFixture.ts'
 
 test.beforeEach(async ({ page }) => {
   await seedWorkspace(page)
