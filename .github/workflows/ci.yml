@@ -50,3 +50,38 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+
+  # Guards the stale-embedded-assets gotcha: assets are embedded by
+  # generate_context!() at compile time, but only in a release (custom-protocol)
+  # build. build.rs now folds ../dist into the crate fingerprint so a changed
+  # frontend forces a re-embed; this job proves the shipped binary actually
+  # carries the current dist/assets/index-<hash>.js.
+  embed-assert:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: bun install --frozen-lockfile
+      # beforeBuildCommand (bun run build) regenerates dist, then cargo builds the
+      # release binary with custom-protocol enabled so assets are actually embedded.
+      # --no-bundle skips DMG/app packaging + signing (not needed to inspect the binary).
+      - run: bunx tauri build --no-bundle
+      - name: Assert embedded asset fingerprint matches dist
+        run: |
+          set -euo pipefail
+          STEM=$(ls dist/assets | grep -oE 'index-[A-Za-z0-9_-]+\.js' | head -1)
+          test -n "$STEM"
+          BIN=src-tauri/target/release/app
+          test -f "$BIN"
+          # phf_map keys are the AssetKey strings emitted as compile-time string
+          # literals into the binary's rodata (plaintext regardless of brotli, which
+          # only compresses the value bytes), so a substring grep is reliable.
+          if ! grep -aqF "$STEM" "$BIN"; then
+            echo "::error::Embedded assets are stale: $STEM not found in $BIN"
+            exit 1
+          fi
+          echo "OK: $STEM present in embedded bundle"
