@@ -6,12 +6,6 @@ is **Milkdown Crepe** WYSIWYG (`src/Editor.svelte`) with an optional
 **CodeMirror 6** source pane (`src/SourcePane.svelte` / `SplitView.svelte`).
 The package manager and task runner is **bun** — never npm/yarn/pnpm.
 
-> Sprint planning docs live in `tasks/`, which is **gitignored** — you will not
-> find sprint rationale in the repo, only in the code and this file.
-
-`AGENTS.md` (tracked, for cross-tool agent discovery) and a local, gitignored
-`CLAUDE.md` are symlinks to this file — one canonical doc, agent-agnostic.
-
 ## Commands
 
 Frontend / tests (from the repo root):
