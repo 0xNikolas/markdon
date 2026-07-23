@@ -7,6 +7,7 @@ import {
   openFilesStrip,
   calls,
 } from './support/workspaceFixture.ts'
+import { NO_CLOBBER } from './support/contract.ts'
 
 /**
  * Inline rename (VS Code style, no modal): arming via the context menu,
@@ -95,7 +96,7 @@ test('collision surfaces the exact backend error and keeps both rows', async ({ 
   await input.press('Enter')
 
   await expect(page.locator('.banner[role="alert"]')).toContainText(
-    'Could not rename: a file or folder with that name already exists',
+    `Could not rename: ${NO_CLOBBER}`,
   )
   await expect(treeRow(page, 'notes.md')).toBeVisible()
   await expect(treeRow(page, 'ideas.md')).toBeVisible()
