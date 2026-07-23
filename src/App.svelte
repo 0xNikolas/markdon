@@ -1,8 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { invoke } from '@tauri-apps/api/core'
   import { getCurrentWindow } from '@tauri-apps/api/window'
-  import { listenScoped, setWindowTitle } from './lib/windowing'
   import { get } from 'svelte/store'
   import {
     doc,
@@ -15,15 +13,7 @@
     adoptNormalization,
   } from './lib/doc'
   import { recordRevert } from './lib/history'
-  import {
-    open,
-    save,
-    saveAs,
-    openPath,
-    openInPreferredTarget,
-    openDrainedEntries,
-    type OpenedEntry,
-  } from './lib/files'
+  import { open, save, saveAs, openPath, openInPreferredTarget } from './lib/files'
   import {
     openList,
     previewPath,
@@ -32,9 +22,13 @@
     removeOpen,
     neighbourAfterClose,
   } from './lib/openList'
-  import { conflict, reloadFromDisk, dismissConflict, initFileSync } from './lib/fileSync'
-  import { reportError } from './lib/errors'
-  import { logWarn } from './lib/logging'
+  import { conflict, reloadFromDisk, dismissConflict } from './lib/fileSync'
+  import {
+    bootApp,
+    closeTabDecision,
+    drainOpenedFiles,
+    syncReadonlyMenu,
+  } from './lib/appBoot'
   import { allowsNativeContextMenu } from './lib/contextMenu'
   import Editor from './Editor.svelte'
   import SplitView from './SplitView.svelte'
@@ -50,14 +44,12 @@
   import { openSourceSearch, clearPendingLine } from './lib/sourceEditor'
   import {
     split,
-    exportTick,
     isMacPlatform,
     isGotoLineFallbackKey,
     isFindReplaceFallbackKey,
-    windowTitle,
   } from './lib/ui'
   import { activeOverlay, openOverlay, closeOverlay, anyOverlayOpen } from './lib/overlay'
-  import { openWorkspace, closeWorkspace, initWorkspace } from './lib/workspace'
+  import { openWorkspace, closeWorkspace } from './lib/workspace'
   import { exportDocument } from './lib/export'
   import { focusTrap, dialogDismissHandlers } from './lib/focusTrap'
 
@@ -104,21 +96,6 @@
     pendingPreviewPath = null
     activeOverlay.update((o) =>
       o?.kind === 'discard' ? { kind: 'discard', action: () => openPath(p) } : o,
-    )
-  }
-
-  // Push the read-only flag to the native File-menu "Read Only" check mark.
-  // The doc store is the single source of truth: Finder read-only
-  // opens, the banner's "Enable editing" button, and the manual toggle all
-  // change $doc.readonly, and the onMount subscription funnels every change
-  // through here. Also called directly when a toggle is refused/cancelled, to
-  // undo muda's optimistic on-click flip (macOS flips the check before the
-  // event reaches us; if the store didn't actually change, the subscription
-  // won't fire, so we re-assert the real value). Menu-sync failure is
-  // non-fatal — the check mark is cosmetic — so errors are swallowed.
-  function syncReadonlyMenu(checked: boolean): void {
-    void invoke('set_readonly_menu_state', { checked }).catch((e) =>
-      logWarn('readonly menu sync failed', e),
     )
   }
 
@@ -236,160 +213,87 @@
     })
   }
 
-  // Open the files the OS or a spawner handed us (.md association double-click,
-  // argv of a new instance). Drains the Rust-side buffer and routes the whole
-  // batch through openDrainedEntries: the first entry becomes the active doc
-  // (MODE A, guarded in-place) or its own window (MODE B); the rest surface
-  // without stealing activation. Each entry carries its OWN readonly flag from
-  // Rust — Finder opens keep the read-only safety net, argv files open
-  // editable — threaded into both the in-place openPath and the MODE B window
-  // hand-off (AssignedFile.readonly). Called on mount (cold launch) and on
-  // each `file:opened` ping.
-  async function drainOpenedFiles() {
-    const entries = await invoke<OpenedEntry[]>('take_opened_files')
-    openDrainedEntries(entries, (p, readonly) => guarded(() => openPath(p, { readonly })))
-  }
-
-  // A spawned document window (doc-N) drains the file it was created to host
-  // (set by open_document_window). Drains exactly once — a re-mount gets None.
-  // The label is derived Rust-side from the Tauri-injected WebviewWindow (not
-  // passed by the caller), so a window can only ever drain its OWN hand-off --
-  // see take_window_file in lib.rs. Returns whether a file was actually
-  // assigned, so onMount can decide whether this window also needs to drain
-  // the unrelated, process-global OpenedFiles queue (it must not, see below).
-  // A drain failure is surfaced via the error banner (reportError convention)
-  // and treated as "no assignment" so the window still falls back to the
-  // global queue rather than silently sitting on a blank untitled doc.
-  async function takeAssignedFile(): Promise<boolean> {
-    try {
-      const assigned = await invoke<{ path: string; readonly: boolean } | null>('take_window_file')
-      if (assigned) {
-        openPath(assigned.path, { readonly: assigned.readonly })
-        return true
-      }
-      return false
-    } catch (e) {
-      reportError(`Could not open the file assigned to this window: ${String(e)}`)
-      return false
-    }
-  }
-
   // One close-window action shared by the native close button (Rust
   // intercepts CloseRequested and emits window:close-requested) and the
   // File-menu Close Window item — both must resolve the dirty guard before
   // the window is destroyed.
   const closeThisWindow = () => guarded(() => getCurrentWindow().destroy())
 
-  onMount(() => {
-    const unsub = Promise.all([
-      listenScoped('menu:new', () => guarded(() => newDoc())),
-      listenScoped('menu:open', () => guarded(() => open())),
-      listenScoped('menu:save', () => save()),
-      listenScoped('menu:save_as', () => saveAs()),
-      listenScoped('menu:find', () => routeFind()),
-      listenScoped('menu:find_replace', () => routeFindReplace()),
-      listenScoped('menu:goto_line', () => {
-        // The native Edit menu item isn't disabled by app state (menu.rs has
-        // no such wiring), so it stays clickable while another overlay is up.
-        // openOverlay enforces mutual exclusion at the store: it refuses (no-op)
-        // if one is already open, so Go to Line can't stack its focus trap
-        // behind the discard guard / Settings / History (DEFECT A1).
-        openOverlay({ kind: 'goto' })
-      }),
-      listenScoped('menu:history', () => {
-        // Untitled/never-saved docs have no history — the menu item no-ops.
-        // openOverlay handles modal precedence (refuses if any overlay is open).
-        if (get(doc).path === null) return
-        openOverlay({ kind: 'history' })
-      }),
-      listenScoped('menu:toggle_readonly', () => {
-        // The native menu item is always clickable, and muda optimistically
-        // flips its check on click before this fires. Read-only isn't itself an
-        // overlay (toggleReadonly may OPEN the discard guard via the dirty
-        // path), so this can't lean on openOverlay's refusal — it gates on
-        // anyOverlayOpen() directly. When blocked, re-sync the check to the
-        // store's real value to undo muda's optimistic flip (the store didn't
-        // change, so the subscription won't).
-        if (anyOverlayOpen()) {
-          syncReadonlyMenu(get(doc).readonly)
-          return
-        }
-        toggleReadonly()
-      }),
-      listenScoped('menu:settings', () => openOverlay({ kind: 'settings' })),
-      listenScoped('menu:open_folder', () => openWorkspace()),
-      listenScoped('menu:close_folder', () => closeWorkspace()),
-      listenScoped('menu:close_tab', () => {
-        // Cmd+W closes the active entry (pinned or preview) through the same
-        // onCloseFile path as the strip's close button. On an untitled doc
-        // the "tab" being closed is the scratch buffer, NOT the window: while
-        // pinned tabs or a preview are still alive, dismiss the scratch
-        // (guarded — unsaved edits still prompt) and land back on the preview
-        // (kept as a preview, avoiding a stale italic row) or the last pinned
-        // entry. Only when nothing else is open does Cmd+W fall through to
-        // closing the window — that truly-empty case is the VS Code behavior.
-        const p = get(doc).path
-        if (p !== null) {
-          onCloseFile(p)
-          return
-        }
-        const pv = get(previewPath)
-        const pinned = get(openList)
-        if (pv !== null) guarded(() => openPath(pv, { preview: true }))
-        else if (pinned.length > 0) guarded(() => openPath(pinned[pinned.length - 1]))
-        else closeThisWindow()
-      }),
-      listenScoped('menu:close_window', closeThisWindow),
-      listenScoped('menu:export', () => exportDocument()),
-      listenScoped('window:close-requested', closeThisWindow),
-      listenScoped('file:opened', () => drainOpenedFiles()),
-    ])
-    // A spawned doc-N window (MODE B) is created to host exactly one file,
-    // handed off via PendingWindowFile; it must never ALSO race to drain the
-    // unrelated, process-global OpenedFiles queue (that queue belongs to
-    // whichever window is focused at Finder-open time). Running both calls
-    // unawaited let a freshly-spawned window steal a Finder-open meant for a
-    // different window, or let the two hand-offs clobber each other with no
-    // error surfaced. Awaiting the per-window
-    // hand-off FIRST, and only falling back to the global drain when this
-    // window has no assignment of its own, makes the two mutually exclusive
-    // instead of concurrent.
-    void (async () => {
-      const hadAssignedFile = await takeAssignedFile()
-      if (!hadAssignedFile) await drainOpenedFiles() // cold launch / main window: pick up the file the app was opened with
-    })()
-    const teardownSync = initFileSync() // watch the open file for external changes
-    const teardownWorkspace = initWorkspace() // restore + refresh the workspace tree
-    // Header's Export button increments exportTick rather than calling
-    // exportDocument() directly (ui.ts's requestExport contract) -- skip the
-    // subscribe's immediate replay of the current value so mounting doesn't
-    // trigger a spurious export.
-    let firstExportTick = true
-    const unsubExportTick = exportTick.subscribe(() => {
-      if (firstExportTick) {
-        firstExportTick = false
-        return
-      }
-      exportDocument()
-    })
-    // Mirror $doc.readonly onto the native "Read Only" check mark.
-    // Fires on mount (seeding the check to the current state) and on every
-    // readonly transition; gated on the flag actually changing so ordinary
-    // keystroke-driven store updates don't spam the IPC bridge.
-    let lastReadonly: boolean | null = null
-    const unsubReadonlyMenu = doc.subscribe((s) => {
-      if (s.readonly === lastReadonly) return
-      lastReadonly = s.readonly
-      syncReadonlyMenu(s.readonly)
-    })
-    return () => {
-      unsub.then((fns) => fns.forEach((f) => f()))
-      teardownSync.then((fn) => fn())
-      teardownWorkspace.then((fn) => fn())
-      unsubExportTick()
-      unsubReadonlyMenu()
-    }
-  })
+  // The in-place open for a drained startup/Finder file: guarded so unsaved
+  // edits still prompt, threading each entry's own readonly flag (Finder opens
+  // keep the read-only safety net, argv files open editable).
+  const openStartupFile = (path: string, readonly: boolean) =>
+    guarded(() => openPath(path, { readonly }))
+
+  // All boot wiring (event subscriptions, startup drains, watcher/workspace
+  // init, native-chrome mirrors) lives in appBoot.ts; App supplies only the
+  // UI-flow closures the handlers need.
+  onMount(() =>
+    bootApp({
+      openStartupFile,
+      menuEvents: {
+        'menu:new': () => guarded(() => newDoc()),
+        'menu:open': () => guarded(() => open()),
+        'menu:save': () => save(),
+        'menu:save_as': () => saveAs(),
+        'menu:find': () => routeFind(),
+        'menu:find_replace': () => routeFindReplace(),
+        'menu:goto_line': () => {
+          // The native Edit menu item isn't disabled by app state (menu.rs has
+          // no such wiring), so it stays clickable while another overlay is up.
+          // openOverlay enforces mutual exclusion at the store: it refuses (no-op)
+          // if one is already open, so Go to Line can't stack its focus trap
+          // behind the discard guard / Settings / History (DEFECT A1).
+          openOverlay({ kind: 'goto' })
+        },
+        'menu:history': () => {
+          // Untitled/never-saved docs have no history — the menu item no-ops.
+          // openOverlay handles modal precedence (refuses if any overlay is open).
+          if (get(doc).path === null) return
+          openOverlay({ kind: 'history' })
+        },
+        'menu:toggle_readonly': () => {
+          // The native menu item is always clickable, and muda optimistically
+          // flips its check on click before this fires. Read-only isn't itself an
+          // overlay (toggleReadonly may OPEN the discard guard via the dirty
+          // path), so this can't lean on openOverlay's refusal — it gates on
+          // anyOverlayOpen() directly. When blocked, re-sync the check to the
+          // store's real value to undo muda's optimistic flip (the store didn't
+          // change, so the subscription won't).
+          if (anyOverlayOpen()) {
+            syncReadonlyMenu(get(doc).readonly)
+            return
+          }
+          toggleReadonly()
+        },
+        'menu:settings': () => openOverlay({ kind: 'settings' }),
+        'menu:open_folder': () => openWorkspace(),
+        'menu:close_folder': () => closeWorkspace(),
+        'menu:close_tab': () => {
+          // The Cmd+W routing rules live in closeTabDecision (appBoot.ts).
+          const d = closeTabDecision(get(doc).path, get(previewPath), get(openList))
+          switch (d.kind) {
+            case 'close-file':
+              onCloseFile(d.path)
+              break
+            case 'reopen-preview':
+              guarded(() => openPath(d.path, { preview: true }))
+              break
+            case 'reopen-pinned':
+              guarded(() => openPath(d.path))
+              break
+            case 'close-window':
+              closeThisWindow()
+              break
+          }
+        },
+        'menu:close_window': closeThisWindow,
+        'menu:export': () => exportDocument(),
+        'window:close-requested': closeThisWindow,
+        'file:opened': () => void drainOpenedFiles(openStartupFile),
+      },
+    }),
+  )
 
   // Route Cmd+F by view mode: split -> CodeMirror's native search panel;
   // WYSIWYG -> the Milkdown FindBar. openSourceSearch() no-ops (returns false)
@@ -419,19 +323,6 @@
   // covers every control that flips split, present or future.
   $effect(() => {
     if (shouldForceCloseFind($split, $searchUi.open)) closeFind()
-  })
-
-  // Mirror the doc onto the native window title (Mission Control, Cmd-Tab,
-  // taskbar; macOS hides in-window title text via hiddenTitle). $doc updates on
-  // every keystroke, so gate the IPC on the computed title actually changing —
-  // it then fires only on filename changes and clean<->dirty flips.
-  let lastTitle = ''
-  $effect(() => {
-    const t = windowTitle($doc.path, isDirty($doc))
-    if (t !== lastTitle) {
-      lastTitle = t
-      setWindowTitle(t)
-    }
   })
 
   // Esc closes the find bar even when focus is inside the editor (FindBar's
