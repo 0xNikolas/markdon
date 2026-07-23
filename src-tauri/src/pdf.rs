@@ -44,6 +44,8 @@ use std::sync::Mutex;
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
+use crate::error::SeExt;
+
 /// HTML awaiting pickup by the `pdfprint://` scheme handler. Stashed here
 /// because `WebviewUrl` has no raw-HTML variant; the handler drains it when the
 /// helper window loads. Cleared on teardown so document content does not linger.
@@ -135,7 +137,7 @@ pub async fn export_pdf(app: AppHandle, html: String, title: String) -> Result<(
                 let _ = window;
             });
 
-    builder.build().map_err(|e| e.to_string())?;
+    builder.build().se()?;
     Ok(())
 }
 

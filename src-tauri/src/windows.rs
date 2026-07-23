@@ -7,6 +7,7 @@ use tauri::{AppHandle, Emitter, EventTarget, Manager, State, WebviewWindow};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 use crate::allowlist;
+use crate::error::SeExt;
 use crate::watcher;
 
 /// The label of the window that currently has focus, self-tracked from
@@ -219,9 +220,9 @@ pub fn open_document_window(
             .ok_or_else(|| "no window config to clone".to_string())?;
         cfg.label = label.clone();
         tauri::WebviewWindowBuilder::from_config(&app, &cfg)
-            .map_err(|e| e.to_string())?
+            .se()?
             .build()
-            .map_err(|e| e.to_string())
+            .se()
     })();
     match built {
         Ok(window) => {
@@ -251,15 +252,10 @@ pub fn open_file_new_instance(
     allowed: State<'_, allowlist::AllowedPaths>,
 ) -> Result<(), String> {
     allowed.ensure(&path)?;
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let mut child = std::process::Command::new(exe)
-        .arg(&path)
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
-    Ok(())
+    let exe = std::env::current_exe().se()?;
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg(&path);
+    crate::process::spawn_detached(cmd)
 }
 
 #[cfg(test)]

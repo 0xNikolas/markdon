@@ -6,7 +6,7 @@
 //! localStorage only as a synchronous boot cache and treats this file as the
 //! source of truth: it reconciles from `load_prefs` after mount and on window
 //! focus, and persists every change through `save_prefs`. Writes are atomic
-//! (tempfile + rename via history.rs's `atomic_write`), so two instances
+//! (tempfile + rename via fsutil's `atomic_write_bytes`), so two instances
 //! saving concurrently is last-writer-wins on the WHOLE file but never torn;
 //! the loser converges on its next focus re-read.
 //!
@@ -18,7 +18,7 @@
 //!
 //! Per-WORKSPACE state lives in the per-workspace state DIRECTORY
 //! `app_data_dir()/workspace-state/<sha256hex(canonical root)>/` (keys via
-//! history.rs's `bucket_key`). History is one tenant, at
+//! fsutil's `bucket_key`/`workspace_state_dir`). History is one tenant, at
 //! `<hash>/history/<sha256hex(canonical file path)>/` — see history.rs; the
 //! last-open-file pointer is the other, at `<hash>/ui.json` — see
 //! workspace.rs's `save_workspace_ui`/`load_workspace_ui`. Future
@@ -36,7 +36,8 @@ use std::path::{Path, PathBuf};
 
 use tauri::{AppHandle, Manager};
 
-use crate::history::atomic_write;
+use crate::error::SeExt;
+use crate::fsutil::atomic_write_bytes;
 
 /// Upper bound on the stored JSON. The real settings blob is a few hundred
 /// bytes; the cap only stops a compromised webview using the file as an
@@ -46,8 +47,8 @@ const MAX_PREFS_BYTES: usize = 64 * 1024;
 /// Path of the settings file, creating the config dir if needed. Rust-owned so
 /// the webview can never supply it — mirrors `workspace.rs::state_file`.
 fn prefs_file(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dir = app.path().app_config_dir().se()?;
+    fs::create_dir_all(&dir).se()?;
     Ok(dir.join("settings.json"))
 }
 
@@ -58,7 +59,7 @@ pub(crate) fn validate_prefs(json: &str) -> Result<(), String> {
     if json.len() > MAX_PREFS_BYTES {
         return Err("settings too large".into());
     }
-    let value: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    let value: serde_json::Value = serde_json::from_str(json).se()?;
     if !value.is_object() {
         return Err("settings must be a JSON object".into());
     }
@@ -79,7 +80,7 @@ pub(crate) fn load_prefs_from(file: &Path) -> Result<Option<String>, String> {
 /// Validate then atomically replace the stored prefs.
 pub(crate) fn save_prefs_to(file: &Path, json: &str) -> Result<(), String> {
     validate_prefs(json)?;
-    atomic_write(file, json.as_bytes()).map_err(|e| e.to_string())
+    atomic_write_bytes(file, json.as_bytes()).se()
 }
 
 #[tauri::command]

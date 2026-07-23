@@ -4,6 +4,18 @@ use std::sync::Mutex;
 
 const GRANT_ERR: &str = "path was not granted by a file dialog, OS open event, or workspace";
 
+/// The shared containment predicate behind every "is this canonical path inside
+/// this root" check in the codebase. `starts_with` is component-wise (both sides
+/// must be canonical), so a sibling like `/ws-evil` never counts as inside
+/// `/ws`. `inclusive` chooses whether the root directory ITSELF passes: strict
+/// (`false`) is `ensure`/`owning_root`/image + tab-set containment (the root
+/// node is not a file); root-inclusive (`true`) is `ensure_container`, where the
+/// root is a valid destination. (`Path::starts_with` is already true on
+/// equality, so `inclusive == true` is exactly `starts_with`.)
+pub(crate) fn contains(root: &Path, canon: &Path, inclusive: bool) -> bool {
+    canon.starts_with(root) && (inclusive || canon != root)
+}
+
 /// Paths the webview is allowed to read/write/watch. Only Rust ever inserts:
 /// file-dialog picks, OS open events, and workspace-folder grants. The webview
 /// can therefore only touch paths the user explicitly granted, even if it is
@@ -67,7 +79,7 @@ impl AllowedPaths {
         let roots = self.roots.lock().unwrap();
         roots
             .iter()
-            .filter(|r| canonical.starts_with(r) && canonical != r.as_path())
+            .filter(|r| contains(r.as_path(), canonical, false))
             .max_by_key(|r| r.components().count())
             .cloned()
     }
@@ -84,7 +96,7 @@ impl AllowedPaths {
         // never passes (canon != *r), which is intentional.
         let canon = std::fs::canonicalize(path).map_err(|_| GRANT_ERR.to_string())?;
         let roots = self.roots.lock().unwrap();
-        if roots.iter().any(|r| canon.starts_with(r) && canon != *r) {
+        if roots.iter().any(|r| contains(r, &canon, false)) {
             Ok(())
         } else {
             Err(GRANT_ERR.into())
@@ -107,7 +119,7 @@ impl AllowedPaths {
             return Err("destination is not a directory".into());
         }
         let roots = self.roots.lock().unwrap();
-        if roots.iter().any(|r| canon == *r || canon.starts_with(r)) {
+        if roots.iter().any(|r| contains(r, &canon, true)) {
             Ok(canon)
         } else {
             Err(GRANT_ERR.into())
@@ -120,6 +132,22 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
+
+    #[test]
+    fn contains_strict_vs_inclusive_at_the_root_and_boundaries() {
+        let root = Path::new("/ws");
+        // Root itself: excluded when strict, admitted when inclusive.
+        assert!(!contains(root, Path::new("/ws"), false));
+        assert!(contains(root, Path::new("/ws"), true));
+        // Strictly inside: admitted either way.
+        assert!(contains(root, Path::new("/ws/a.md"), false));
+        assert!(contains(root, Path::new("/ws/a.md"), true));
+        // Sibling sharing a string prefix: component-wise, never inside.
+        assert!(!contains(root, Path::new("/ws-evil/a.md"), false));
+        assert!(!contains(root, Path::new("/ws-evil/a.md"), true));
+        // Fully outside: never inside.
+        assert!(!contains(root, Path::new("/other/a.md"), false));
+    }
 
     #[test]
     fn ensure_rejects_unknown_path() {

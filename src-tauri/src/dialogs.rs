@@ -3,6 +3,7 @@ use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::allowlist::AllowedPaths;
+use crate::error::SeExt;
 use crate::workspace::Workspace;
 
 #[derive(Serialize)]
@@ -33,7 +34,7 @@ fn effective_filters(filters: Option<Vec<FileFilter>>) -> Vec<FileFilter> {
 
 fn to_path_string(file: tauri_plugin_dialog::FilePath) -> Result<String, String> {
     file.into_path()
-        .map_err(|e| e.to_string())?
+        .se()?
         .to_str()
         .map(str::to_string)
         .ok_or_else(|| "non-UTF-8 path".to_string())
@@ -56,7 +57,7 @@ pub async fn open_file_dialog(
             .blocking_pick_file()
     })
     .await
-    .map_err(|e| e.to_string())?;
+    .se()?;
     let Some(file) = picked else { return Ok(None) };
     let path = to_path_string(file)?;
     let content = crate::commands::read_file_impl(&path)?;
@@ -102,7 +103,7 @@ pub async fn save_file_dialog(
         b.blocking_save_file()
     })
     .await
-    .map_err(|e| e.to_string())?;
+    .se()?;
     let Some(file) = picked else { return Ok(None) };
     let path = to_path_string(file)?;
     allowed.allow(&path);
@@ -129,7 +130,7 @@ pub async fn open_workspace_dialog(
         dialog_app.dialog().file().blocking_pick_folder()
     })
     .await
-    .map_err(|e| e.to_string())?;
+    .se()?;
     let Some(folder) = picked else {
         return Ok(None);
     };
@@ -157,7 +158,7 @@ pub async fn pick_folder_new_instance(app: AppHandle) -> Result<bool, String> {
     let picked =
         tauri::async_runtime::spawn_blocking(move || app.dialog().file().blocking_pick_folder())
             .await
-            .map_err(|e| e.to_string())?;
+            .se()?;
     let Some(folder) = picked else {
         return Ok(false);
     };
@@ -173,15 +174,10 @@ pub async fn pick_folder_new_instance(app: AppHandle) -> Result<bool, String> {
 /// linger as a zombie until waited on — so a throwaway thread reaps it; the
 /// thread never influences the child's lifetime.
 pub(crate) fn spawn_workspace_instance(dir: &str) -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let mut child = std::process::Command::new(exe)
-        .args(["--workspace", dir])
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
-    Ok(())
+    let exe = std::env::current_exe().se()?;
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(["--workspace", dir]);
+    crate::process::spawn_detached(cmd)
 }
 
 #[cfg(test)]

@@ -4,7 +4,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
-use crate::allowlist::AllowedPaths;
+use crate::allowlist::{contains, AllowedPaths};
+use crate::error::SeExt;
 
 /// Deepest directory level walked. Directories below this are omitted (never
 /// shown fake-empty) and mark the tree `truncated`.
@@ -52,7 +53,7 @@ const MAX_RECENTS: usize = 10;
 /// KEEPING its `roots` entry reachable from Open Recent.
 ///
 /// The file is shared by every running instance; writes go through
-/// `history::atomic_write`, so concurrent read-modify-writes are whole-file
+/// `fsutil::atomic_write_bytes`, so concurrent read-modify-writes are whole-file
 /// last-writer-wins (two instances bumping the MRU at once can drop one bump)
 /// but never torn — exactly prefs.rs's documented posture for settings.json.
 #[derive(Serialize, Deserialize)]
@@ -153,8 +154,8 @@ fn build_workspace(root: &Path) -> Result<Workspace, String> {
 /// so the webview can never supply it — that keeps the "allowlist holds only
 /// user-picked paths" invariant intact across restore.
 pub(crate) fn state_file(app: &AppHandle) -> Result<std::path::PathBuf, String> {
-    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dir = app.path().app_config_dir().se()?;
+    fs::create_dir_all(&dir).se()?;
     Ok(dir.join("workspace.json"))
 }
 
@@ -185,8 +186,8 @@ pub(crate) fn load_state(file: &Path) -> WorkspaceState {
 /// must never leave a torn file (lost whole-file updates stay accepted — see
 /// `WorkspaceState`).
 fn save_state(file: &Path, state: &WorkspaceState) -> Result<(), String> {
-    let json = serde_json::to_string(state).map_err(|e| e.to_string())?;
-    crate::history::atomic_write(file, json.as_bytes()).map_err(|e| e.to_string())
+    let json = serde_json::to_string(state).se()?;
+    crate::fsutil::atomic_write_bytes(file, json.as_bytes()).se()
 }
 
 /// Bump `root` to the front of the MRU: remove any existing occurrence, insert
@@ -423,11 +424,9 @@ pub struct WorkspaceTabs {
 /// Path of a workspace's ui.json inside its state dir. `canonical_root` must
 /// already be canonical (ensure_root's return) so symlink/alias variants of
 /// one root collapse to a single state dir — the same keying as history.rs's
-/// buckets (`bucket_key` is that module's hashing helper, reused here).
+/// buckets (both build on fsutil's `workspace_state_dir`/`bucket_key`).
 pub(crate) fn ui_state_file(base: &Path, canonical_root: &str) -> std::path::PathBuf {
-    base.join("workspace-state")
-        .join(crate::history::bucket_key(canonical_root))
-        .join("ui.json")
+    crate::fsutil::workspace_state_dir(base, canonical_root).join("ui.json")
 }
 
 /// Atomically replace the stored tab set (v2), creating the state dir on first
@@ -446,14 +445,14 @@ pub(crate) fn save_ui_state(
         preview: preview.map(str::to_string),
         active: active.map(str::to_string),
     };
-    let json = serde_json::to_string(&state).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string(&state).se()?;
     if json.len() as u64 > MAX_UI_STATE_BYTES {
         return Err("workspace ui state too large".into());
     }
     if let Some(parent) = file.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        fs::create_dir_all(parent).se()?;
     }
-    crate::history::atomic_write(file, json.as_bytes()).map_err(|e| e.to_string())
+    crate::fsutil::atomic_write_bytes(file, json.as_bytes()).se()
 }
 
 /// Validate one stored path as a live child of `canonical_root`: it must
@@ -465,7 +464,7 @@ pub(crate) fn save_ui_state(
 /// a granted root — passes `AllowedPaths::ensure` for the read that follows.
 fn valid_child(path: &str, canonical_root: &Path) -> Option<String> {
     let canon = fs::canonicalize(path).ok()?;
-    if !canon.is_file() || !canon.starts_with(canonical_root) || canon == canonical_root {
+    if !canon.is_file() || !contains(canonical_root, &canon, false) {
         return None;
     }
     canon.to_str().map(str::to_string)
@@ -539,7 +538,7 @@ pub fn save_workspace_ui(
     allowed: State<'_, AllowedPaths>,
 ) -> Result<(), String> {
     let canon = allowed.ensure_root(&root)?;
-    let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let base = app.path().app_data_dir().se()?;
     let file = ui_state_file(&base, &canon.to_string_lossy());
     save_ui_state(&file, &tabs, preview.as_deref(), active.as_deref())
 }
@@ -554,7 +553,7 @@ pub fn load_workspace_ui(
     allowed: State<'_, AllowedPaths>,
 ) -> Result<Option<WorkspaceTabs>, String> {
     let canon = allowed.ensure_root(&root)?;
-    let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let base = app.path().app_data_dir().se()?;
     let file = ui_state_file(&base, &canon.to_string_lossy());
     Ok(load_ui_state(&file, &canon))
 }
