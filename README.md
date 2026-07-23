@@ -79,6 +79,24 @@ To install system-wide instead (may need sudo), symlink into `/usr/local/bin`:
 ln -sf "$PWD/scripts/md" /usr/local/bin/md
 ```
 
+#### Two installers, one `md`
+
+There are two independent ways an `md` command lands on your `PATH`, and they
+target overlapping locations — pick one:
+
+- **`bun run install:cli`** (this dev repo) symlinks `scripts/md` — the Node
+  launcher that runs against your checkout — into `~/.local/bin/md`.
+- **The shipped app's Settings → "Install md command"** writes its own POSIX-sh
+  shim pointing at the installed app binary. It prefers `/usr/local/bin` (asking
+  for admin rights if needed) and falls back to `~/.local/bin` when it can't
+  write there.
+
+Because both can end up at `~/.local/bin/md`, whichever runs last overwrites the
+other's `md`. If the app installs to `/usr/local/bin` while the dev symlink sits
+in `~/.local/bin`, you get two `md` on `PATH` and shell `PATH` order decides the
+winner. Choose a single installer (or keep them on distinct paths and know which
+one your `PATH` resolves first).
+
 ### App binary discovery
 
 `md` looks for the installed macOS binary in this order:

@@ -31,7 +31,6 @@ vi.mock('./windowing', async (importOriginal) => {
 import { setWindowTitle } from './windowing'
 import {
   wireEvents,
-  drainOpenedFiles,
   drainStartupFiles,
   closeTabDecision,
   initReadonlyMenuSync,
