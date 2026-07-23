@@ -48,10 +48,12 @@ import {
   initWorkspace,
   listRecentWorkspaces,
   recentWorkspaceDisplay,
-  recordLastFile,
-  resetLastFileRecording,
+  stampTabState,
+  flushTabWrite,
+  resetTabRecording,
   type WorkspaceDir,
 } from './workspace'
+import { openList, previewPath } from './openList'
 import { doc, docWith } from './doc'
 import { workspaceName } from './ui'
 import { errorMessage } from './errors'
@@ -71,7 +73,9 @@ beforeEach(() => {
   workspaceName.set(null)
   errorMessage.set(null)
   doc.set(docWith())
-  resetLastFileRecording()
+  openList.set([])
+  previewPath.set(null)
+  resetTabRecording()
 })
 
 describe('isMarkdownFile', () => {
@@ -486,67 +490,146 @@ describe('initWorkspace workspace watcher', () => {
   })
 })
 
-describe('recordLastFile', () => {
+describe('strip write-through', () => {
   const uiCalls = () => invoke.mock.calls.filter(([cmd]) => cmd === 'save_workspace_ui')
+  const uiArgs = () => uiCalls().map(([, args]) => args)
 
-  it('persists an inside-root path, suppressing an immediate duplicate', () => {
-    invoke.mockResolvedValue(undefined)
-    workspace.set({ root: '/ws/notes', tree: tree('notes') })
-    recordLastFile('/ws/notes/a.md')
-    recordLastFile('/ws/notes/a.md') // the lastPersisted-style guard
-    expect(uiCalls().map(([, args]) => args)).toEqual([
-      { root: '/ws/notes', lastFile: '/ws/notes/a.md' },
-    ])
-  })
-
-  it('re-records a path the workspace switched back to (guard holds one value, per root)', () => {
-    invoke.mockResolvedValue(undefined)
-    workspace.set({ root: '/ws/notes', tree: tree('notes') })
-    recordLastFile('/ws/notes/a.md')
-    recordLastFile('/ws/notes/b.md')
-    recordLastFile('/ws/notes/a.md') // a is the newest again: must write
-    expect(uiCalls()).toHaveLength(3)
-  })
-
-  it('records nothing with no root open or for a path outside the root', () => {
-    invoke.mockResolvedValue(undefined)
-    recordLastFile('/somewhere/x.md') // root is null
-    workspace.set({ root: '/ws/notes', tree: tree('notes') })
-    recordLastFile('/elsewhere/standalone.md') // Finder/dialog open outside the folder
-    recordLastFile('/ws/notes-evil/x.md') // segment-safe: not inside /ws/notes
-    expect(uiCalls()).toHaveLength(0)
-  })
-
-  it('a failed write is logWarn territory — never a banner', async () => {
-    invoke.mockRejectedValue('disk full')
-    workspace.set({ root: '/ws/notes', tree: tree('notes') })
-    recordLastFile('/ws/notes/a.md')
-    await new Promise((r) => setTimeout(r, 0))
-    expect(get(errorMessage)).toBeNull()
-  })
-})
-
-describe('initWorkspace last-file recording', () => {
-  it('records the doc path whenever it changes to a file inside the root', async () => {
+  /** Cold init (nothing to restore) that adopts `root`, so the openList /
+      previewPath / doc subscriptions are wired against an open workspace. The
+      write-through is debounced, so tests force the pending write with
+      flushTabWrite() (or a teardown, which flushes) rather than a real timer. */
+  async function initWithRoot(root = '/ws/notes'): Promise<() => void> {
     invoke.mockImplementation(async (cmd: unknown, args?: unknown) => {
       if (cmd === 'take_startup_workspace') return { workspace: null, suppress_restore: true }
-      if (cmd === 'list_workspace')
-        return { root: (args as { root: string }).root, tree: tree('a') }
+      if (cmd === 'list_workspace') return { root: (args as { root: string }).root, tree: tree('a') }
       return undefined
     })
     const teardown = await initWorkspace()
-    workspace.set({ root: '/ws/a', tree: tree('a') })
-    doc.set(docWith({ path: '/ws/a/x.md' }))
-    expect(invoke).toHaveBeenCalledWith('save_workspace_ui', {
-      root: '/ws/a',
-      lastFile: '/ws/a/x.md',
+    workspace.set({ root, tree: tree('notes') })
+    return teardown
+  }
+
+  it('persists the whole strip inside-root, suppressing an identical re-write', async () => {
+    const teardown = await initWithRoot()
+    openList.set(['/ws/notes/a.md'])
+    previewPath.set('/ws/notes/p.md')
+    doc.set(docWith({ path: '/ws/notes/a.md' }))
+    flushTabWrite()
+    expect(uiArgs()).toEqual([
+      { root: '/ws/notes', tabs: ['/ws/notes/a.md'], preview: '/ws/notes/p.md', active: '/ws/notes/a.md' },
+    ])
+    // Re-setting the stores to the SAME strip schedules a write the serialized
+    // guard then suppresses.
+    openList.set(['/ws/notes/a.md'])
+    flushTabWrite()
+    expect(uiCalls()).toHaveLength(1)
+    teardown()
+  })
+
+  it('writes again when the strip actually changes', async () => {
+    const teardown = await initWithRoot()
+    openList.set(['/ws/notes/a.md'])
+    flushTabWrite()
+    openList.set(['/ws/notes/b.md', '/ws/notes/a.md'])
+    flushTabWrite()
+    expect(uiArgs()).toEqual([
+      { root: '/ws/notes', tabs: ['/ws/notes/a.md'], preview: null, active: null },
+      { root: '/ws/notes', tabs: ['/ws/notes/b.md', '/ws/notes/a.md'], preview: null, active: null },
+    ])
+    teardown()
+  })
+
+  it('excludes paths outside the root from tabs, preview, and active alike', async () => {
+    const teardown = await initWithRoot()
+    openList.set(['/ws/notes/a.md', '/elsewhere/x.md', '/ws/notes-evil/y.md'])
+    previewPath.set('/outside/p.md')
+    doc.set(docWith({ path: '/elsewhere/standalone.md' })) // a standalone open
+    flushTabWrite()
+    expect(uiArgs()).toEqual([
+      { root: '/ws/notes', tabs: ['/ws/notes/a.md'], preview: null, active: null },
+    ])
+    teardown()
+  })
+
+  it('records nothing while no folder is open', async () => {
+    const teardown = await initWithRoot()
+    workspace.set({ root: null, tree: null })
+    openList.set(['/x.md'])
+    doc.set(docWith({ path: '/x.md' }))
+    flushTabWrite()
+    expect(uiCalls()).toHaveLength(0)
+    teardown()
+  })
+
+  it('coalesces a burst of strip changes into ONE debounced write', async () => {
+    const teardown = await initWithRoot()
+    // A multi-file drain shape: three prepends in one tick.
+    openList.set(['/ws/notes/a.md'])
+    openList.set(['/ws/notes/b.md', '/ws/notes/a.md'])
+    openList.set(['/ws/notes/c.md', '/ws/notes/b.md', '/ws/notes/a.md'])
+    flushTabWrite()
+    expect(uiCalls()).toHaveLength(1) // three set()s, one write
+    expect((uiArgs()[0] as { tabs: string[] }).tabs).toEqual([
+      '/ws/notes/c.md',
+      '/ws/notes/b.md',
+      '/ws/notes/a.md',
+    ])
+    teardown()
+  })
+
+  it('window-close (teardown) flushes the final, still-pending tab set', async () => {
+    const teardown = await initWithRoot()
+    openList.set(['/ws/notes/a.md'])
+    doc.set(docWith({ path: '/ws/notes/a.md' }))
+    // The debounce has NOT fired (no timer advance): the write is still pending.
+    expect(uiCalls()).toHaveLength(0)
+    teardown() // teardown flushes so the last strip isn't lost on window close
+    expect(uiArgs()).toEqual([
+      { root: '/ws/notes', tabs: ['/ws/notes/a.md'], preview: null, active: '/ws/notes/a.md' },
+    ])
+  })
+
+  it('a pre-stamped restore does NOT echo a save back (no self-clobber)', async () => {
+    const teardown = await initWithRoot()
+    const state = {
+      tabs: ['/ws/notes/a.md', '/ws/notes/b.md'],
+      preview: '/ws/notes/p.md',
+      active: '/ws/notes/a.md',
+    }
+    // Pre-stamp, THEN drive the stores exactly as restoreTabs would.
+    stampTabState('/ws/notes', state)
+    openList.set(state.tabs)
+    previewPath.set(state.preview)
+    doc.set(docWith({ path: state.active }))
+    flushTabWrite()
+    expect(uiCalls()).toHaveLength(0)
+    teardown()
+  })
+
+  it('persists PATHS only — a dirty buffer is never serialized (edits can’t be lost)', async () => {
+    const teardown = await initWithRoot()
+    openList.set(['/ws/notes/a.md'])
+    doc.set(docWith({ path: '/ws/notes/a.md', content: 'unsaved-secret-edits', savedContent: 'clean' }))
+    flushTabWrite()
+    expect(uiArgs()).toEqual([
+      { root: '/ws/notes', tabs: ['/ws/notes/a.md'], preview: null, active: '/ws/notes/a.md' },
+    ])
+    expect(JSON.stringify(uiArgs()[0])).not.toContain('unsaved-secret-edits')
+    teardown()
+  })
+
+  it('a failed write is logWarn territory — never a banner', async () => {
+    invoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === 'take_startup_workspace') return { workspace: null, suppress_restore: true }
+      if (cmd === 'save_workspace_ui') throw 'disk full'
+      return undefined
     })
-    // Content-only churn on the same path never re-invokes.
-    const before = invoke.mock.calls.filter(([cmd]) => cmd === 'save_workspace_ui').length
-    doc.set(docWith({ path: '/ws/a/x.md', content: 'typed', savedContent: 'typed' }))
-    // A switch to a standalone file outside the folder records nothing.
-    doc.set(docWith({ path: '/elsewhere/standalone.md' }))
-    expect(invoke.mock.calls.filter(([cmd]) => cmd === 'save_workspace_ui')).toHaveLength(before)
+    const teardown = await initWorkspace()
+    workspace.set({ root: '/ws/notes', tree: tree('notes') })
+    openList.set(['/ws/notes/a.md'])
+    flushTabWrite()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(get(errorMessage)).toBeNull()
     teardown()
   })
 })

@@ -372,26 +372,52 @@ pub fn list_recent_workspaces(app: AppHandle) -> Result<Vec<String>, String> {
     Ok(recent_roots(&file))
 }
 
-// -- per-workspace UI state (last-open file) ---------------------------------
+// -- per-workspace UI state (the open-tab set) -------------------------------
 
-/// Upper bound on a workspace's ui.json. The real payload is one path; the
-/// cap only stops a compromised webview using the file as an arbitrary-size
-/// disk sink (prefs.rs's posture for settings.json).
+/// Upper bound on a workspace's ui.json. The payload is a list of paths; at
+/// ~200 bytes/path this cap still holds ~300 tabs, so it only ever stops a
+/// compromised webview using the file as an arbitrary-size disk sink
+/// (prefs.rs's posture for settings.json).
 const MAX_UI_STATE_BYTES: u64 = 64 * 1024;
 
-/// Persisted per-workspace UI state, stored at
+/// Persisted per-workspace UI state (v2), stored at
 /// `app_data_dir()/workspace-state/<sha256hex(canonical root)>/ui.json` — the
 /// per-workspace state directory prefs.rs documents (history buckets are the
-/// other tenant). Currently a single field: the workspace's last-open file,
-/// reopened when the workspace opens. The serde rename keeps the frontend's
-/// requested `{"version":1,"lastFile":…}` file shape; this is a Rust-owned
-/// file format, not an IPC payload, so the no-serde-renames payload rule
-/// doesn't apply.
+/// other tenant). Records the whole Open Files strip so reopening a workspace
+/// rebuilds it: `tabs` are the pinned rows in strip order, `preview` is the
+/// volatile italic row (never one of `tabs`), `active` is the file showing in
+/// the editor (one of `tabs`, or `preview`, or `None` for a scratch). Field
+/// names already match the requested `{version,tabs,preview,active}` JSON, so
+/// no serde renames — and this is a Rust-owned file format, not an IPC
+/// payload, so the no-serde-renames payload rule doesn't apply either way.
 #[derive(Serialize, Deserialize)]
-struct WorkspaceUiState {
+struct UiStateV2 {
     version: u32,
+    tabs: Vec<String>,
+    #[serde(default)]
+    preview: Option<String>,
+    #[serde(default)]
+    active: Option<String>,
+}
+
+/// The pre-tab-set v1 shape (`{"version":1,"lastFile":…}`), kept only so a
+/// `load_ui_state` of an existing install's file migrates it in-memory: its
+/// single `lastFile` becomes the restored `active` (with no pinned tabs). The
+/// write side only ever emits v2, so the migration is a one-time read.
+#[derive(Deserialize)]
+struct UiStateV1 {
     #[serde(rename = "lastFile")]
     last_file: String,
+}
+
+/// The workspace's restored tab set, as the frontend consumes it. Field names
+/// serialize verbatim (no serde renames), matching every other IPC payload in
+/// this codebase. `preview`/`active` are `null` when absent.
+#[derive(Serialize, PartialEq, Debug)]
+pub struct WorkspaceTabs {
+    pub tabs: Vec<String>,
+    pub preview: Option<String>,
+    pub active: Option<String>,
 }
 
 /// Path of a workspace's ui.json inside its state dir. `canonical_root` must
@@ -404,15 +430,21 @@ pub(crate) fn ui_state_file(base: &Path, canonical_root: &str) -> std::path::Pat
         .join("ui.json")
 }
 
-/// Atomically replace the stored last-open file pointer, creating the state
-/// dir on first write. `last_file` is stored verbatim: the LOAD side owns the
-/// validation (containment + existence), which is the trust boundary — a
-/// stored path that never validates only ever buys the caller a fresh
-/// scratch, never an open.
-pub(crate) fn save_ui_state(file: &Path, last_file: &str) -> Result<(), String> {
-    let state = WorkspaceUiState {
-        version: 1,
-        last_file: last_file.to_string(),
+/// Atomically replace the stored tab set (v2), creating the state dir on first
+/// write. Every path is stored verbatim: the LOAD side owns the validation
+/// (containment + existence), which is the trust boundary — a stored path that
+/// never validates only ever buys the caller a dropped row, never an escape.
+pub(crate) fn save_ui_state(
+    file: &Path,
+    tabs: &[String],
+    preview: Option<&str>,
+    active: Option<&str>,
+) -> Result<(), String> {
+    let state = UiStateV2 {
+        version: 2,
+        tabs: tabs.to_vec(),
+        preview: preview.map(str::to_string),
+        active: active.map(str::to_string),
     };
     let json = serde_json::to_string(&state).map_err(|e| e.to_string())?;
     if json.len() as u64 > MAX_UI_STATE_BYTES {
@@ -424,56 +456,103 @@ pub(crate) fn save_ui_state(file: &Path, last_file: &str) -> Result<(), String> 
     crate::history::atomic_write(file, json.as_bytes()).map_err(|e| e.to_string())
 }
 
-/// Read the stored last-open file. Tolerant on the FILE — missing, oversized,
-/// or corrupt yields `None`, mirroring `load_state` — but strict on the
-/// VALUE: the stored path must canonicalize to an existing regular file
-/// STRICTLY inside `canonical_root` (`starts_with` is component-wise and the
-/// root itself is excluded — `resolve_image_under`'s containment posture), so
-/// a tampered ui.json can never point the restore outside the workspace, and
-/// a deleted/moved last file degrades to `None` (the caller opens a fresh
-/// scratch). Returns the canonical path, which — being strictly inside a
-/// granted root — passes `AllowedPaths::ensure` for the read that follows.
-pub(crate) fn load_ui_state(file: &Path, canonical_root: &Path) -> Option<String> {
-    let meta = fs::metadata(file).ok()?;
-    if meta.len() > MAX_UI_STATE_BYTES {
-        return None;
-    }
-    let raw = fs::read_to_string(file).ok()?;
-    let state: WorkspaceUiState = serde_json::from_str(&raw).ok()?;
-    let canon = fs::canonicalize(&state.last_file).ok()?;
+/// Validate one stored path as a live child of `canonical_root`: it must
+/// canonicalize to an existing regular file STRICTLY inside the root
+/// (`starts_with` is component-wise and the root itself is excluded —
+/// `resolve_image_under`'s containment posture), so a tampered ui.json can
+/// never point a restored row outside the workspace, and a deleted/moved path
+/// drops to `None`. Returns the canonical path, which — being strictly inside
+/// a granted root — passes `AllowedPaths::ensure` for the read that follows.
+fn valid_child(path: &str, canonical_root: &Path) -> Option<String> {
+    let canon = fs::canonicalize(path).ok()?;
     if !canon.is_file() || !canon.starts_with(canonical_root) || canon == canonical_root {
         return None;
     }
     canon.to_str().map(str::to_string)
 }
 
-/// Remember `last_file` as `root`'s last-open file. `root` must be a granted
-/// workspace root (`ensure_root`, like `list_workspace`) — the webview cannot
-/// use this command to write state for arbitrary directories. `last_file` is
-/// not validated here; see `save_ui_state`.
+/// Read the stored tab set. Tolerant on the FILE — missing, oversized, or
+/// corrupt yields `None`, mirroring `load_state` — but strict on every VALUE:
+/// each path (every tab, the preview, the active) is validated through
+/// [`valid_child`], and any that no longer validates is silently dropped, so a
+/// stale/tampered entry degrades to a dropped row instead of breaking the
+/// rest. A v1 `{lastFile}` file migrates to `active = lastFile`, no tabs.
+/// Surviving `tabs` are deduped (canonicalized); the `preview` is dropped if
+/// it collides with a surviving tab (a preview is never in the pinned list).
+/// Returns `None` when nothing survives (empty tabs + no preview + no active),
+/// preserving the frontend's "null means restore nothing" contract.
+pub(crate) fn load_ui_state(file: &Path, canonical_root: &Path) -> Option<WorkspaceTabs> {
+    let meta = fs::metadata(file).ok()?;
+    if meta.len() > MAX_UI_STATE_BYTES {
+        return None;
+    }
+    let raw = fs::read_to_string(file).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let (raw_tabs, raw_preview, raw_active) = match value.get("version").and_then(|v| v.as_u64()) {
+        Some(2) => {
+            let s: UiStateV2 = serde_json::from_value(value).ok()?;
+            (s.tabs, s.preview, s.active)
+        }
+        Some(1) => {
+            let s: UiStateV1 = serde_json::from_value(value).ok()?;
+            (Vec::new(), None, Some(s.last_file))
+        }
+        _ => return None,
+    };
+
+    let mut tabs: Vec<String> = Vec::new();
+    for p in raw_tabs {
+        if let Some(canon) = valid_child(&p, canonical_root) {
+            if !tabs.contains(&canon) {
+                tabs.push(canon);
+            }
+        }
+    }
+    // A surviving preview must not duplicate a pinned row (never in openList).
+    let preview = raw_preview
+        .and_then(|p| valid_child(&p, canonical_root))
+        .filter(|c| !tabs.contains(c));
+    // `active` may legitimately equal one of the tabs (or the preview).
+    let active = raw_active.and_then(|p| valid_child(&p, canonical_root));
+
+    if tabs.is_empty() && preview.is_none() && active.is_none() {
+        return None;
+    }
+    Some(WorkspaceTabs {
+        tabs,
+        preview,
+        active,
+    })
+}
+
+/// Persist `root`'s open-tab set. `root` must be a granted workspace root
+/// (`ensure_root`, like `list_workspace`) — the webview cannot use this
+/// command to write state for arbitrary directories. The paths are not
+/// validated here; see `save_ui_state` (LOAD owns the trust boundary).
 #[tauri::command]
 pub fn save_workspace_ui(
     root: String,
-    last_file: String,
+    tabs: Vec<String>,
+    preview: Option<String>,
+    active: Option<String>,
     app: AppHandle,
     allowed: State<'_, AllowedPaths>,
 ) -> Result<(), String> {
     let canon = allowed.ensure_root(&root)?;
     let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let file = ui_state_file(&base, &canon.to_string_lossy());
-    save_ui_state(&file, &last_file)
+    save_ui_state(&file, &tabs, preview.as_deref(), active.as_deref())
 }
 
-/// The workspace's remembered last-open file, or `None` when nothing is
-/// stored or the stored path no longer validates (vanished file, tampered
-/// state, path outside the root — see `load_ui_state`). Same `ensure_root`
-/// gate as `save_workspace_ui`.
+/// The workspace's remembered tab set, or `None` when nothing is stored or no
+/// entry still validates (vanished files, tampered state, paths outside the
+/// root — see `load_ui_state`). Same `ensure_root` gate as `save_workspace_ui`.
 #[tauri::command]
 pub fn load_workspace_ui(
     root: String,
     app: AppHandle,
     allowed: State<'_, AllowedPaths>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<WorkspaceTabs>, String> {
     let canon = allowed.ensure_root(&root)?;
     let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let file = ui_state_file(&base, &canon.to_string_lossy());
@@ -880,7 +959,7 @@ mod tests {
         assert_eq!(load_state(&file).roots, vec!["/ws/c", "/ws/a"]);
     }
 
-    // -- per-workspace UI state (last-open file) -----------------------------
+    // -- per-workspace UI state (the open-tab set) ---------------------------
 
     /// A canonical workspace root with one real markdown file inside, plus a
     /// state base dir — the fixtures every ui-state test needs. Roots are
@@ -901,33 +980,74 @@ mod tests {
         p
     }
 
-    #[test]
-    fn ui_state_round_trips_and_returns_the_canonical_path() {
-        let (base, root, note) = ui_fixture();
-        let file = ui_state_file(base.path(), root.to_str().unwrap());
-        save_ui_state(&file, note.to_str().unwrap()).unwrap();
-        assert_eq!(
-            load_ui_state(&file, &root).as_deref(),
-            Some(note.to_str().unwrap())
-        );
-        // The stored shape is the documented {"version":1,"lastFile":…}.
-        let raw = fs::read_to_string(&file).unwrap();
-        assert!(raw.contains("\"version\":1"));
-        assert!(raw.contains("\"lastFile\""));
+    /// Create a real markdown file `name` inside `root` and return its path
+    /// (as an owned String, the shape `save_ui_state`'s `tabs` slice wants).
+    fn mkfile(root: &Path, name: &str) -> String {
+        let p = root.join(name);
+        fs::write(&p, "x").unwrap();
+        p.to_str().unwrap().to_string()
     }
 
     #[test]
-    fn ui_state_overwrite_is_last_writer_wins() {
+    fn ui_state_v2_round_trips_the_whole_tab_set() {
         let (base, root, note) = ui_fixture();
-        let other = root.join("other.md");
-        fs::write(&other, "x").unwrap();
+        let other = mkfile(&root, "other.md");
+        let glance = mkfile(&root, "glance.md");
         let file = ui_state_file(base.path(), root.to_str().unwrap());
-        save_ui_state(&file, other.to_str().unwrap()).unwrap();
-        save_ui_state(&file, note.to_str().unwrap()).unwrap();
-        assert_eq!(
-            load_ui_state(&file, &root).as_deref(),
-            Some(note.to_str().unwrap())
-        );
+        let tabs = vec![note.to_str().unwrap().to_string(), other.clone()];
+        save_ui_state(&file, &tabs, Some(&glance), Some(&other)).unwrap();
+        let loaded = load_ui_state(&file, &root).unwrap();
+        assert_eq!(loaded.tabs, tabs, "pinned rows kept in strip order");
+        assert_eq!(loaded.preview.as_deref(), Some(glance.as_str()));
+        assert_eq!(loaded.active.as_deref(), Some(other.as_str()));
+        // The stored shape is the documented {"version":2,tabs,preview,active}.
+        let raw = fs::read_to_string(&file).unwrap();
+        assert!(raw.contains("\"version\":2"));
+        assert!(raw.contains("\"tabs\""));
+    }
+
+    #[test]
+    fn ui_state_migrates_v1_lastfile_to_active() {
+        // A pre-tab-set {"version":1,"lastFile":…} file must surface its file
+        // as the restored active doc, with no pinned tabs — never silently
+        // parse to empty and lose the restore.
+        let (base, root, note) = ui_fixture();
+        let file = ui_state_file(base.path(), root.to_str().unwrap());
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(
+            &file,
+            format!(
+                "{{\"version\":1,\"lastFile\":\"{}\"}}",
+                note.to_str().unwrap()
+            ),
+        )
+        .unwrap();
+        let loaded = load_ui_state(&file, &root).unwrap();
+        assert!(loaded.tabs.is_empty(), "v1 has no pinned tabs");
+        assert_eq!(loaded.active.as_deref(), Some(note.to_str().unwrap()));
+        assert_eq!(loaded.preview, None);
+    }
+
+    #[test]
+    fn ui_state_drops_a_stale_tab_keeping_the_valid_one() {
+        // The data-loss guard: one vanished + one live tab must load as just
+        // the live one, not fail the whole restore.
+        let (base, root, note) = ui_fixture();
+        let file = ui_state_file(base.path(), root.to_str().unwrap());
+        let gone = root.join("gone.md").to_str().unwrap().to_string();
+        let tabs = vec![note.to_str().unwrap().to_string(), gone];
+        save_ui_state(&file, &tabs, None, None).unwrap();
+        let loaded = load_ui_state(&file, &root).unwrap();
+        assert_eq!(loaded.tabs, vec![note.to_str().unwrap().to_string()]);
+    }
+
+    #[test]
+    fn ui_state_dedupes_repeated_tabs() {
+        let (base, root, note) = ui_fixture();
+        let file = ui_state_file(base.path(), root.to_str().unwrap());
+        let n = note.to_str().unwrap().to_string();
+        save_ui_state(&file, &[n.clone(), n.clone()], None, None).unwrap();
+        assert_eq!(load_ui_state(&file, &root).unwrap().tabs, vec![n]);
     }
 
     #[test]
@@ -941,15 +1061,31 @@ mod tests {
     }
 
     #[test]
-    fn ui_state_rejects_a_path_outside_the_root() {
-        // Containment is the trust boundary: a tampered ui.json naming a file
-        // outside the workspace must degrade to None, never to an open.
-        let (base, root, _note) = ui_fixture();
+    fn ui_state_drops_paths_outside_the_root() {
+        // Containment is the trust boundary: a tampered ui.json naming files
+        // outside the workspace must drop them, never open outside the root.
+        let (base, root, note) = ui_fixture();
         let outside = base.path().join("secret.md");
         fs::write(&outside, "top secret").unwrap();
+        let outside_canon = fs::canonicalize(&outside)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
         let file = ui_state_file(base.path(), root.to_str().unwrap());
-        save_ui_state(&file, fs::canonicalize(&outside).unwrap().to_str().unwrap()).unwrap();
-        assert_eq!(load_ui_state(&file, &root), None);
+        // The outside path is dropped from tabs, preview, and active alike; the
+        // one valid tab survives.
+        save_ui_state(
+            &file,
+            &[note.to_str().unwrap().to_string(), outside_canon.clone()],
+            Some(&outside_canon),
+            Some(&outside_canon),
+        )
+        .unwrap();
+        let loaded = load_ui_state(&file, &root).unwrap();
+        assert_eq!(loaded.tabs, vec![note.to_str().unwrap().to_string()]);
+        assert_eq!(loaded.preview, None);
+        assert_eq!(loaded.active, None);
     }
 
     #[test]
@@ -959,20 +1095,60 @@ mod tests {
         let evil = mkdir(base.path(), "ws-evil");
         let f = evil.join("x.md");
         fs::write(&f, "x").unwrap();
+        let f_canon = fs::canonicalize(&f).unwrap().to_str().unwrap().to_string();
         let file = ui_state_file(base.path(), root.to_str().unwrap());
-        save_ui_state(&file, fs::canonicalize(&f).unwrap().to_str().unwrap()).unwrap();
+        save_ui_state(&file, &[f_canon], None, None).unwrap();
         assert_eq!(load_ui_state(&file, &root), None);
     }
 
     #[test]
-    fn ui_state_rejects_a_vanished_last_file() {
-        // canonicalize fails for a nonexistent path -> fail closed to None,
-        // which is exactly the "open a fresh scratch instead" contract.
+    fn ui_state_drops_a_preview_that_collides_with_a_surviving_tab() {
+        // A preview is never in the pinned list; if a tampered file lists the
+        // same path as both, the preview is dropped and the tab kept.
         let (base, root, note) = ui_fixture();
+        let n = note.to_str().unwrap().to_string();
         let file = ui_state_file(base.path(), root.to_str().unwrap());
-        save_ui_state(&file, note.to_str().unwrap()).unwrap();
-        fs::remove_file(&note).unwrap();
+        save_ui_state(&file, std::slice::from_ref(&n), Some(&n), None).unwrap();
+        let loaded = load_ui_state(&file, &root).unwrap();
+        assert_eq!(loaded.tabs, vec![n]);
+        assert_eq!(loaded.preview, None);
+    }
+
+    #[test]
+    fn ui_state_active_may_equal_a_tab() {
+        // active is the file showing in the editor — legitimately one of the
+        // pinned tabs, so it is NOT filtered against them.
+        let (base, root, note) = ui_fixture();
+        let n = note.to_str().unwrap().to_string();
+        let file = ui_state_file(base.path(), root.to_str().unwrap());
+        save_ui_state(&file, std::slice::from_ref(&n), None, Some(&n)).unwrap();
+        let loaded = load_ui_state(&file, &root).unwrap();
+        assert_eq!(loaded.tabs, vec![n.clone()]);
+        assert_eq!(loaded.active.as_deref(), Some(n.as_str()));
+    }
+
+    #[test]
+    fn ui_state_whole_empty_state_loads_as_none() {
+        // Every entry vanished (or none stored): load returns None so the
+        // frontend's null-means-restore-nothing contract holds.
+        let (base, root, _note) = ui_fixture();
+        let file = ui_state_file(base.path(), root.to_str().unwrap());
+        let gone = root.join("gone.md").to_str().unwrap().to_string();
+        save_ui_state(&file, std::slice::from_ref(&gone), Some(&gone), Some(&gone)).unwrap();
         assert_eq!(load_ui_state(&file, &root), None);
+    }
+
+    #[test]
+    fn ui_state_overwrite_is_last_writer_wins() {
+        let (base, root, note) = ui_fixture();
+        let other = mkfile(&root, "other.md");
+        let n = note.to_str().unwrap().to_string();
+        let file = ui_state_file(base.path(), root.to_str().unwrap());
+        save_ui_state(&file, std::slice::from_ref(&other), None, None).unwrap();
+        save_ui_state(&file, std::slice::from_ref(&n), None, Some(&n)).unwrap();
+        let loaded = load_ui_state(&file, &root).unwrap();
+        assert_eq!(loaded.tabs, vec![n.clone()]);
+        assert_eq!(loaded.active.as_deref(), Some(n.as_str()));
     }
 
     #[test]
@@ -980,9 +1156,9 @@ mod tests {
         let (base, root, _note) = ui_fixture();
         let sub = mkdir(&root, "sub");
         let file = ui_state_file(base.path(), root.to_str().unwrap());
-        save_ui_state(&file, root.to_str().unwrap()).unwrap();
+        save_ui_state(&file, &[root.to_str().unwrap().to_string()], None, None).unwrap();
         assert_eq!(load_ui_state(&file, &root), None, "the root is not a file");
-        save_ui_state(&file, sub.to_str().unwrap()).unwrap();
+        save_ui_state(&file, &[sub.to_str().unwrap().to_string()], None, None).unwrap();
         assert_eq!(
             load_ui_state(&file, &root),
             None,
@@ -1001,7 +1177,7 @@ mod tests {
         let link = root.join("link.md");
         std::os::unix::fs::symlink(&secret, &link).unwrap();
         let file = ui_state_file(base.path(), root.to_str().unwrap());
-        save_ui_state(&file, link.to_str().unwrap()).unwrap();
+        save_ui_state(&file, &[link.to_str().unwrap().to_string()], None, None).unwrap();
         assert_eq!(load_ui_state(&file, &root), None);
     }
 
@@ -1014,7 +1190,7 @@ mod tests {
         let file_a = ui_state_file(base.path(), root_a.to_str().unwrap());
         let file_b = ui_state_file(base.path(), root_b.to_str().unwrap());
         assert_ne!(file_a, file_b);
-        save_ui_state(&file_a, note_a.to_str().unwrap()).unwrap();
+        save_ui_state(&file_a, &[note_a.to_str().unwrap().to_string()], None, None).unwrap();
         assert_eq!(
             load_ui_state(&file_b, &root_b),
             None,
@@ -1028,12 +1204,12 @@ mod tests {
         let file = ui_state_file(base.path(), root.to_str().unwrap());
         let huge = "x".repeat(MAX_UI_STATE_BYTES as usize + 1);
         assert!(
-            save_ui_state(&file, &huge).is_err(),
+            save_ui_state(&file, std::slice::from_ref(&huge), None, None).is_err(),
             "oversized save rejects"
         );
         // A file inflated out-of-band is ignored on read rather than parsed.
         fs::create_dir_all(file.parent().unwrap()).unwrap();
-        fs::write(&file, format!("{{\"version\":1,\"lastFile\":\"{huge}\"}}")).unwrap();
+        fs::write(&file, format!("{{\"version\":2,\"tabs\":[\"{huge}\"]}}")).unwrap();
         assert_eq!(load_ui_state(&file, &root), None);
     }
 

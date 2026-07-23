@@ -76,7 +76,15 @@
   } from './lib/ui'
   import type { StripRowAction } from './OpenFilesStrip.svelte'
   import { activeOverlay, openOverlay, closeOverlay, anyOverlayOpen } from './lib/overlay'
-  import { workspace, openWorkspace, openRecentWorkspace, closeWorkspace, isImageFile } from './lib/workspace'
+  import {
+    workspace,
+    openWorkspace,
+    openRecentWorkspace,
+    closeWorkspace,
+    isImageFile,
+    flushTabWrite,
+    type WorkspaceTabs,
+  } from './lib/workspace'
   import { revealLog, reportError, reportNotice } from './lib/errors'
   import { exportDocument } from './lib/export'
   import { flushBufferEdits } from './lib/bufferFlush'
@@ -419,6 +427,10 @@
   function closeThisWindow() {
     pendingPreviewPath = null
     flushBufferEdits() // see guarded(): the dirty check must not trail the editor
+    // Persist the final Open Files strip BEFORE the window tears down: the
+    // strip write-through is debounced, so a last-moment tab/preview/active
+    // change could still be pending when destroy() kills the webview.
+    flushTabWrite()
     const destroy = () => void getCurrentWindow().destroy()
     if (isDirty(get(doc)) || anyCachedDirty().length > 0) {
       openOverlay({ kind: 'discard', action: destroy, save: saveAllDirty })
@@ -441,6 +453,27 @@
   // (only once a pick actually landed).
   const newUntitled = () => switchGuarded(() => { stashActive(); newDoc() })
   const openFileDialog = () => switchGuarded(() => open())
+
+  // Rebuild a workspace's whole Open Files strip from its persisted ui.json
+  // (boot settlement or a mid-session adopt of a clean folder-less window —
+  // appBoot's restoreTabsForRoot only ever calls this while the window is
+  // unclaimed, so openList/previewPath are empty and nothing is clobbered).
+  // The pinned rows and preview slot are set directly (never through the
+  // close/reopen stack); then ONLY the active file loads — the other rows are
+  // bare paths that read from disk (clean, a buffer-cache miss) on first
+  // switch. At boot the doc is a pristine scratch, so handleOpenFile's switch
+  // guard passes straight through. active===null (a scratch was showing over
+  // the pinned rows) opens a fresh scratch; active===preview reopens it AS the
+  // italic preview; otherwise the active pins in place (pinOpen is a no-op —
+  // it is already among the restored tabs).
+  const restoreTabs = (state: WorkspaceTabs) => {
+    openList.set(state.tabs)
+    previewPath.set(state.preview)
+    if (state.active === null) newUntitled()
+    else if (state.active === state.preview)
+      handleOpenFile(state.active, { preview: true, inPlace: true })
+    else handleOpenFile(state.active, { inPlace: true })
+  }
 
   // The one gate for document-shaped actions while the empty page is shown:
   // there is no document (and no mounted editor) for them to act on, so they
@@ -489,14 +522,11 @@
   onMount(() =>
     bootApp({
       openStartupFile,
-      // A workspace restore (boot settlement or a mid-session root adopt)
-      // opens the workspace's last-open file PINNED in place — it was a real
-      // working file, not a glance — through the same switch guard as a
-      // sidebar open: a dirty untitled scratch still prompts, a dirty pathed
-      // doc stashes into the buffer cache. At boot the doc is a clean
-      // scratch, so the guard passes straight through.
-      openRestoredFile: (path) => handleOpenFile(path, { inPlace: true }),
-      // No (valid) last file remembered: a fresh untitled scratch, the exact
+      // A workspace restore (boot settlement or a mid-session root adopt of a
+      // clean folder-less window) rebuilds the whole Open Files strip and
+      // lazily loads only the active file — see restoreTabs.
+      restoreTabs,
+      // Nothing valid remembered: a fresh untitled scratch, the exact
       // File > New closure (switch-guarded newDoc).
       openScratch: newUntitled,
       menuEvents: {

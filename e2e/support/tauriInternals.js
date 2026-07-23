@@ -140,21 +140,42 @@
     // root in place (specs override for custom Workspace payloads or assert
     // the spawn path via the call log).
     open_recent_workspace: (args) => (args.currentRoot ? null : buildWorkspace(args.root)),
-    // Per-workspace ui.json (last-open file): persists into the seedable
-    // __TAURI_WORKSPACE_UI__ map. Load mirrors workspace.rs load_ui_state's
-    // trust posture — the stored path must sit strictly under the root AND
-    // still exist (in the in-memory FS) — so tampered/vanished entries
-    // degrade to null exactly like the Rust side.
+    // Per-workspace ui.json (the whole Open Files strip, v2): persists the
+    // {tabs,preview,active} shape into the seedable __TAURI_WORKSPACE_UI__ map.
+    // Load mirrors workspace.rs load_ui_state's trust posture VERBATIM — every
+    // path must sit strictly under the root AND still exist (in the in-memory
+    // FS), stale entries are dropped, tabs dedupe, a preview colliding with a
+    // surviving tab drops, and a wholly-empty result degrades to null. A bare
+    // STRING seed is tolerated as a v1 lastFile (→ active only), so specs can
+    // seed a single remembered file without spelling out the object.
     save_workspace_ui: (args) => {
-      ;(window.__TAURI_WORKSPACE_UI__ ||= {})[args.root] = args.lastFile
+      ;(window.__TAURI_WORKSPACE_UI__ ||= {})[args.root] = {
+        tabs: args.tabs || [],
+        preview: args.preview ?? null,
+        active: args.active ?? null,
+      }
       return null
     },
     load_workspace_ui: (args) => {
-      const last = (window.__TAURI_WORKSPACE_UI__ || {})[args.root]
-      if (typeof last !== 'string') return null
-      if (!last.startsWith(args.root + '/')) return null // containment
-      if (typeof fsMap()[last] !== 'string') return null // vanished file
-      return last
+      const raw = (window.__TAURI_WORKSPACE_UI__ || {})[args.root]
+      if (raw == null) return null
+      const state =
+        typeof raw === 'string' ? { tabs: [], preview: null, active: raw } : raw
+      const root = args.root
+      const valid = (p) =>
+        typeof p === 'string' && p.startsWith(root + '/') && typeof fsMap()[p] === 'string'
+          ? p
+          : null
+      const tabs = []
+      for (const p of state.tabs || []) {
+        const v = valid(p)
+        if (v && !tabs.includes(v)) tabs.push(v)
+      }
+      const pv = valid(state.preview)
+      const preview = pv && !tabs.includes(pv) ? pv : null
+      const active = valid(state.active)
+      if (tabs.length === 0 && preview == null && active == null) return null
+      return { tabs, preview, active }
     },
     // Empty page's Recent section: seed roots via __TAURI_RECENT__ (default:
     // no recents, the section stays hidden).

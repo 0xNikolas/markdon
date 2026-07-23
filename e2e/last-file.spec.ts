@@ -156,36 +156,36 @@ test('a mid-session Open Recent adopt opens the target workspace’s last file',
   await expect(stripRows(page).first()).not.toHaveClass(/preview/)
 })
 
-test('recording round trip: the open file is remembered and restored on reopening the workspace', async ({
-  page,
-}) => {
+test('recording: pinning a file writes the whole strip to ui.json', async ({ page }) => {
   await seedWorkspace(page)
   await gotoApp(page) // fresh workspace: scratch
 
-  // Opening a file records it as the workspace's last-open file.
+  // Opening a file writes the whole {tabs,preview,active} strip through.
   await pinFile(page, 'notes.md')
   await expect
     .poll(async () => (await calls(page, 'save_workspace_ui')).map((c) => c.args))
-    .toContainEqual({ root: ROOT, lastFile: `${ROOT}/notes.md` })
+    .toContainEqual({
+      root: ROOT,
+      tabs: [`${ROOT}/notes.md`],
+      preview: null,
+      active: `${ROOT}/notes.md`,
+    })
 
-  // Leave the workspace: close the tab (empty page), then Close Folder.
+  // Leave the workspace: close the tab (empty page), then Close Folder. Under
+  // the v2 write-through, closing the last tab faithfully persists the EMPTY
+  // strip — so the round-trip restore of a non-empty strip is exercised from a
+  // pre-seeded boot in tab-persist.spec.ts instead.
   await closeStripRow(page, 'notes.md')
   await expect(emptyPage(page)).toBeVisible()
-  await emitTauri(page, 'menu:close_folder')
-  await expect(workspaceTree(page)).toHaveCount(0)
-
-  // Reopen the same root via Open Recent: the folder-less window adopts it in
-  // place and the restore reopens notes.md, pinned.
-  await emitTauri(page, 'menu:open_recent', { target: 'main', root: ROOT })
-  await expect(workspaceTree(page)).toBeVisible()
-  await expect(editor(page)).toContainText('hello notes')
-  await expect(emptyPage(page)).toHaveCount(0)
-  await expect(
-    openFilesStrip(page).getByRole('button', { name: 'notes.md', exact: true }),
-  ).toHaveAttribute('aria-current', 'true')
+  await expect
+    .poll(async () => {
+      const saves = await calls(page, 'save_workspace_ui')
+      return saves[saves.length - 1]?.args
+    })
+    .toEqual({ root: ROOT, tabs: [], preview: null, active: null })
 })
 
-test('switching away and back re-records: the LATEST open file wins', async ({ page }) => {
+test('switching away and back re-records the strip: the LATEST state wins', async ({ page }) => {
   await seedWorkspace(page)
   await gotoApp(page)
 
@@ -193,14 +193,13 @@ test('switching away and back re-records: the LATEST open file wins', async ({ p
   await treeRow(page, 'ideas.md').click() // preview counts: it IS the open doc
   await expect(editor(page)).toContainText('idea one')
 
+  const strip = { tabs: [`${ROOT}/notes.md`], preview: `${ROOT}/ideas.md`, active: `${ROOT}/ideas.md` }
   await expect
     .poll(async () => {
       const saves = await calls(page, 'save_workspace_ui')
       return saves[saves.length - 1]?.args
     })
-    .toEqual({ root: ROOT, lastFile: `${ROOT}/ideas.md` })
+    .toEqual({ root: ROOT, ...strip })
   // The stub persisted it where the next boot's load will find it.
-  expect(
-    await page.evaluate(() => window.__TAURI_WORKSPACE_UI__),
-  ).toEqual({ [ROOT]: `${ROOT}/ideas.md` })
+  expect(await page.evaluate(() => window.__TAURI_WORKSPACE_UI__)).toEqual({ [ROOT]: strip })
 })

@@ -37,7 +37,7 @@ import {
   initReadonlyMenuSync,
   initExportOnTick,
   initWindowTitleSync,
-  openLastFileOrScratch,
+  restoreTabsForRoot,
   maybeRestoreBootDocument,
   bootApp,
 } from './appBoot'
@@ -45,7 +45,7 @@ import { doc, docWith, openDoc, resetReadonlyMemory, showEmptyState } from './do
 import { openList, previewPath } from './openList'
 import { errorMessage } from './errors'
 import { emptyState, imageView, requestExport } from './ui'
-import { workspace } from './workspace'
+import { workspace, resetTabRecording, type WorkspaceTabs } from './workspace'
 import { tree } from './test-support/workspaceFixtures'
 
 function emit(event: string, payload: { target?: string | null } | null = null): void {
@@ -70,6 +70,7 @@ beforeEach(() => {
   workspace.set({ root: null, tree: null })
   emptyState.set(false)
   imageView.set(null)
+  resetTabRecording()
 })
 
 describe('wireEvents', () => {
@@ -279,32 +280,37 @@ describe('initWindowTitleSync', () => {
 
 describe('maybeRestoreBootDocument', () => {
   const seedWorkspaceStore = () => workspace.set({ root: '/ws', tree })
-  /** load_workspace_ui resolves `last`; everything else keeps the default. */
-  const uiMock = (last: string | null) =>
+  const STRIP: WorkspaceTabs = {
+    tabs: ['/ws/docs/note.md', '/ws/other.md'],
+    preview: '/ws/glance.md',
+    active: '/ws/docs/note.md',
+  }
+  /** load_workspace_ui resolves `state`; everything else keeps the default. */
+  const uiMock = (state: WorkspaceTabs | null) =>
     invoke.mockImplementation(async (cmd: unknown) =>
-      cmd === 'load_workspace_ui' ? last : undefined,
+      cmd === 'load_workspace_ui' ? state : undefined,
     )
 
-  it('opens the remembered last file of an unclaimed workspace window', async () => {
+  it('rebuilds the remembered strip of an unclaimed workspace window', async () => {
     seedWorkspaceStore()
-    uiMock('/ws/docs/note.md')
-    const openFile = vi.fn()
+    uiMock(STRIP)
+    const restoreTabs = vi.fn()
     const openScratch = vi.fn()
-    await maybeRestoreBootDocument(openFile, openScratch)
+    await maybeRestoreBootDocument(restoreTabs, openScratch)
     expect(invoke).toHaveBeenCalledWith('load_workspace_ui', { root: '/ws' })
-    expect(openFile).toHaveBeenCalledTimes(1)
-    expect(openFile).toHaveBeenCalledWith('/ws/docs/note.md')
+    expect(restoreTabs).toHaveBeenCalledTimes(1)
+    expect(restoreTabs).toHaveBeenCalledWith(STRIP)
     expect(openScratch).not.toHaveBeenCalled()
     expect(get(emptyState)).toBe(false) // a workspace boot never shows the empty page
   })
 
-  it('opens a fresh scratch when the workspace remembers no (valid) last file', async () => {
+  it('opens a fresh scratch when the workspace remembers no (valid) strip', async () => {
     seedWorkspaceStore()
     uiMock(null)
-    const openFile = vi.fn()
+    const restoreTabs = vi.fn()
     const openScratch = vi.fn()
-    await maybeRestoreBootDocument(openFile, openScratch)
-    expect(openFile).not.toHaveBeenCalled()
+    await maybeRestoreBootDocument(restoreTabs, openScratch)
+    expect(restoreTabs).not.toHaveBeenCalled()
     expect(openScratch).toHaveBeenCalledTimes(1)
     expect(get(emptyState)).toBe(false) // scratch, NOT the empty page
   })
@@ -325,20 +331,20 @@ describe('maybeRestoreBootDocument', () => {
     ['a preview is already active', () => { seedWorkspaceStore(); previewPath.set('/w/a.md') }],
   ])('a claimed window restores nothing and never shows the empty page when %s', async (_label, arrange) => {
     arrange()
-    uiMock('/ws/docs/note.md')
-    const openFile = vi.fn()
+    uiMock(STRIP)
+    const restoreTabs = vi.fn()
     const openScratch = vi.fn()
-    await maybeRestoreBootDocument(openFile, openScratch)
-    expect(openFile).not.toHaveBeenCalled()
+    await maybeRestoreBootDocument(restoreTabs, openScratch)
+    expect(restoreTabs).not.toHaveBeenCalled()
     expect(openScratch).not.toHaveBeenCalled()
     expect(get(emptyState)).toBe(false)
   })
 
   it('an unclaimed window with no workspace at all shows the empty page', async () => {
-    const openFile = vi.fn()
+    const restoreTabs = vi.fn()
     const openScratch = vi.fn()
-    await maybeRestoreBootDocument(openFile, openScratch)
-    expect(openFile).not.toHaveBeenCalled()
+    await maybeRestoreBootDocument(restoreTabs, openScratch)
+    expect(restoreTabs).not.toHaveBeenCalled()
     expect(openScratch).not.toHaveBeenCalled()
     expect(get(emptyState)).toBe(true)
     // showEmptyState also reset the buffer to a pristine scratch.
@@ -347,7 +353,7 @@ describe('maybeRestoreBootDocument', () => {
     expect(invoke).not.toHaveBeenCalledWith('load_workspace_ui', expect.anything())
   })
 
-  it('an open landing while the last-file lookup is in flight wins over the restore', async () => {
+  it('an open landing while the strip lookup is in flight wins over the restore', async () => {
     seedWorkspaceStore()
     let resolveLoad!: (v: unknown) => void
     invoke.mockImplementation((cmd: unknown) =>
@@ -357,18 +363,20 @@ describe('maybeRestoreBootDocument', () => {
           })
         : Promise.resolve(undefined),
     )
-    const openFile = vi.fn()
+    const restoreTabs = vi.fn()
     const openScratch = vi.fn()
-    const p = maybeRestoreBootDocument(openFile, openScratch)
+    const p = maybeRestoreBootDocument(restoreTabs, openScratch)
     doc.set(docWith({ path: '/w/raced.md' })) // e.g. a startup drain's open landing late
-    resolveLoad('/ws/docs/note.md')
+    resolveLoad(STRIP)
     await p
-    expect(openFile).not.toHaveBeenCalled()
+    expect(restoreTabs).not.toHaveBeenCalled()
     expect(openScratch).not.toHaveBeenCalled()
   })
 })
 
-describe('openLastFileOrScratch', () => {
+describe('restoreTabsForRoot', () => {
+  const STRIP: WorkspaceTabs = { tabs: ['/ws/docs/note.md'], preview: null, active: '/ws/docs/note.md' }
+
   it('drops a lookup that resolves after the root changed (stale transition)', async () => {
     workspace.set({ root: '/ws', tree })
     let resolveLoad!: (v: unknown) => void
@@ -379,13 +387,33 @@ describe('openLastFileOrScratch', () => {
           })
         : Promise.resolve(undefined),
     )
-    const openFile = vi.fn()
+    const restoreTabs = vi.fn()
     const openScratch = vi.fn()
-    const p = openLastFileOrScratch('/ws', openFile, openScratch)
+    const p = restoreTabsForRoot('/ws', restoreTabs, openScratch)
     workspace.set({ root: null, tree: null }) // Close Folder raced the lookup
-    resolveLoad('/ws/docs/note.md')
+    resolveLoad(STRIP)
     await p
-    expect(openFile).not.toHaveBeenCalled()
+    expect(restoreTabs).not.toHaveBeenCalled()
+    expect(openScratch).not.toHaveBeenCalled()
+  })
+
+  it('drops the restore when the window is claimed mid-lookup (never clobbers open tabs)', async () => {
+    workspace.set({ root: '/ws', tree })
+    let resolveLoad!: (v: unknown) => void
+    invoke.mockImplementation((cmd: unknown) =>
+      cmd === 'load_workspace_ui'
+        ? new Promise((r) => {
+            resolveLoad = r
+          })
+        : Promise.resolve(undefined),
+    )
+    const restoreTabs = vi.fn()
+    const openScratch = vi.fn()
+    const p = restoreTabsForRoot('/ws', restoreTabs, openScratch)
+    openList.set(['/ws/already-open.md']) // the window gained an open file mid-lookup
+    resolveLoad(STRIP)
+    await p
+    expect(restoreTabs).not.toHaveBeenCalled()
     expect(openScratch).not.toHaveBeenCalled()
   })
 })
@@ -402,7 +430,7 @@ describe('bootApp', () => {
     const teardown = bootApp({
       menuEvents: { 'menu:new': onNew },
       openStartupFile: vi.fn(),
-      openRestoredFile: vi.fn(),
+      restoreTabs: vi.fn(),
       openScratch: vi.fn(),
     })
     await flush()
@@ -417,7 +445,13 @@ describe('bootApp', () => {
     expect(onNew).toHaveBeenCalledTimes(1)
   })
 
-  /** Boot-time IPC table for the last-file restore tests; overrides win per-command. */
+  const STRIP: WorkspaceTabs = {
+    tabs: ['/ws/docs/note.md', '/ws/other.md'],
+    preview: null,
+    active: '/ws/docs/note.md',
+  }
+
+  /** Boot-time IPC table for the strip restore tests; overrides win per-command. */
   const bootMock = (overrides: Record<string, unknown> = {}) =>
     invoke.mockImplementation(async (cmd: unknown) => {
       if ((cmd as string) in overrides) return overrides[cmd as string]
@@ -430,49 +464,49 @@ describe('bootApp', () => {
       return undefined
     })
 
-  const boot = (opts: { openRestoredFile?: ReturnType<typeof vi.fn>; openScratch?: ReturnType<typeof vi.fn> } = {}) =>
+  const boot = (opts: { restoreTabs?: ReturnType<typeof vi.fn>; openScratch?: ReturnType<typeof vi.fn> } = {}) =>
     bootApp({
       menuEvents: {},
       openStartupFile: vi.fn(),
-      openRestoredFile: opts.openRestoredFile ?? vi.fn(),
+      restoreTabs: opts.restoreTabs ?? vi.fn(),
       openScratch: opts.openScratch ?? vi.fn(),
     })
 
-  it('an unclaimed window with a restored workspace opens its remembered last file', async () => {
-    bootMock({ load_workspace_ui: '/ws/docs/note.md' })
-    const openRestoredFile = vi.fn()
+  it('an unclaimed window with a restored workspace rebuilds its remembered strip', async () => {
+    bootMock({ load_workspace_ui: STRIP })
+    const restoreTabs = vi.fn()
     const openScratch = vi.fn()
-    const teardown = boot({ openRestoredFile, openScratch })
+    const teardown = boot({ restoreTabs, openScratch })
     await flush()
     expect(invoke).toHaveBeenCalledWith('load_workspace_ui', { root: '/ws' })
-    expect(openRestoredFile).toHaveBeenCalledTimes(1)
-    expect(openRestoredFile).toHaveBeenCalledWith('/ws/docs/note.md')
+    expect(restoreTabs).toHaveBeenCalledTimes(1)
+    expect(restoreTabs).toHaveBeenCalledWith(STRIP)
     expect(openScratch).not.toHaveBeenCalled()
     teardown()
   })
 
-  it('a fresh workspace (no remembered file) boots to the scratch, not the empty page', async () => {
+  it('a fresh workspace (no remembered strip) boots to the scratch, not the empty page', async () => {
     bootMock() // load_workspace_ui: null
-    const openRestoredFile = vi.fn()
+    const restoreTabs = vi.fn()
     const openScratch = vi.fn()
-    const teardown = boot({ openRestoredFile, openScratch })
+    const teardown = boot({ restoreTabs, openScratch })
     await flush()
     expect(openScratch).toHaveBeenCalledTimes(1)
-    expect(openRestoredFile).not.toHaveBeenCalled()
+    expect(restoreTabs).not.toHaveBeenCalled()
     expect(get(emptyState)).toBe(false)
     teardown()
   })
 
-  it('a window-assigned file suppresses the last-file restore (assignment wins)', async () => {
+  it('a window-assigned file suppresses the strip restore (assignment wins)', async () => {
     bootMock({
       take_window_file: { path: '/w/assigned.md', readonly: false },
-      load_workspace_ui: '/ws/docs/note.md',
+      load_workspace_ui: STRIP,
     })
-    const openRestoredFile = vi.fn()
+    const restoreTabs = vi.fn()
     const openScratch = vi.fn()
-    const teardown = boot({ openRestoredFile, openScratch })
+    const teardown = boot({ restoreTabs, openScratch })
     await flush()
-    expect(openRestoredFile).not.toHaveBeenCalled()
+    expect(restoreTabs).not.toHaveBeenCalled()
     expect(openScratch).not.toHaveBeenCalled()
     teardown()
   })
@@ -483,42 +517,43 @@ describe('bootApp', () => {
     // suppress here, which is exactly what this pins.
     bootMock({
       take_opened_files: [{ path: '/w/first.md', readonly: false }],
-      load_workspace_ui: '/ws/docs/note.md',
+      load_workspace_ui: STRIP,
     })
-    const openRestoredFile = vi.fn()
+    const restoreTabs = vi.fn()
     const openScratch = vi.fn()
-    const teardown = boot({ openRestoredFile, openScratch })
+    const teardown = boot({ restoreTabs, openScratch })
     await flush()
-    expect(openRestoredFile).not.toHaveBeenCalled()
+    expect(restoreTabs).not.toHaveBeenCalled()
     expect(openScratch).not.toHaveBeenCalled()
     teardown()
   })
 
-  it('a root adopted AFTER boot opens that workspace\'s last file (mid-session restore)', async () => {
+  it('a root adopted AFTER boot rebuilds that workspace\'s strip (mid-session restore)', async () => {
     bootMock({ restore_workspace: null }) // cold launch, nothing to restore
-    const openRestoredFile = vi.fn()
+    const restoreTabs = vi.fn()
     const openScratch = vi.fn()
-    const teardown = boot({ openRestoredFile, openScratch })
+    const teardown = boot({ restoreTabs, openScratch })
     await flush()
     // Nothing to restore and nothing handed off: the boot settles on the
-    // no-document empty page …
+    // no-document empty page (an unclaimed window) …
     expect(get(emptyState)).toBe(true)
-    expect(openRestoredFile).not.toHaveBeenCalled()
+    expect(restoreTabs).not.toHaveBeenCalled()
     // … and a folder adopted mid-session (dialog / Open Recent / empty-page
-    // recent row) restores ITS last-open file through the same rule.
-    bootMock({ load_workspace_ui: '/ws/docs/note.md' })
+    // recent row) into that still-unclaimed window rebuilds ITS strip through
+    // the same rule.
+    bootMock({ load_workspace_ui: STRIP })
     workspace.set({ root: '/ws', tree })
     await flush()
-    expect(openRestoredFile).toHaveBeenCalledTimes(1)
-    expect(openRestoredFile).toHaveBeenCalledWith('/ws/docs/note.md')
+    expect(restoreTabs).toHaveBeenCalledTimes(1)
+    expect(restoreTabs).toHaveBeenCalledWith(STRIP)
     // A refresh re-adopting the SAME root is not a transition: nothing more fires.
     workspace.set({ root: '/ws', tree })
     await flush()
-    expect(openRestoredFile).toHaveBeenCalledTimes(1)
+    expect(restoreTabs).toHaveBeenCalledTimes(1)
     teardown()
   })
 
-  it('a mid-session adopt with no remembered file lands on the scratch', async () => {
+  it('a mid-session adopt with no remembered strip lands on the scratch', async () => {
     bootMock({ restore_workspace: null })
     const openScratch = vi.fn()
     const teardown = boot({ openScratch })
@@ -531,15 +566,15 @@ describe('bootApp', () => {
 
   it('Close Folder (root -> null) leaves the document alone', async () => {
     bootMock()
-    const openRestoredFile = vi.fn()
+    const restoreTabs = vi.fn()
     const openScratch = vi.fn()
-    const teardown = boot({ openRestoredFile, openScratch })
+    const teardown = boot({ restoreTabs, openScratch })
     await flush()
     expect(openScratch).toHaveBeenCalledTimes(1) // the boot restore itself
     workspace.set({ root: null, tree: null })
     await flush()
     expect(openScratch).toHaveBeenCalledTimes(1) // no further restore fired
-    expect(openRestoredFile).not.toHaveBeenCalled()
+    expect(restoreTabs).not.toHaveBeenCalled()
     expect(get(emptyState)).toBe(false) // and never the empty page mid-session
     teardown()
   })

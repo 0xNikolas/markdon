@@ -4,6 +4,7 @@ import { get, writable, type Writable } from 'svelte/store'
 import { doc } from './doc'
 import { reportError } from './errors'
 import { logWarn } from './logging'
+import { openList, previewPath } from './openList'
 import { isInsideRoot, workspaceName } from './ui'
 import { listenScoped } from './windowing'
 
@@ -274,35 +275,120 @@ export async function takeStartupWorkspace(): Promise<boolean> {
 }
 
 /**
- * Last path persisted per root — the settings.ts `lastPersisted`-style guard:
- * skips the IPC write when the value on disk is already what we'd store, so
- * repeated store churn on one path never spams `save_workspace_ui`. Only a
- * suppression cache: staleness on failure is harmless (the next differing
- * path writes again).
+ * The whole persisted Open Files strip for a workspace: the pinned rows in
+ * strip order (`tabs`), the volatile italic preview row (`preview`, never one
+ * of `tabs`), and the file showing in the editor (`active` — one of `tabs`,
+ * or `preview`, or `null` for a scratch). Mirrors Rust `WorkspaceTabs`.
  */
-const lastRecordedUi = new Map<string, string>()
-
-/** Test support: forget the per-root last-recorded guard. */
-export function resetLastFileRecording(): void {
-  lastRecordedUi.clear()
+export interface WorkspaceTabs {
+  tabs: string[]
+  preview: string | null
+  active: string | null
 }
 
 /**
- * Record `path` as the current workspace's last-open file (the Rust-owned
- * per-workspace ui.json, restored by appBoot on the next open of this
- * workspace). Only paths INSIDE the current root are recorded — standalone
- * opens (Finder files, dialog picks outside the folder) are not workspace
- * working state — and with no root open there is nothing to record against.
- * Best-effort: a failed write only costs the restore, never an error banner.
+ * Last {tabs,preview,active} snapshot written through per root, serialized —
+ * the settings.ts `lastPersisted`-style guard: {@link recordTabState} skips
+ * the IPC write when the strip it would store already matches, so store churn
+ * (and a restore that SETS the stores) never spams `save_workspace_ui`. Only a
+ * suppression cache: staleness on failure is harmless (the next differing
+ * strip writes again).
  */
-export function recordLastFile(path: string): void {
+const lastWrittenUi = new Map<string, string>()
+
+/** Test support: forget the per-root last-written guard and drop any pending
+    debounced write. */
+export function resetTabRecording(): void {
+  lastWrittenUi.clear()
+  if (tabWriteTimer !== null) {
+    clearTimeout(tabWriteTimer)
+    tabWriteTimer = null
+  }
+}
+
+/**
+ * Build the strip snapshot for `root` from the live stores, keeping ONLY paths
+ * inside the root: `tabs` is openList ∩ root, `preview` the preview path when
+ * inside the root (it is never in openList), `active` the doc's path when
+ * inside the root — a standalone/other-folder doc persists `active: null`, the
+ * same isInsideRoot gate the old last-file recorder used.
+ */
+function currentTabSnapshot(root: string): WorkspaceTabs {
+  const tabs = get(openList).filter((p) => isInsideRoot(p, root))
+  const pv = get(previewPath)
+  const preview = pv !== null && isInsideRoot(pv, root) ? pv : null
+  const active = get(doc).path
+  return { tabs, preview, active: active !== null && isInsideRoot(active, root) ? active : null }
+}
+
+/**
+ * Pre-stamp the write-through guard so a restore that sets the stores to this
+ * exact strip does NOT echo a `save_workspace_ui` straight back (settings.ts
+ * `applyRemote` pre-stamping `lastPersisted`). The caller passes the strip it
+ * is about to install; the eventual debounced {@link recordTabState} computes
+ * the same serialization and suppresses. Serialization MUST match
+ * currentTabSnapshot's field order.
+ */
+export function stampTabState(root: string, state: WorkspaceTabs): void {
+  lastWrittenUi.set(root, JSON.stringify(state))
+}
+
+/**
+ * Persist the current workspace's whole Open Files strip (the Rust-owned
+ * per-workspace ui.json, restored by appBoot on the next open of this
+ * workspace). Purely additive per root: paths outside the current root are
+ * excluded, and no root's state is ever written under another's key, so a
+ * standalone file open can never clobber a workspace's tabs. The serialized
+ * last-written guard suppresses an unchanged re-write (and a restore's own
+ * store-sets, pre-stamped via {@link stampTabState}). With no root open there
+ * is nothing to record against. Best-effort: a failed write only costs the
+ * restore, never an error banner — buffer content is never persisted here, so
+ * a dropped write can never lose unsaved edits.
+ */
+function recordTabState(): void {
   const root = get(workspace).root
-  if (root === null || !isInsideRoot(path, root)) return
-  if (lastRecordedUi.get(root) === path) return
-  lastRecordedUi.set(root, path)
-  invoke('save_workspace_ui', { root, lastFile: path }).catch((e) =>
-    logWarn('workspace ui save failed', e),
-  )
+  if (root === null) return
+  const snapshot = currentTabSnapshot(root)
+  const serialized = JSON.stringify(snapshot)
+  if (lastWrittenUi.get(root) === serialized) return
+  lastWrittenUi.set(root, serialized)
+  invoke('save_workspace_ui', {
+    root,
+    tabs: snapshot.tabs,
+    preview: snapshot.preview,
+    active: snapshot.active,
+  }).catch((e) => logWarn('workspace ui save failed', e))
+}
+
+/**
+ * Trailing-edge debounce over {@link recordTabState}: a burst of strip changes
+ * (a multi-file drain pinning several rows, a bulk close) coalesces into ONE
+ * write instead of one per store update. The window is short enough that the
+ * strip is settled well before a normal quit; {@link flushTabWrite} covers the
+ * tail on window close.
+ */
+const TAB_WRITE_DEBOUNCE_MS = 250
+let tabWriteTimer: ReturnType<typeof setTimeout> | null = null
+
+function scheduleTabWrite(): void {
+  if (tabWriteTimer !== null) clearTimeout(tabWriteTimer)
+  tabWriteTimer = setTimeout(() => {
+    tabWriteTimer = null
+    recordTabState()
+  }, TAB_WRITE_DEBOUNCE_MS)
+}
+
+/**
+ * Flush a pending debounced strip write immediately — called from the window
+ * close path (App.svelte `closeThisWindow`) and this module's teardown so the
+ * final tab set before the window is destroyed is never lost to the debounce.
+ * A no-op when nothing is pending.
+ */
+export function flushTabWrite(): void {
+  if (tabWriteTimer === null) return
+  clearTimeout(tabWriteTimer)
+  tabWriteTimer = null
+  recordTabState()
 }
 
 /**
@@ -310,13 +396,16 @@ export function recordLastFile(path: string): void {
  * workspace, restoring the persisted last folder ONLY on a non-handed-off
  * (cold) launch — a spawned child starts folder-less rather than adopting its
  * spawner's folder; refresh the tree when the open document's path changes (a
- * Save As into the workspace shows the file immediately), record that path as
- * the workspace's last-open file ({@link recordLastFile}), and refresh when
- * the window regains focus (external edits happen while unfocused). Also
- * keeps a Rust-side recursive watcher pointed at the current root
- * (installed/replaced on every root transition, torn down on close), whose
- * debounced `workspace:changed` events refresh the tree WITHOUT a refocus.
- * Returns an async teardown, matching `initFileSync`.
+ * Save As into the workspace shows the file immediately); write the whole Open
+ * Files strip through to the workspace's ui.json whenever it changes (debounced
+ * via {@link scheduleTabWrite}, over the openList / previewPath / doc.path
+ * stores), so reopening the workspace rebuilds every row; and refresh when the
+ * window regains focus (external edits happen while unfocused). Also keeps a
+ * Rust-side recursive watcher pointed at the current root (installed/replaced
+ * on every root transition, torn down on close), whose debounced
+ * `workspace:changed` events refresh the tree WITHOUT a refocus. Returns an
+ * async teardown, matching `initFileSync` — which FLUSHES any pending strip
+ * write so the final tab set isn't lost when the window tears down.
  *
  * `onBootRestoreSettled` fires exactly once, after the boot-time
  * handoff/restore chain has fully settled (workspace adopted — the store is
@@ -333,14 +422,37 @@ export function initWorkspace(onBootRestoreSettled?: () => void): Promise<() => 
     onBootRestoreSettled?.()
   })
 
+  // The active file (doc.path) is one third of the persisted strip; a path
+  // change schedules a write (content-only churn — keystrokes — never does,
+  // since it doesn't change the strip). It also drives the tree refresh.
   let lastPath: string | null = get(doc).path
   const unsubDoc = doc.subscribe((s) => {
     if (s.path === lastPath) return
     lastPath = s.path
-    if (s.path !== null) {
-      refreshWorkspace()
-      recordLastFile(s.path)
+    scheduleTabWrite()
+    if (s.path !== null) refreshWorkspace()
+  })
+
+  // The other two thirds: the pinned rows and the preview slot. Skip each
+  // store's replay-on-subscribe (Svelte fires it synchronously with the
+  // current value) so init itself schedules nothing — only a real post-init
+  // change writes, and a boot/mid-session restore pre-stamps the guard so its
+  // own store-sets suppress rather than echo a save back.
+  let firstOpenList = true
+  const unsubOpenList = openList.subscribe(() => {
+    if (firstOpenList) {
+      firstOpenList = false
+      return
     }
+    scheduleTabWrite()
+  })
+  let firstPreview = true
+  const unsubPreview = previewPath.subscribe(() => {
+    if (firstPreview) {
+      firstPreview = false
+      return
+    }
+    scheduleTabWrite()
   })
 
   // Root transitions (dialog open, restore, startup handoff, close) install /
@@ -368,7 +480,10 @@ export function initWorkspace(onBootRestoreSettled?: () => void): Promise<() => 
   })
 
   return Promise.all([unlistenFocus, unlistenChanged]).then(([offFocus, offChanged]) => () => {
+    flushTabWrite() // persist the final strip before the window tears down
     unsubDoc()
+    unsubOpenList()
+    unsubPreview()
     unsubWs()
     offFocus()
     offChanged()
