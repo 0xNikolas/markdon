@@ -18,6 +18,7 @@ import {
   showEmptyState,
 } from './doc'
 import { emptyState } from './ui'
+import { recencyOf, resetRecency } from './recency'
 
 describe('doc store', () => {
   beforeEach(() => {
@@ -477,5 +478,32 @@ describe('empty-state transitions', () => {
     showEmptyState()
     edit('typed')
     expect(get(emptyState)).toBe(true)
+  })
+})
+
+describe('recency wiring (Quick Open sections)', () => {
+  beforeEach(() => {
+    resetRecency()
+  })
+
+  it('openDoc bumps the loaded path to most-recent', () => {
+    openDoc('/tmp/a.md', '# A')
+    openDoc('/tmp/b.md', '# B')
+    expect(recencyOf('/tmp/b.md')).toBeGreaterThan(recencyOf('/tmp/a.md'))
+    expect(recencyOf('/tmp/a.md')).toBeGreaterThan(0)
+  })
+
+  it('restoreDoc (a cache restore) is a load too and bumps recency', () => {
+    openDoc('/tmp/a.md', '# A')
+    restoreDoc('/tmp/b.md', { content: 'x', savedContent: 'x', normalized: null })
+    expect(recencyOf('/tmp/b.md')).toBeGreaterThan(recencyOf('/tmp/a.md'))
+  })
+
+  it('newDoc records nothing — the untitled scratch has no path to rank', () => {
+    openDoc('/tmp/a.md', '# A')
+    newDoc()
+    openDoc('/tmp/b.md', '# B')
+    // The scratch consumed no sequence slot: b lands exactly one past a.
+    expect(recencyOf('/tmp/b.md')).toBe(recencyOf('/tmp/a.md') + 1)
   })
 })

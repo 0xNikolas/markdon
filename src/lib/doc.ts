@@ -1,6 +1,7 @@
 import { writable, type Writable } from 'svelte/store'
 import { rewritePrefix, isSelfOrDescendant } from './paths'
 import { readonlyMemory } from './readonlyMemory'
+import { touchRecency } from './recency'
 import { emptyState } from './ui'
 
 export interface DocState {
@@ -95,6 +96,7 @@ export function isDirty(
 }
 
 export function openDoc(path: string, content: string, readonly = false): void {
+  touchRecency(path) // every pathed load feeds Quick Open's recency sort
   if (readonly) readonlyMemory.lock(path)
   const effective = readonly || readonlyMemory.has(path)
   updateDoc((s) => ({
@@ -128,6 +130,7 @@ export function restoreDoc(
   path: string,
   cached: { content: string; savedContent: string; normalized: string | null },
 ): void {
+  touchRecency(path) // a cache restore is a load too (see openDoc)
   updateDoc((s) => ({
     path,
     content: cached.content,

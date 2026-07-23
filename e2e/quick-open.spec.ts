@@ -17,11 +17,15 @@ import {
 
 /**
  * The ⌘P Quick Open palette: opens via the keyboard fallback and the native
- * menu event, lists only the workspace's markdown files (empty query ranks
- * the current file last), fuzzy-filters as you type, arrows move the
- * selection, Enter opens the pick PINNED in place (never a preview, never a
- * new window), and Escape / Backspace-on-empty / outside click dismiss.
- * Without a workspace there is nothing to list, so ⌘P does nothing at all.
+ * menu event, lists only the workspace's markdown files in two sections —
+ * 'Open Files' (the strip's rows, most recently loaded first, ACTIVE file
+ * last on the empty query) then 'Workspace' (everything else, session
+ * recency first, tree order for never-loaded files). Typing fuzzy-filters
+ * within each section (a section with no matches hides, header included),
+ * arrows move the selection across sections, Enter opens the pick PINNED in
+ * place (never a preview, never a new window), and Escape /
+ * Backspace-on-empty / outside click dismiss. Without a workspace there is
+ * nothing to list, so ⌘P does nothing at all.
  */
 
 const MARKER = 'edited-by-e2e'
@@ -31,9 +35,14 @@ function palette(page: Page) {
   return page.getByRole('dialog', { name: 'Quick Open' })
 }
 
-/** Every result row's basename, in rendered order. */
+/** Every result row's basename, in rendered order (headers carry no .name). */
 function rowNames(page: Page) {
   return palette(page).getByRole('option').locator('.name')
+}
+
+/** The non-interactive section headers, in rendered order. */
+function sectionLabels(page: Page) {
+  return palette(page).locator('.section-label')
 }
 
 /** ⌘P (mac) / Ctrl+P (elsewhere) — the handleWindowKeydown fallback path. */
@@ -59,6 +68,8 @@ test.describe('with a workspace', () => {
       'ideas.md',
       'notes.md',
     ])
+    // Nothing open yet: only the Workspace section (its header still shows).
+    await expect(sectionLabels(page)).toHaveText(['Workspace'])
     // The nested row shows its workspace-relative parent, muted.
     await expect(
       palette(page).getByRole('option').filter({ hasText: 'nested.md' }).locator('.dir'),
@@ -78,17 +89,51 @@ test.describe('with a workspace', () => {
     await expect(palette(page)).toHaveCount(0)
   })
 
-  test('the empty query ranks the currently-active file LAST', async ({ page }) => {
+  test('empty query: both sections, open files recency-first with the ACTIVE file LAST', async ({
+    page,
+  }) => {
+    // Open A (notes) then B (ideas) then C (guide, still active): recency
+    // desc within Open Files is C,B,A; the active file then yields the top
+    // slots (VS Code parity) and moves last → B,A,C. The Workspace section
+    // follows with the never-loaded files in tree order.
+    await pinFile(page, 'notes.md')
+    await pinFile(page, 'ideas.md')
     await pinFile(page, 'guide.md')
     await pressQuickOpen(page)
-    // guide.md is the open doc: VS Code parity, it yields the top slots.
+    await expect(sectionLabels(page)).toHaveText(['Open Files', 'Workspace'])
     await expect(rowNames(page)).toHaveText([
-      'nested.md',
+      'ideas.md', // B — most recent after the active file steps aside
+      'notes.md', // A
+      'guide.md', // C — active, last in its section
+      'nested.md', // Workspace, tree order (dirs first)
       'huge.md',
-      'ideas.md',
-      'notes.md',
-      'guide.md',
     ])
+  })
+
+  test('typing filters WITHIN sections; a section with no matches hides its header', async ({
+    page,
+  }) => {
+    await pinFile(page, 'notes.md')
+    await pinFile(page, 'ideas.md')
+    await pressQuickOpen(page)
+
+    // 'id' matches in both sections — each keeps its header and its order.
+    await page.keyboard.type('id')
+    await expect(sectionLabels(page)).toHaveText(['Open Files', 'Workspace'])
+    await expect(rowNames(page)).toHaveText(['ideas.md', 'guide.md'])
+
+    // 'nest' matches nothing among the open files → that section (header
+    // included) disappears; Enter still opens the pick PINNED.
+    await palette(page).getByRole('combobox').fill('')
+    await page.keyboard.type('nest')
+    await expect(sectionLabels(page)).toHaveText(['Workspace'])
+    await expect(rowNames(page)).toHaveText(['nested.md'])
+
+    await page.keyboard.press('Enter')
+    await expect(palette(page)).toHaveCount(0)
+    await expect(
+      openFilesStrip(page).getByRole('button', { name: 'nested.md', exact: true }),
+    ).toHaveAttribute('aria-current', 'true')
   })
 
   test('typing fuzzy-filters; Enter opens the pick PINNED in place', async ({ page }) => {

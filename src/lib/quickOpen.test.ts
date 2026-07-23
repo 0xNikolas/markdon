@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import type { WorkspaceDir } from './workspace'
-import { flattenMarkdownFiles, fuzzyRank, QUICK_OPEN_CAP, type QuickOpenItem } from './quickOpen'
+import {
+  flattenMarkdownFiles,
+  fuzzyRank,
+  quickOpenSections,
+  QUICK_OPEN_CAP,
+  type QuickOpenItem,
+} from './quickOpen'
 
 // -- fixtures -----------------------------------------------------------------
 
@@ -159,5 +165,99 @@ describe('fuzzyRank: ranking', () => {
       'notes.md',
       'notes-old.md',
     ])
+  })
+})
+
+describe('quickOpenSections', () => {
+  // A flat five-file tree; recency injected per test (a pure lookup, so no
+  // recency.ts state involved here — its wiring is doc.test.ts's business).
+  const SECTREE: WorkspaceDir = {
+    name: 'ws',
+    path: '/ws',
+    truncated: false,
+    dirs: [],
+    files: ['a.md', 'b.md', 'c.md', 'd.md', 'e.md'].map((n) => file('', n)),
+  }
+  const p = (n: string) => `/ws/${n}`
+  const none = () => 0
+  const recency = (order: string[]) => (path: string) => {
+    const i = order.indexOf(path)
+    return i === -1 ? 0 : i + 1 // later in `order` = more recent
+  }
+  const names = (s: { label: string; items: QuickOpenItem[] }[]) =>
+    s.map((sec) => ({ label: sec.label, names: sec.items.map((i) => i.name) }))
+
+  it('with nothing open: a single Workspace section in tree order', () => {
+    expect(names(quickOpenSections('', SECTREE, [], null, null, none))).toEqual([
+      { label: 'Workspace', names: ['a.md', 'b.md', 'c.md', 'd.md', 'e.md'] },
+    ])
+  })
+
+  it('empty query: open files first, recency desc, ACTIVE last in its section', () => {
+    // Opened a → b → c (c active): recency desc is c,b,a; active-last → b,a,c.
+    const r = recency([p('a.md'), p('b.md'), p('c.md')])
+    const sections = quickOpenSections(
+      '',
+      SECTREE,
+      [p('a.md'), p('b.md'), p('c.md')],
+      null,
+      p('c.md'),
+      r,
+    )
+    expect(names(sections)).toEqual([
+      { label: 'Open Files', names: ['b.md', 'a.md', 'c.md'] },
+      { label: 'Workspace', names: ['d.md', 'e.md'] },
+    ])
+  })
+
+  it('the preview row counts as an open file (strip order), never duplicated', () => {
+    const sections = quickOpenSections('', SECTREE, [p('a.md')], p('b.md'), p('b.md'), none)
+    expect(names(sections)).toEqual([
+      { label: 'Open Files', names: ['a.md', 'b.md'] }, // b active → last
+      { label: 'Workspace', names: ['c.md', 'd.md', 'e.md'] },
+    ])
+  })
+
+  it('Workspace sorts known recency first (opened-then-closed), then tree order', () => {
+    // d.md was loaded this session but is no longer open anywhere.
+    const sections = quickOpenSections('', SECTREE, [], null, null, recency([p('d.md')]))
+    expect(names(sections)).toEqual([
+      { label: 'Workspace', names: ['d.md', 'a.md', 'b.md', 'c.md', 'e.md'] },
+    ])
+  })
+
+  it('an out-of-workspace open file gets a constructed item with its absolute dir', () => {
+    const sections = quickOpenSections('', SECTREE, ['/elsewhere/x.md'], null, null, none)
+    expect(sections[0].items[0]).toEqual({ path: '/elsewhere/x.md', name: 'x.md', dir: '/elsewhere' })
+  })
+
+  it('a query filters within each section; a section with no matches disappears', () => {
+    const r = recency([p('a.md')])
+    // 'd.' matches only d.md (a bare 'd' would be a subsequence of every
+    // basename's trailing ".md" too) → the Open Files section vanishes.
+    const sections = quickOpenSections('d.', SECTREE, [p('a.md')], null, p('a.md'), r)
+    expect(names(sections)).toEqual([{ label: 'Workspace', names: ['d.md'] }])
+  })
+
+  it('a query keeps section order and can match in both sections', () => {
+    const sections = quickOpenSections('md', SECTREE, [p('c.md')], null, p('c.md'), none)
+    expect(names(sections)).toEqual([
+      { label: 'Open Files', names: ['c.md'] },
+      { label: 'Workspace', names: ['a.md', 'b.md', 'd.md', 'e.md'] },
+    ])
+  })
+
+  it(`caps at ${QUICK_OPEN_CAP} ACROSS sections — Workspace is truncated first`, () => {
+    const many: WorkspaceDir = {
+      name: 'ws',
+      path: '/ws',
+      truncated: false,
+      dirs: [],
+      files: Array.from({ length: QUICK_OPEN_CAP + 10 }, (_, i) => file('', `f${i}.md`)),
+    }
+    const open = [p('f0.md'), p('f1.md'), p('f2.md')]
+    const sections = quickOpenSections('', many, open, null, null, none)
+    expect(sections[0].items).toHaveLength(3)
+    expect(sections[1].items).toHaveLength(QUICK_OPEN_CAP - 3)
   })
 })

@@ -12,7 +12,7 @@
 <script lang="ts">
   import { tick } from 'svelte'
   import Icon from './Icon.svelte'
-  import { fileIcon } from './lib/workspace'
+  import { fileIcon, workspace } from './lib/workspace'
   import { basename } from './lib/treeState'
   import { stripOrder } from './lib/openList'
   import { stripKeyIntent } from './lib/stripNav'
@@ -193,11 +193,18 @@
 
 <svelte:window onpointerdown={onWindowPointerDown} />
 
-{#if openFiles.length > 0 || previewRow !== null}
+{#if $workspace.tree !== null || rows.length > 0}
   <!-- VS Code "Open Editors"-style strip: every opened document, in- or
        out-of-workspace, so there's one consistent surface for "what's on
        screen" rather than the tree alone. Paths-only --
-       the single-doc model is unchanged, this is just a switch list. -->
+       the single-doc model is unchanged, this is just a switch list.
+
+       ALWAYS rendered while a workspace is open, even with zero rows (the
+       list reserves a fixed min-height, quiet blank when empty): mounting
+       the section on the first preview/pin used to push the workspace tree
+       down BETWEEN the two physical clicks of a dblclick, so the second
+       click landed on a different row. Rows-only rendering remains for the
+       no-workspace case (an OS-opened file with no tree below to shift). -->
   <div class="header">
     <span class="label">Open Files</span>
   </div>
@@ -341,10 +348,33 @@
     color: var(--fg-faint);
   }
 
+  /* Fixed-band list: min 3 rows, max 6, scroll beyond. One row is 32px
+     (.open-file-main: 8px top + 8px bottom padding around 16px content —
+     the icon; the 13px UI text line-box is shorter) plus the column's 4px
+     gap between rows, so N rows measure N*32 + (N-1)*4:
+       3 rows -> 104px (min)   6 rows -> 212px (max).
+     The 3-row floor covers the common few-files case with ZERO layout
+     shift below (the dblclick-race fix: empty->1, 1->2 and 2->3 all land
+     inside the reserved band); a full 6-row reservation would fix 3->6
+     too but permanently waste ~108px of sidebar with 0-1 files open —
+     accepted tradeoff: the pane still grows at the rarer 3->4->5->6
+     transitions, and never past 6 (overflow scrolls). */
   .tree {
     display: flex;
     flex-direction: column;
     gap: 4px;
+    min-height: 104px;
+    max-height: 212px;
+    /* The sidebar is itself a scrollable flex column; without this, an
+       overfull sidebar would flex-squeeze the band back down to min-height
+       (the explicit min-height overrides the auto content floor that
+       protected it before) and reintroduce height instability. */
+    flex-shrink: 0;
+    overflow-y: auto;
+    /* No custom scrollbar CSS exists anywhere (the sidebar/tree scroll on
+       the platform's default overlay scrollbar); `thin` is the one standard
+       knob that keeps this inner scrollbar quieter than the sidebar's own. */
+    scrollbar-width: thin;
   }
 
   .active-bar {

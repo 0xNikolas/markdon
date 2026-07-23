@@ -1,18 +1,25 @@
 <script lang="ts">
   import { doc } from './lib/doc'
   import { workspace } from './lib/workspace'
+  import { openList, previewPath } from './lib/openList'
+  import { recencyOf } from './lib/recency'
   import { closeOverlay } from './lib/overlay'
-  import { flattenMarkdownFiles, fuzzyRank } from './lib/quickOpen'
+  import { quickOpenSections } from './lib/quickOpen'
   import { focusTrap } from './lib/focusTrap'
   import { portal } from './lib/portal'
 
   /**
    * The ⌘P Quick Open palette (VS Code's Go to File), mounted by App.svelte
-   * while the 'quickopen' overlay is active. Lists the workspace tree's
-   * markdown files (lib/quickOpen.ts owns flattening and ranking); typing
-   * fuzzy-filters, ArrowUp/Down move the selection, Enter hands the pick to
-   * App (which closes the overlay FIRST, then opens pinned in place), and
-   * Escape / Backspace-on-empty-input / an outside click dismiss.
+   * while the 'quickopen' overlay is active. Two recency-sorted sections
+   * (lib/quickOpen.ts owns flattening, sectioning and ranking): 'Open Files'
+   * — the strip's rows, most recent first, active last on the empty query —
+   * then 'Workspace' with every other markdown file. Typing fuzzy-filters
+   * WITHIN each section (an empty section hides, header included),
+   * ArrowUp/Down move the selection across sections as one flat list
+   * (headers are skipped by construction — they are never options), Enter
+   * hands the pick to App (which closes the overlay FIRST, then opens pinned
+   * in place), and Escape / Backspace-on-empty-input / an outside click
+   * dismiss.
    */
   interface Props {
     onPick: (path: string) => void
@@ -32,10 +39,28 @@
     inputEl?.focus()
   })
 
-  const items = $derived(flattenMarkdownFiles($workspace.tree))
   // $doc.path threads the active file through so the empty query ranks it
-  // last (see fuzzyRank) — the file you're in is the least likely jump target.
-  const results = $derived(fuzzyRank(query, items, $doc.path))
+  // last within Open Files (see quickOpenSections) — the file you're in is
+  // the least likely jump target. `recencyOf` is read non-reactively: any
+  // recency change comes from a doc load, and every doc load closes this
+  // palette, so a stale read while it is open is impossible.
+  const sections = $derived(
+    quickOpenSections(query, $workspace.tree, $openList, $previewPath, $doc.path, recencyOf),
+  )
+  // The keyboard cursor runs over this FLAT list — section headers are not
+  // part of it, so arrowing skips them by construction.
+  const results = $derived(sections.flatMap((s) => s.items))
+  // Each section's first flat index, aligned with `sections` — the markup
+  // renders per-section but ids/selection stay flat-indexed.
+  const sectionStarts = $derived.by(() => {
+    const starts: number[] = []
+    let sum = 0
+    for (const s of sections) {
+      starts.push(sum)
+      sum += s.items.length
+    }
+    return starts
+  })
   // Clamped view of the keyboard cursor: a shrinking result list (typing, or
   // a workspace refresh mid-palette) must never leave it past the end.
   const activeIndex = $derived(Math.max(0, Math.min(selected, results.length - 1)))
@@ -45,9 +70,10 @@
     selected = 0 // every query edit restarts the selection at the best match
   }
 
-  // Keep the selected row on-screen while arrowing through the scrolling list.
+  // Keep the selected row on-screen while arrowing through the scrolling
+  // list — by id, not child index: headers sit between the option rows.
   $effect(() => {
-    listEl?.children[activeIndex]?.scrollIntoView({ block: 'nearest' })
+    listEl?.querySelector(`#quick-open-item-${activeIndex}`)?.scrollIntoView({ block: 'nearest' })
   })
 
   function move(delta: number) {
@@ -123,22 +149,32 @@
     />
     {#if results.length > 0}
       <ul bind:this={listEl} id="quick-open-list" class="list" role="listbox" aria-label="Files">
-        {#each results as r, i (r.path)}
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <!-- Keyboard interaction lives on the input (combobox pattern);
-               pointermove-selects + click-picks mirror a native list. -->
-          <li
-            id="quick-open-item-{i}"
-            role="option"
-            aria-selected={i === activeIndex}
-            class="row"
-            class:selected={i === activeIndex}
-            onpointermove={() => (selected = i)}
-            onclick={() => onPick(r.path)}
-          >
-            <span class="name">{r.name}</span>
-            {#if r.dir}<span class="dir">{r.dir}</span>{/if}
-          </li>
+        {#each sections as sec, si (sec.label)}
+          <!-- Non-interactive section header, eyebrow-styled (EmptyState's
+               'Recent' label). role=presentation over role=group wrappers:
+               grouping would nest the options a level deeper and fight the
+               flat activedescendant/id indexing for no AT win — a
+               presentation row simply drops out of the listbox's semantics
+               (never an option, so the keyboard cursor can't land on it). -->
+          <li class="section-label" role="presentation">{sec.label}</li>
+          {#each sec.items as r, j (r.path)}
+            {@const i = sectionStarts[si] + j}
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <!-- Keyboard interaction lives on the input (combobox pattern);
+                 pointermove-selects + click-picks mirror a native list. -->
+            <li
+              id="quick-open-item-{i}"
+              role="option"
+              aria-selected={i === activeIndex}
+              class="row"
+              class:selected={i === activeIndex}
+              onpointermove={() => (selected = i)}
+              onclick={() => onPick(r.path)}
+            >
+              <span class="name">{r.name}</span>
+              {#if r.dir}<span class="dir">{r.dir}</span>{/if}
+            </li>
+          {/each}
         {/each}
       </ul>
     {:else}
@@ -201,6 +237,14 @@
     gap: 1px;
     max-height: 336px;
     overflow-y: auto;
+  }
+  /* Section header: EmptyState's .eyebrow, so the two read as one system. */
+  .section-label {
+    padding: 6px 8px 2px;
+    font: 600 11px var(--font-ui);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--fg-faint);
   }
   .row {
     display: flex;

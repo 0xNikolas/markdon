@@ -1,5 +1,6 @@
 import type { WorkspaceDir } from './workspace'
 import { isMarkdownFile } from './workspace'
+import { stripOrder } from './openList'
 
 /**
  * Pure helpers behind the ⌘P Quick Open palette: flatten the workspace tree
@@ -135,4 +136,106 @@ export function fuzzyRank(
       Number(b.inName) - Number(a.inName) || b.score - a.score || a.len - b.len || a.ord - b.ord,
   )
   return scored.slice(0, QUICK_OPEN_CAP).map((s) => s.item)
+}
+
+// -- sectioned palette --------------------------------------------------------
+
+/** One rendered palette section: a non-interactive header + its items. */
+export interface QuickOpenSection {
+  label: 'Open Files' | 'Workspace'
+  items: QuickOpenItem[]
+}
+
+/**
+ * A palette item for a strip path: the flattened tree's entry when the path
+ * is in the workspace, else a constructed one (the strip also lists
+ * out-of-workspace documents) whose `dir` is the absolute parent directory —
+ * honest about where the file really lives, since no workspace-relative form
+ * exists for it.
+ */
+function itemForStripPath(path: string, byPath: Map<string, QuickOpenItem>): QuickOpenItem {
+  const known = byPath.get(path)
+  if (known !== undefined) return known
+  const slash = path.lastIndexOf('/')
+  return { path, name: path.slice(slash + 1), dir: slash > 0 ? path.slice(0, slash) : '' }
+}
+
+/** Stable sort by recency desc: unknowns (recency 0) keep the input order, last. */
+function byRecencyDesc(
+  items: QuickOpenItem[],
+  recencyOf: (path: string) => number,
+): QuickOpenItem[] {
+  return items
+    .map((item, ord) => ({ item, ord, recency: recencyOf(item.path) }))
+    .sort((a, b) => b.recency - a.recency || a.ord - b.ord)
+    .map((s) => s.item)
+}
+
+/**
+ * Build the palette's two sections:
+ *
+ * - 'Open Files' — the Open Files strip's paths (openList + the preview row,
+ *   via the same stripOrder the strip renders), recency-sorted (most recent
+ *   load first). On the EMPTY query the active file moves LAST within the
+ *   section — the existing VS Code rule kept per-section: the file you are
+ *   already in is the one you least mean to jump to, so it yields the top
+ *   slots (and a pathed active doc is always pinned or previewed, so it can
+ *   only ever sit in this section).
+ * - 'Workspace' — every remaining markdown file of the tree, recency-sorted
+ *   where known (opened-then-closed files rank first), unknowns following in
+ *   tree order.
+ *
+ * Non-empty query: fuzzyRank filters and ranks WITHIN each section (each
+ * section's recency order is its tie-break, via fuzzyRank's stable `ord`);
+ * sections keep their order, and a section with no matches disappears.
+ *
+ * The {@link QUICK_OPEN_CAP} spans BOTH sections, and the Open Files section
+ * is never the one truncated first: it takes its full row count (itself
+ * capped only when it alone exceeds the cap) and the Workspace section gets
+ * whatever remains.
+ *
+ * `recencyOf` is injected (recency.ts's lookup) so ordering stays a pure,
+ * unit-testable function of its arguments.
+ */
+export function quickOpenSections(
+  query: string,
+  tree: WorkspaceDir | null,
+  open: string[],
+  preview: string | null,
+  activePath: string | null,
+  recencyOf: (path: string) => number,
+): QuickOpenSection[] {
+  const treeItems = flattenMarkdownFiles(tree)
+  const byPath = new Map(treeItems.map((i) => [i.path, i]))
+  const strip = stripOrder(open, preview)
+  const inStrip = new Set(strip)
+
+  let openItems = byRecencyDesc(
+    strip.map((p) => itemForStripPath(p, byPath)),
+    recencyOf,
+  )
+  let wsItems = byRecencyDesc(
+    treeItems.filter((i) => !inStrip.has(i.path)),
+    recencyOf,
+  )
+
+  if (query === '') {
+    openItems = [
+      ...openItems.filter((i) => i.path !== activePath),
+      ...openItems.filter((i) => i.path === activePath),
+    ]
+  } else {
+    // fuzzyRank ignores activePath on a non-empty query by contract — the
+    // active file competes like any other row once the user is typing.
+    openItems = fuzzyRank(query, openItems)
+    wsItems = fuzzyRank(query, wsItems)
+  }
+
+  openItems = openItems.slice(0, QUICK_OPEN_CAP)
+  wsItems = wsItems.slice(0, QUICK_OPEN_CAP - openItems.length)
+
+  const sections: QuickOpenSection[] = []
+  if (openItems.length > 0) sections.push({ label: 'Open Files', items: openItems })
+  if (wsItems.length > 0) sections.push({ label: 'Workspace', items: wsItems })
+  return sections
 }

@@ -25,12 +25,19 @@ export interface SeedOptions {
   overrides?: Record<string, unknown>
   /** Per-command forced rejections (stub __TAURI_IPC_ERRORS__). */
   errors?: Record<string, string>
+  /**
+   * Extra ROOT-LEVEL files merged into the seeded tree (basename → content),
+   * for specs that need more rows than the fixture's five markdown files
+   * (e.g. overflowing the capped Open Files pane). Root-level only — nested
+   * paths would also need __TAURI_DIRS__ entries.
+   */
+  extraFiles?: Record<string, string>
 }
 
 export async function seedWorkspace(page: Page, opts: SeedOptions = {}): Promise<void> {
   await page.addInitScript({ path: STUB })
   await page.addInitScript(
-    ({ root, overrides, errors }) => {
+    ({ root, overrides, errors, extraFiles }) => {
       window.__TAURI_WORKSPACE_ROOT__ = root
       window.__TAURI_DIRS__ = [`${root}/sub`]
       window.__TAURI_FS__ = {
@@ -43,10 +50,20 @@ export async function seedWorkspace(page: Page, opts: SeedOptions = {}): Promise
         [`${root}/huge.md`]: '# Huge\n\n' + 'x'.repeat(100_100) + '\n',
         [`${root}/sub/nested.md`]: '# Nested\n\nnested body\n',
       }
+      if (extraFiles) {
+        for (const [name, content] of Object.entries(extraFiles)) {
+          window.__TAURI_FS__[`${root}/${name}`] = content
+        }
+      }
       if (overrides) window.__TAURI_IPC_OVERRIDES__ = overrides
       if (errors) window.__TAURI_IPC_ERRORS__ = errors
     },
-    { root: ROOT, overrides: opts.overrides ?? null, errors: opts.errors ?? null },
+    {
+      root: ROOT,
+      overrides: opts.overrides ?? null,
+      errors: opts.errors ?? null,
+      extraFiles: opts.extraFiles ?? null,
+    },
   )
 }
 
@@ -124,14 +141,14 @@ export function emitTauri(page: Page, event: string, payload: unknown = null): P
 // -- state builders -----------------------------------------------------------
 
 /**
- * Open `name` as a PINNED strip entry. Deliberately preview-first: a bare
- * dblclick on a tree row while the Open Files strip is unmounted is racy —
- * the first click mounts the strip, which pushes the tree rows down between
- * the two physical clicks, so the second click lands on a different row.
- * Previewing first settles the layout; the dblclick then converts the
- * preview in place (same row count, no shift). (A fresh-workspace boot lands
- * on the scratch with the strip unmounted, so this matters for the first
- * open of nearly every spec.)
+ * Open `name` as a PINNED strip entry. Deliberately preview-first: the Open
+ * Files pane now reserves a 3-row min-height while a workspace is open (a
+ * bare dblclick is safe for the first three rows — open-files-pane.spec.ts
+ * pins that), but the pane still GROWS at the 3→4→5→6 transitions, where a
+ * bare dblclick's first click would shift the tree between the two physical
+ * clicks. Previewing first and awaiting the row settles the layout at ANY
+ * count; the dblclick then converts the preview in place (same row count,
+ * no shift) — so this stays the universally safe builder.
  */
 export async function pinFile(page: Page, name: string): Promise<void> {
   await treeRow(page, name).click()
