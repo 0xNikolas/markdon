@@ -106,6 +106,33 @@ export function openDoc(path: string, content: string, readonly = false): void {
   }))
 }
 
+/**
+ * Restore a stashed buffer from the buffer cache (bufferCache.ts) — like
+ * openDoc, but `savedContent`/`normalized` come from the cached entry instead
+ * of resetting to the loaded content, so dirty edits and the normalization
+ * baseline survive the switch-away/switch-back round trip. `readonly` is
+ * re-derived from readonlyMemory: it is a property of the DOCUMENT and the
+ * cache never stores it. The readonly⇒clean invariant updateDoc asserts holds
+ * here by construction — a readonly doc is clean at stash time (edit() no-ops
+ * while readonly), and lock/unlock only ever happens on the LIVE doc, so a
+ * readonly-locked path can never have accumulated a dirty cache entry.
+ * `loadId` bumps so the {#key} block remounts the editor with the restored
+ * text.
+ */
+export function restoreDoc(
+  path: string,
+  cached: { content: string; savedContent: string; normalized: string | null },
+): void {
+  updateDoc((s) => ({
+    path,
+    content: cached.content,
+    savedContent: cached.savedContent,
+    normalized: cached.normalized,
+    readonly: readonlyMemory.has(path),
+    loadId: s.loadId + 1,
+  }))
+}
+
 export function newDoc(): void {
   updateDoc((s) => ({
     path: null,

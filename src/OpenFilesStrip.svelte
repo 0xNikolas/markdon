@@ -8,10 +8,21 @@
     /** The single-click preview slot (openList.ts) — the strip's italic row. */
     previewPath: string | null
     activePath: string | null
+    /** Rows whose stashed background buffers hold unsaved edits (a dirty dot
+        makes the invisible cache state visible; the active row's dirtiness is
+        already the Header's Edited badge). Previews are never cached. */
+    dirtyPaths?: ReadonlySet<string>
     onOpenFile: (path: string, opts?: { preview?: boolean; inPlace?: boolean }) => void
     onCloseFile: (path: string) => void
   }
-  let { openFiles, previewPath, activePath, onOpenFile, onCloseFile }: Props = $props()
+  let {
+    openFiles,
+    previewPath,
+    activePath,
+    dirtyPaths = new Set(),
+    onOpenFile,
+    onCloseFile,
+  }: Props = $props()
 
   // The italic preview row, rendered only while the previewed path isn't
   // pinned — pinning moves it into openFiles and the slot clears, so a
@@ -46,6 +57,9 @@
           <span class="active-bar"></span>
           <Icon name={fileIcon(basename(path))} size={16} />
           <span class="name">{basename(path)}</span>
+          {#if dirtyPaths.has(path)}
+            <span class="dirty-dot" role="img" aria-label="Unsaved changes"></span>
+          {/if}
         </button>
         <button
           class="close-file"
@@ -204,5 +218,15 @@
      not a commitment" signal. Everything else matches a pinned row. */
   .open-file-row.preview .name {
     font-style: italic;
+  }
+  /* Dirty dot: a stashed background buffer with unsaved edits (VS Code's
+     modified-tab marker) — without it a stashed edit would be invisible
+     until the user returned to the tab. */
+  .dirty-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex-shrink: 0;
   }
 </style>

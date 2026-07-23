@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
   import { get } from 'svelte/store'
-  import { EditorState } from '@codemirror/state'
+  import { EditorSelection, EditorState } from '@codemirror/state'
   import { EditorView } from '@codemirror/view'
   import { closeBrackets } from '@codemirror/autocomplete'
   import {
@@ -14,6 +14,12 @@
     bracketsC,
     readonlyC,
   } from './lib/sourceEditor'
+  import {
+    registerViewStateProvider,
+    unregisterViewStateProvider,
+    consumePendingViewState,
+    type ViewState,
+  } from './lib/bufferCache'
   import { settings } from './lib/settings'
   import { cursor } from './lib/ui'
   import './cm-theme.css'
@@ -29,6 +35,8 @@
 
   let el: HTMLDivElement
   let view: EditorView | undefined
+  // Cursor/scroll snapshot provider for the buffer cache (stash-on-switch).
+  let viewStateProvider: (() => ViewState) | undefined
 
   onMount(() => {
     const state = EditorState.create({
@@ -39,6 +47,24 @@
     registerSourceView(view)
     onViewReady?.(view)
     cursor.set({ line: 1, col: 0 }) // seed the status bar for the caret at doc start
+    viewStateProvider = () => ({
+      mode: 'source',
+      cursor: view!.state.selection.main.head,
+      scroll: view!.scrollDOM.scrollTop,
+    })
+    registerViewStateProvider(viewStateProvider)
+    // Restore a pending buffer-cache view state, if a cache-hit open parked
+    // one for this mode. Best-effort: clamped to the doc, never throws out.
+    const vs = consumePendingViewState('source')
+    if (vs !== null) {
+      try {
+        const pos = Math.max(0, Math.min(vs.cursor, view.state.doc.length))
+        view.dispatch({ selection: EditorSelection.cursor(pos) })
+        view.scrollDOM.scrollTop = vs.scroll
+      } catch {
+        /* view-state restore is cosmetic; the buffer itself is already live */
+      }
+    }
   })
 
   // Reconfigure behavior compartments live when settings change (no rebuild).
@@ -60,6 +86,7 @@
 
   onDestroy(() => {
     registerSourceView(null)
+    if (viewStateProvider) unregisterViewStateProvider(viewStateProvider)
     cursor.set(null) // hide the status-bar Ln/Col segment in WYSIWYG mode
     view?.destroy()
   })

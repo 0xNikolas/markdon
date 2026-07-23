@@ -125,6 +125,36 @@ export async function pinFile(page: Page, name: string): Promise<void> {
 }
 
 /**
+ * Switch to `name` via its workspace-tree row (a single click — a preview
+ * open for unpinned files, an in-place switch for pinned ones) and wait until
+ * its strip row is the active one. With the buffer cache, a switch between
+ * pathed docs never prompts — this helper asserts the LANDED state, so a
+ * regression to prompting shows up as a timeout here.
+ */
+export async function switchTo(page: Page, name: string): Promise<void> {
+  await treeRow(page, name).click()
+  await expect(
+    openFilesStrip(page).getByRole('button', {
+      name: new RegExp(`^${name}( \\(preview\\))?$`),
+    }),
+  ).toHaveAttribute('aria-current', 'true')
+}
+
+/**
+ * Close `name`'s Open Files strip row via its hover close affordance (pinned
+ * or preview row alike). Does NOT wait for the row to disappear — a dirty
+ * cached row opens the discard dialog instead, and the caller owns that
+ * resolution.
+ */
+export async function closeStripRow(page: Page, name: string): Promise<void> {
+  const row = openFilesStrip(page)
+    .locator('.open-file-row')
+    .filter({ hasText: name })
+  await row.hover()
+  await row.getByRole('button', { name: new RegExp(`^Close ${name}`) }).click()
+}
+
+/**
  * Type into the WYSIWYG editor until the doc is actually dirty (Header shows
  * the Edited badge). Milkdown's listener debounces 200ms and its FIRST
  * emission is adopted as the clean baseline (App.svelte adoptNormalization),

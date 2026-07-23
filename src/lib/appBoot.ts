@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import { listenScoped, setWindowTitle } from './windowing'
+import { listenScoped, setWindowTitle, type Routed } from './windowing'
 import { doc, isDirty } from './doc'
 import { openPath, openDrainedEntries, type OpenedEntry } from './files'
 import { initFileSync } from './fileSync'
@@ -18,7 +18,7 @@ import { logWarn } from './logging'
  */
 
 /** Event label -> handler, subscribed via listenScoped (MODE B target filter). */
-export type MenuEventMap = Record<string, () => void>
+export type MenuEventMap = Record<string, (payload: Routed | null) => void>
 
 /**
  * Subscribe every entry of `events`. Returns a SYNC teardown that unlistens

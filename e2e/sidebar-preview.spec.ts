@@ -91,25 +91,20 @@ test('closing the active preview lands on the last pinned neighbour, not a blank
   page,
 }) => {
   await pinFile(page, 'ideas.md')
-  await treeRow(page, 'notes.md').click() // preview, active
+  await treeRow(page, 'notes.md').click() // preview, active (ideas.md stashes)
   await expect(editor(page)).toContainText('hello notes')
-  const readsBefore = (await calls(page, 'read_file')).filter(
-    (c) => c.args.path === '/ws/ideas.md',
-  ).length
 
   const previewRow = openFilesStrip(page).locator('.open-file-row.preview')
   await previewRow.hover()
   await previewRow.getByRole('button', { name: 'Close notes.md (preview)', exact: true }).click()
 
   // d36d448 fix: the preview renders as the LAST row, so its close neighbour
-  // is the last pinned entry — re-read from disk, not newDoc().
+  // is the last pinned entry. With the buffer cache the neighbour restores
+  // from its stashed buffer (a background disk reconcile follows) — asserting
+  // the restored CONTENT decouples this from reconcile timing.
   await expect(
     openFilesStrip(page).getByRole('button', { name: 'ideas.md', exact: true }),
   ).toHaveAttribute('aria-current', 'true')
   await expect(editor(page)).toContainText('idea one')
   await expect(previewRow).toHaveCount(0)
-  const readsAfter = (await calls(page, 'read_file')).filter(
-    (c) => c.args.path === '/ws/ideas.md',
-  ).length
-  expect(readsAfter).toBeGreaterThan(readsBefore)
 })

@@ -13,7 +13,17 @@
     adoptNormalization,
   } from './lib/doc'
   import { recordRevert } from './lib/history'
-  import { open, save, saveAs, openPath, openInPreferredTarget } from './lib/files'
+  import {
+    open,
+    save,
+    saveAs,
+    openPath,
+    openInPreferredTarget,
+    stashActive,
+    saveCachedBuffer,
+    saveAllDirty,
+  } from './lib/files'
+  import { isCachedDirty, anyCachedDirty, evict, dirtyCached } from './lib/bufferCache'
   import {
     openList,
     previewPath,
@@ -49,7 +59,8 @@
     isFindReplaceFallbackKey,
   } from './lib/ui'
   import { activeOverlay, openOverlay, closeOverlay, anyOverlayOpen } from './lib/overlay'
-  import { openWorkspace, closeWorkspace } from './lib/workspace'
+  import { openWorkspace, openRecentWorkspace, closeWorkspace } from './lib/workspace'
+  import { revealLog } from './lib/errors'
   import { exportDocument } from './lib/export'
   import { focusTrap, dialogDismissHandlers } from './lib/focusTrap'
 
@@ -59,13 +70,15 @@
 
   // Run `action` immediately if the document is clean; otherwise defer it behind
   // the discard-confirm modal (the 'discard' overlay) so unsaved edits are never
-  // silently lost. Guards New, Open, and window close uniformly. openOverlay
-  // refuses if any overlay is already up: for the gated menu paths (goto,
-  // history, readonly) that can't happen, and for the ungated ones (Cmd+N,
-  // Cmd+O, window close while e.g. Settings is open on a dirty doc) the action
-  // deliberately no-ops — the buffer is left untouched, which is the safe
-  // replacement for the old behavior of stacking the discard modal invisibly
-  // behind the open overlay.
+  // silently lost. Guards the flows where the buffer would actually be
+  // DESTROYED: closing a tab, the Read-Only toggle's dirty path, and File
+  // History revert. Mere switches between pathed docs go through
+  // switchGuarded below instead — their dirty buffers survive in the buffer
+  // cache, so they never prompt. openOverlay refuses if any overlay is
+  // already up: for the gated menu paths (goto, history, readonly) that can't
+  // happen, and for the ungated ones the action deliberately no-ops — the
+  // buffer is left untouched, which is the safe replacement for the old
+  // behavior of stacking the discard modal invisibly behind the open overlay.
   function guarded(action: () => void) {
     // Every new guard cycle invalidates any remembered deferred-preview path
     // (see pendingPreviewPath): the slot only ever describes the CURRENT
@@ -75,13 +88,27 @@
     else action()
   }
 
+  // The guard for SWITCH-shaped actions (opening another file, New). A dirty
+  // PATHED doc is not at risk on a switch — openPath (or an explicit
+  // stashActive at the call site) stashes its buffer into the cache and the
+  // switch runs immediately. Only a dirty UNTITLED doc still prompts: the
+  // scratch has no cache key, so switching away from it truly discards it.
+  function switchGuarded(action: () => void) {
+    pendingPreviewPath = null
+    const s = get(doc)
+    if (s.path === null && isDirty(s)) openOverlay({ kind: 'discard', action })
+    else action()
+  }
+
   // The path of a PREVIEW open currently deferred behind the discard overlay.
   // Needed because the second click of a tree dblclick lands on the modal
   // backdrop (the overlay mounted between the clicks), so the pin intent
   // would otherwise be lost — the file would re-open as a mere preview after
-  // the prompt resolves. onBackdropDblClick uses it to upgrade the deferred
-  // action in place; cleared whenever the overlay resolves (discard/cancel)
-  // or a new guard cycle starts.
+  // the prompt resolves. Only ever armed while the current doc is a dirty
+  // UNTITLED scratch — the one case a preview open still defers (pathed
+  // switches stash and run immediately). onBackdropDblClick uses it to
+  // upgrade the deferred action in place; cleared whenever the overlay
+  // resolves (discard/cancel) or a new guard cycle starts.
   let pendingPreviewPath: string | null = null
 
   // Dblclick on the discard backdrop while a preview open sits deferred:
@@ -171,35 +198,53 @@
       return
     }
     if (opts.preview) {
-      guarded(() => openPath(path, { preview: true }))
-      // Only when the guard actually deferred (dirty doc -> discard overlay up)
-      // is there a pin intent to protect; an immediate open needs no memory.
+      switchGuarded(() => openPath(path, { preview: true }))
+      // Only when the guard actually deferred (dirty untitled -> discard
+      // overlay up) is there a pin intent to protect; an immediate open needs
+      // no memory.
       if (get(activeOverlay)?.kind === 'discard') pendingPreviewPath = path
       return
     }
     if (opts.inPlace) {
-      guarded(() => openPath(path))
+      switchGuarded(() => openPath(path))
       return
     }
-    openInPreferredTarget(path, (p) => guarded(() => openPath(p)))
+    openInPreferredTarget(path, (p) => switchGuarded(() => openPath(p)))
   }
 
-  // Sidebar Open Files close affordance. A non-active entry can never be
-  // dirty (switching away from a file always resolves the dirty-guard
-  // first), so closing it is a bare removal — from the pinned list, or by
+  // Sidebar Open Files close affordance. Closing a tab DESTROYS its buffer,
+  // so this is guard territory on both branches. A non-active entry may hold
+  // dirty edits in the buffer cache: when it does, the discard modal opens
+  // with the removal deferred (Save routes to saveCachedBuffer for that path
+  // — the background buffer writes without becoming active); a clean
+  // non-active entry closes as a bare removal — from the pinned list, or by
   // vacating the preview slot (the two are mutually exclusive by openPath's
-  // invariant). Closing the active entry (pinned or preview — a preview is a
-  // normal live doc) still runs the guard, then switches to the neighbour
-  // computed BEFORE removal (previous, else next, else null -> falls back to
-  // newDoc()). The preview path is never in openList, but it RENDERS as the
-  // last row (after every pinned one), so closing an active preview appends
-  // it for the lookup — its visual previous neighbour is the last pinned
-  // entry, not a blank new doc. Clearing state inside the guard keeps Cancel
-  // non-destructive.
+  // invariant) — plus cache eviction. Closing the active entry (pinned or
+  // preview — a preview is a normal live doc) still runs the guard against
+  // the live doc, then switches to the neighbour computed BEFORE removal
+  // (previous, else next, else null -> falls back to newDoc()); the
+  // neighbour open restores from the cache via openPath. The preview path is
+  // never in openList, but it RENDERS as the last row (after every pinned
+  // one), so closing an active preview appends it for the lookup — its
+  // visual previous neighbour is the last pinned entry, not a blank new doc.
+  // Clearing state inside the guard keeps Cancel non-destructive.
   function onCloseFile(path: string) {
     if (path !== get(doc).path) {
-      if (path === get(previewPath)) previewPath.set(null)
-      else openList.update((l) => removeOpen(l, path))
+      const closeBackground = () => {
+        if (path === get(previewPath)) previewPath.set(null)
+        else openList.update((l) => removeOpen(l, path))
+        evict(path)
+      }
+      if (isCachedDirty(path)) {
+        pendingPreviewPath = null
+        openOverlay({
+          kind: 'discard',
+          action: closeBackground,
+          save: () => saveCachedBuffer(path),
+        })
+      } else {
+        closeBackground()
+      }
       return
     }
     guarded(() => {
@@ -208,6 +253,7 @@
       const next = neighbourAfterClose(lookup, path, get(doc).path)
       previewPath.update((pv) => (pv === path ? null : pv))
       openList.update((l) => removeOpen(l, path))
+      evict(path) // close destroys: drop any (defensive) cache entry with the row
       if (next === null) newDoc()
       else openPath(next)
     })
@@ -215,15 +261,27 @@
 
   // One close-window action shared by the native close button (Rust
   // intercepts CloseRequested and emits window:close-requested) and the
-  // File-menu Close Window item — both must resolve the dirty guard before
-  // the window is destroyed.
-  const closeThisWindow = () => guarded(() => getCurrentWindow().destroy())
+  // File-menu Close Window item. Destroying the window destroys EVERY buffer
+  // — the live doc and all stashed ones — so the guard prompts when any of
+  // them is dirty, and the modal's Save routes to saveAllDirty (active doc
+  // first, then each dirty cached buffer), only destroying once everything
+  // came back clean.
+  function closeThisWindow() {
+    pendingPreviewPath = null
+    const destroy = () => void getCurrentWindow().destroy()
+    if (isDirty(get(doc)) || anyCachedDirty().length > 0) {
+      openOverlay({ kind: 'discard', action: destroy, save: saveAllDirty })
+    } else {
+      destroy()
+    }
+  }
 
-  // The in-place open for a drained startup/Finder file: guarded so unsaved
-  // edits still prompt, threading each entry's own readonly flag (Finder opens
-  // keep the read-only safety net, argv files open editable).
+  // The in-place open for a drained startup/Finder file: switch-guarded (a
+  // dirty untitled scratch still prompts; a pathed doc stashes), threading
+  // each entry's own readonly flag (Finder opens keep the read-only safety
+  // net, argv files open editable).
   const openStartupFile = (path: string, readonly: boolean) =>
-    guarded(() => openPath(path, { readonly }))
+    switchGuarded(() => openPath(path, { readonly }))
 
   // All boot wiring (event subscriptions, startup drains, watcher/workspace
   // init, native-chrome mirrors) lives in appBoot.ts; App supplies only the
@@ -232,8 +290,11 @@
     bootApp({
       openStartupFile,
       menuEvents: {
-        'menu:new': () => guarded(() => newDoc()),
-        'menu:open': () => guarded(() => open()),
+        // newDoc replaces the doc without going through openPath, so the
+        // pathed doc's stash is explicit here; open() stashes inside its
+        // in-place closure (only once a pick actually landed).
+        'menu:new': () => switchGuarded(() => { stashActive(); newDoc() }),
+        'menu:open': () => switchGuarded(() => open()),
         'menu:save': () => save(),
         'menu:save_as': () => saveAs(),
         'menu:find': () => routeFind(),
@@ -269,6 +330,11 @@
         'menu:settings': () => openOverlay({ kind: 'settings' }),
         'menu:open_folder': () => openWorkspace(),
         'menu:close_folder': () => closeWorkspace(),
+        'menu:open_recent': (p) => {
+          const root = p?.root
+          if (typeof root === 'string') void openRecentWorkspace(root)
+        },
+        'menu:show_log': () => revealLog(),
         'menu:close_tab': () => {
           // The Cmd+W routing rules live in closeTabDecision (appBoot.ts).
           const d = closeTabDecision(get(doc).path, get(previewPath), get(openList))
@@ -277,10 +343,10 @@
               onCloseFile(d.path)
               break
             case 'reopen-preview':
-              guarded(() => openPath(d.path, { preview: true }))
+              switchGuarded(() => openPath(d.path, { preview: true }))
               break
             case 'reopen-pinned':
-              guarded(() => openPath(d.path))
+              switchGuarded(() => openPath(d.path))
               break
             case 'close-window':
               closeThisWindow()
@@ -427,13 +493,24 @@
     if (!saving) cancel()
   })
 
+  // The default Save resolution: the active doc's ordinary save(). An
+  // overlay-supplied `save` (cached-tab close, window-close save-all) wins
+  // when present — those flows' dirty buffers live in the buffer cache, not
+  // (only) the active doc. Either way the modal only continues when the save
+  // reports everything clean; a failure or cancelled Save As keeps it open so
+  // no edits are silently lost.
   async function saveAndContinue() {
     saving = true
     try {
-      await save()
-      // If the save failed or Save As was cancelled the doc is still dirty:
-      // keep the modal open so no edits are silently lost.
-      if (!isDirty(get(doc))) discard()
+      const o = get(activeOverlay)
+      const doSave =
+        o?.kind === 'discard' && o.save !== undefined
+          ? o.save
+          : async () => {
+              await save()
+              return !isDirty(get(doc))
+            }
+      if (await doSave()) discard()
     } finally {
       saving = false
     }
@@ -466,7 +543,8 @@
       previewPath={$previewPath}
       onOpenFile={handleOpenFile}
       onCloseFile={onCloseFile}
-      onNewFile={() => guarded(() => newDoc())}
+      onNewFile={() => switchGuarded(() => { stashActive(); newDoc() })}
+      dirtyPaths={$dirtyCached}
     />
     <div class="content">
       {#if $doc.readonly}

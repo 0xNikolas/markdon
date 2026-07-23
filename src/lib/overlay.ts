@@ -18,7 +18,19 @@ export type Overlay =
   | { kind: 'settings' }
   | { kind: 'goto' }
   | { kind: 'history' }
-  | { kind: 'discard'; action: () => void }
+  | {
+      kind: 'discard'
+      action: () => void
+      /**
+       * What the modal's Save button runs, resolving to whether everything it
+       * was responsible for came back clean (continue) or not (keep the modal
+       * up — no edits silently lost). Omitted = the default active-doc save()
+       * behavior; overridden by cached-tab close (saveCachedBuffer) and
+       * window close (saveAllDirty), whose dirty buffers live in the buffer
+       * cache rather than the active doc.
+       */
+      save?: () => Promise<boolean>
+    }
   | null
 
 export const activeOverlay: Writable<Overlay> = writable(null)

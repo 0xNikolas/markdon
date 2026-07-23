@@ -5,14 +5,16 @@ import { isSelfOrDescendant, rewritePrefix } from './paths'
  * The sidebar's "Open Files" list (MODE A): an ordered,
  * de-duplicated list of every opened document's PATH ONLY — never buffers.
  * The single-document model (doc.ts) is untouched: there is exactly one live
- * buffer, addressed by `$doc.path`. Switching to a list entry re-reads it
- * from disk through the existing guarded `openPath()`.
+ * buffer, addressed by `$doc.path`. Switching to a list entry restores its
+ * stashed buffer from the buffer cache (bufferCache.ts) when one exists, and
+ * re-reads it from disk otherwise — both through `openPath()`.
  *
- * Because switching away from a file always first resolves the dirty-guard
- * (Save/Discard/Cancel), a NON-ACTIVE entry can never be dirty — closing one
- * is therefore a pure array removal with no guard. Closing the ACTIVE entry
- * still runs the dirty-guard before removing it (see App.svelte's
- * `onCloseFile`).
+ * Because switching away from a pinned file stashes its live state, a
+ * NON-ACTIVE entry CAN be dirty (its unsaved edits sit in the cache; cache
+ * keys ⊆ this list). Closing such an entry therefore runs the discard guard
+ * before the removal + cache eviction; a clean non-active entry closes as a
+ * bare removal. Closing the ACTIVE entry still runs the dirty-guard against
+ * the live doc (see App.svelte's `onCloseFile`).
  */
 export const openList: Writable<string[]> = writable([])
 

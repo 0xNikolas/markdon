@@ -38,14 +38,24 @@
     openFiles: string[]
     /** The single-click preview slot (openList.ts) — the strip's italic row. */
     previewPath: string | null
+    /** Paths whose CACHED (background) buffers hold unsaved edits — the
+        strip renders a dirty dot on those rows (bufferCache.dirtyCached). */
+    dirtyPaths?: ReadonlySet<string>
     /** `preview` = single-click glance (always in-place); `inPlace` = the
         explicit Open in New Tab action, which bypasses openMode routing. */
     onOpenFile: (path: string, opts?: { preview?: boolean; inPlace?: boolean }) => void
     onCloseFile: (path: string) => void
     onNewFile: () => void
   }
-  let { activePath, openFiles, previewPath, onOpenFile, onCloseFile, onNewFile }: Props =
-    $props()
+  let {
+    activePath,
+    openFiles,
+    previewPath,
+    dirtyPaths = new Set(),
+    onOpenFile,
+    onCloseFile,
+    onNewFile,
+  }: Props = $props()
 
   // File-operations menu + modal state (local to the sidebar chrome).
   let menuOpen = $state(false)
@@ -219,7 +229,7 @@
   onpointerdown={onPanelPointerDown}
   oncontextmenu={onPanelContextMenu}
 >
-  <OpenFilesStrip {openFiles} {previewPath} {activePath} {onOpenFile} {onCloseFile} />
+  <OpenFilesStrip {openFiles} {previewPath} {activePath} {dirtyPaths} {onOpenFile} {onCloseFile} />
   <SidebarHeader
     {menuOpen}
     {hasRows}

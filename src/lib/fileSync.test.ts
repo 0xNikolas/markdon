@@ -5,8 +5,15 @@ const invoke = vi.fn()
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }))
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}) }))
 
-import { classifyExternalChange, initFileSync, reloadFromDisk } from './fileSync'
-import { doc, openDoc, newDoc } from './doc'
+import {
+  classifyExternalChange,
+  initFileSync,
+  reloadFromDisk,
+  reconcileWithDisk,
+  conflict,
+  dismissConflict,
+} from './fileSync'
+import { doc, openDoc, newDoc, edit, isDirty, restoreDoc, resetReadonlyMemory } from './doc'
 import { errorMessage } from './errors'
 import { watchStatus } from './ui'
 
@@ -152,5 +159,112 @@ describe('reloadFromDisk', () => {
     expect(s.readonly).toBe(true)
     expect(s.content).toBe('new')
     expect(s.savedContent).toBe('new')
+  })
+})
+
+describe('reconcileWithDisk', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    conflict.set(null)
+    resetReadonlyMemory() // an earlier readonly open must not lock these paths
+    newDoc()
+  })
+
+  it('silently reloads a clean buffer when disk differs', async () => {
+    openDoc('/tmp/a.md', 'old')
+    invoke.mockResolvedValue('newer')
+    await reconcileWithDisk('/tmp/a.md')
+    const s = get(doc)
+    expect(s.content).toBe('newer')
+    expect(s.savedContent).toBe('newer')
+    expect(get(conflict)).toBeNull()
+    // The silent adopt is recorded to File History (recoverable overwrite).
+    expect(invoke).toHaveBeenCalledWith('record_history', {
+      path: '/tmp/a.md',
+      trigger: 'external',
+    })
+  })
+
+  it('raises the conflict bar for a dirty buffer', async () => {
+    openDoc('/tmp/a.md', 'base')
+    edit('mine')
+    invoke.mockResolvedValue('theirs')
+    await reconcileWithDisk('/tmp/a.md')
+    expect(get(conflict)).toBe('theirs')
+    expect(get(doc).content).toBe('mine') // buffer untouched until the user decides
+  })
+
+  it('ignores when disk matches savedContent (our own write landing)', async () => {
+    openDoc('/tmp/a.md', 'base')
+    edit('mine')
+    invoke.mockResolvedValue('base')
+    await reconcileWithDisk('/tmp/a.md')
+    expect(get(conflict)).toBeNull()
+    expect(isDirty(get(doc))).toBe(true)
+  })
+
+  it('respects a prior decline of this exact disk version', async () => {
+    openDoc('/tmp/a.md', 'base')
+    edit('mine')
+    invoke.mockResolvedValue('theirs')
+    await reconcileWithDisk('/tmp/a.md')
+    expect(get(conflict)).toBe('theirs')
+    dismissConflict() // "Keep mine"
+    await reconcileWithDisk('/tmp/a.md')
+    expect(get(conflict)).toBeNull() // no re-prompt for the declined version
+  })
+
+  it('no-ops when the doc is not (or no longer) at the given path', async () => {
+    openDoc('/tmp/other.md', 'x')
+    invoke.mockResolvedValue('newer')
+    await reconcileWithDisk('/tmp/a.md')
+    expect(invoke).not.toHaveBeenCalledWith('read_file', { path: '/tmp/a.md' })
+    expect(get(doc).content).toBe('x')
+  })
+
+  it('drops a read that resolves after the user switched away (path re-check)', async () => {
+    openDoc('/tmp/a.md', 'old')
+    let resolveRead!: (v: string) => void
+    invoke.mockImplementation((cmd: unknown) =>
+      cmd === 'read_file'
+        ? new Promise<string>((res) => {
+            resolveRead = res
+          })
+        : Promise.resolve(),
+    )
+    const p = reconcileWithDisk('/tmp/a.md')
+    openDoc('/tmp/b.md', 'b') // switch while the read is in flight
+    resolveRead('newer')
+    await p
+    expect(get(doc).content).toBe('b')
+    expect(get(conflict)).toBeNull()
+  })
+
+  it('drops a read that resolves after a switch-away-AND-back (loadId re-check)', async () => {
+    openDoc('/tmp/a.md', 'old')
+    let resolveRead!: (v: string) => void
+    invoke.mockImplementation((cmd: unknown) =>
+      cmd === 'read_file'
+        ? new Promise<string>((res) => {
+            resolveRead = res
+          })
+        : Promise.resolve(),
+    )
+    const p = reconcileWithDisk('/tmp/a.md')
+    // A second stash/restore of the SAME path while the read is in flight:
+    // same path, newer loadId — the stale read must not classify against it.
+    restoreDoc('/tmp/a.md', { content: 'restored', savedContent: 'restored', normalized: null })
+    resolveRead('stale disk snapshot')
+    await p
+    expect(get(doc).content).toBe('restored')
+    expect(get(conflict)).toBeNull()
+  })
+
+  it('swallows a read failure (file mid-write or removed)', async () => {
+    openDoc('/tmp/a.md', 'old')
+    invoke.mockRejectedValue('mid-write')
+    await expect(reconcileWithDisk('/tmp/a.md')).resolves.toBeUndefined()
+    expect(get(doc).content).toBe('old')
+    expect(get(conflict)).toBeNull()
   })
 })

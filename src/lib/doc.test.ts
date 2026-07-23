@@ -12,6 +12,7 @@ import {
   retargetPath,
   detachIfAffected,
   revertBuffer,
+  restoreDoc,
   resetReadonlyMemory,
   adoptNormalization,
 } from './doc'
@@ -143,6 +144,44 @@ describe('doc store', () => {
     expect(s.content).toBe('# A')
     expect(s.savedContent).toBe('# A')
     expect(isDirty(s)).toBe(false)
+  })
+})
+
+describe('restoreDoc (buffer-cache restore)', () => {
+  beforeEach(() => {
+    newDoc()
+    resetReadonlyMemory()
+  })
+
+  it('preserves savedContent and normalized from the cached entry (dirty survives)', () => {
+    openDoc('/tmp/other.md', '# other')
+    restoreDoc('/tmp/a.md', { content: 'edited', savedContent: 'disk', normalized: 'norm' })
+    const s = get(doc)
+    expect(s.path).toBe('/tmp/a.md')
+    expect(s.content).toBe('edited')
+    expect(s.savedContent).toBe('disk')
+    expect(s.normalized).toBe('norm')
+    expect(isDirty(s)).toBe(true)
+  })
+
+  it('a restored normalization-baseline buffer reads clean', () => {
+    restoreDoc('/tmp/a.md', { content: '- x\n', savedContent: '* x\n', normalized: '- x\n' })
+    expect(isDirty(get(doc))).toBe(false)
+  })
+
+  it('re-derives readonly from readonlyMemory, not from the entry', () => {
+    openDoc('/tmp/locked.md', '# RO', true) // locks the path
+    openDoc('/tmp/other.md', '# other')
+    restoreDoc('/tmp/locked.md', { content: '# RO', savedContent: '# RO', normalized: null })
+    expect(get(doc).readonly).toBe(true)
+    restoreDoc('/tmp/unlocked.md', { content: 'x', savedContent: 'x', normalized: null })
+    expect(get(doc).readonly).toBe(false)
+  })
+
+  it('bumps loadId so the editor remounts with the restored text', () => {
+    const before = get(doc).loadId
+    restoreDoc('/tmp/a.md', { content: 'x', savedContent: 'x', normalized: null })
+    expect(get(doc).loadId).toBe(before + 1)
   })
 })
 

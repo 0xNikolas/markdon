@@ -9,6 +9,7 @@ import { workspace } from './workspace'
 import { doc, openDoc, newDoc, isDirty, resetReadonlyMemory } from './doc'
 import { notice, errorMessage } from './errors'
 import { openList, previewPath } from './openList'
+import * as bufferCache from './bufferCache'
 
 beforeEach(() => {
   invoke.mockReset()
@@ -22,7 +23,13 @@ beforeEach(() => {
   errorMessage.set(null)
   openList.set([])
   previewPath.set(null)
+  bufferCache.reset()
 })
+
+/** A dirty cached background buffer at `path` (content differs from disk). */
+function stashDirty(path: string, content = 'cached edits'): void {
+  bufferCache.stash(path, { content, savedContent: 'disk', normalized: null, view: null })
+}
 
 // Pins the paths.ts predicate performDelete leans on for clipboard pruning.
 describe('isSelfOrDescendant', () => {
@@ -314,5 +321,76 @@ describe('performDelete', () => {
     await performDelete(['/ws/docs'])
     openDoc('/ws/docs/note.md', '# recreated')
     expect(get(doc).readonly).toBe(false)
+  })
+})
+
+describe('buffer cache follows mutations', () => {
+  it('performRename retargets a cached background buffer (dirty edits follow the file)', async () => {
+    stashDirty('/ws/readme.md')
+    invoke.mockResolvedValueOnce('/ws/guide.md').mockResolvedValueOnce({ root: '/ws', tree })
+    await performRename('/ws/readme.md', 'guide.md')
+    expect(bufferCache.peek('/ws/readme.md')).toBeUndefined()
+    expect(bufferCache.peek('/ws/guide.md')?.content).toBe('cached edits')
+  })
+
+  it('performRename of an ancestor folder retargets nested cache entries', async () => {
+    stashDirty('/ws/docs/note.md')
+    invoke.mockResolvedValueOnce('/ws/pages').mockResolvedValueOnce({ root: '/ws', tree })
+    await performRename('/ws/docs', 'pages')
+    expect(bufferCache.peek('/ws/pages/note.md')?.content).toBe('cached edits')
+  })
+
+  it('performMove retargets cached buffers of the moved entries', async () => {
+    stashDirty('/ws/readme.md')
+    invoke
+      .mockResolvedValueOnce('/ws/docs/readme.md')
+      .mockResolvedValueOnce({ root: '/ws', tree })
+    await performMove(['/ws/readme.md'], '/ws/docs')
+    expect(bufferCache.peek('/ws/docs/readme.md')?.content).toBe('cached edits')
+  })
+
+  it('cut-paste retargets a cached buffer alongside the move', async () => {
+    stashDirty('/ws/readme.md')
+    focusRow('/ws/readme.md')
+    cutSelection()
+    invoke
+      .mockResolvedValueOnce('/ws/docs/readme.md')
+      .mockResolvedValueOnce({ root: '/ws', tree })
+    focused.set('/ws')
+    await paste()
+    expect(bufferCache.peek('/ws/docs/readme.md')?.content).toBe('cached edits')
+  })
+
+  it('performDelete evicts cache entries for trashed paths and their subtrees', async () => {
+    stashDirty('/ws/docs/note.md')
+    bufferCache.stash('/ws/keep.md', {
+      content: 'x',
+      savedContent: 'x',
+      normalized: null,
+      view: null,
+    })
+    invoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce({ root: '/ws', tree })
+    await performDelete(['/ws/docs'])
+    expect(bufferCache.peek('/ws/docs/note.md')).toBeUndefined()
+    expect(bufferCache.peek('/ws/keep.md')).toBeDefined()
+  })
+
+  it('performDelete posts a notice when a DIRTY cached buffer is dropped', async () => {
+    stashDirty('/ws/docs/note.md')
+    invoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce({ root: '/ws', tree })
+    await performDelete(['/ws/docs'])
+    expect(get(notice)).toContain('unsaved changes')
+  })
+
+  it('performDelete stays quiet when only CLEAN cached buffers are dropped', async () => {
+    bufferCache.stash('/ws/docs/note.md', {
+      content: 'x',
+      savedContent: 'x',
+      normalized: null,
+      view: null,
+    })
+    invoke.mockResolvedValueOnce(undefined).mockResolvedValueOnce({ root: '/ws', tree })
+    await performDelete(['/ws/docs'])
+    expect(get(notice)).toBeNull()
   })
 })
