@@ -21,6 +21,17 @@
 //! stored preference: `installed` is true only when a `md` shim we wrote exists
 //! AND still targets the current binary, so a stale shim left behind by a moved
 //! app reads as not-installed (needs reinstall).
+//!
+//! `/usr/local/bin` is writable without elevation on Intel Macs (Homebrew
+//! chowns it), but NOT on Apple Silicon, where Homebrew lives in
+//! `/opt/homebrew` and never touches it — it stays `root:wheel`. When the
+//! writability probe fails, `install_cli` asks for ONE-TIME admin
+//! authorization via `osascript ... with administrator privileges` (the same
+//! pattern iTerm2/VS Code/Sublime Text use for their shell-command
+//! installers) to land the shim there anyway. A cancelled or unavailable
+//! prompt is not a hard failure: it falls back to `~/.local/bin`, same as
+//! before, and the Settings hint (`cliInstall.ts::pathHint`) tells the user to
+//! add that to PATH.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -200,25 +211,95 @@ pub fn cli_status(app: AppHandle) -> Result<CliStatus, String> {
     Ok(derive_status(installed_dir, target_dir, &path_var))
 }
 
-/// Write the self-contained `md` shim (chmod 0755) into the preferred writable
-/// PATH dir, hardcoding this binary's path. Returns the fresh filesystem
-/// status. Best-effort: any I/O failure surfaces as `Err(String)`.
-#[tauri::command]
-pub fn install_cli(app: AppHandle) -> Result<CliStatus, String> {
-    let bin = current_bin()?;
-    let target = choose_target_dir(
-        dir_writable(Path::new(USR_LOCAL_BIN)),
-        home_local_bin(&app)?,
-    );
-    fs::create_dir_all(&target).map_err(|e| e.to_string())?;
-    let md = target.join("md");
+/// Write the self-contained `md` shim (chmod 0755) directly into `dir`, which
+/// must already be writable by this process. Shared by the fast path (`dir`
+/// probed writable) and the `~/.local/bin` fallback; the admin-escalated path
+/// writes via `osascript` instead (see `install_via_admin`).
+fn write_shim_to(dir: &Path, shim: &str) -> Result<(), String> {
+    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let md = dir.join("md");
     // atomic_write (tempfile + rename) leaves a fresh file at the tempfile's
     // 0600; a launcher must be executable, so chmod 0755 after the rename.
-    atomic_write(&md, shim_text(&bin).as_bytes()).map_err(|e| e.to_string())?;
+    atomic_write(&md, shim.as_bytes()).map_err(|e| e.to_string())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&md, fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Double-quote `s` for embedding as an AppleScript string literal (escaping
+/// `\` and `"`). `s` here is always our own `sh_single_quote`-wrapped shell
+/// command, built from a fixed literal and app-controlled paths only — never
+/// user input — but this keeps the escaping correct regardless.
+fn applescript_quote(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// Land the shim at `dir/md` via a ONE-TIME admin-authenticated copy, for when
+/// `dir` (normally `/usr/local/bin`) isn't writable without elevation. Stages
+/// the shim in a user-owned temp file first — the privileged command only
+/// ever `cp`s and `chmod`s, it never receives shim CONTENT to interpret — then
+/// asks `osascript` to move it into place `with administrator privileges`,
+/// which surfaces the standard macOS auth dialog. Returns `Err` for both a
+/// cancelled prompt and any other elevation failure; callers treat both the
+/// same way, as "fall back to the per-user dir", never as a hard failure.
+fn install_via_admin(shim: &str, dir: &Path) -> Result<(), String> {
+    use std::io::Write as _;
+    let mut tmp = tempfile::NamedTempFile::new().map_err(|e| e.to_string())?;
+    tmp.write_all(shim.as_bytes()).map_err(|e| e.to_string())?;
+    let tmp_path = tmp.into_temp_path();
+    let tmp_str = tmp_path.to_str().ok_or("non-UTF-8 temp path")?;
+    let dir_str = dir.to_str().ok_or("non-UTF-8 target dir")?;
+    let md = dir.join("md");
+    let md_str = md.to_str().ok_or("non-UTF-8 target path")?;
+
+    let shell_cmd = format!(
+        "/bin/mkdir -p {} && /bin/cp {} {} && /bin/chmod 0755 {}",
+        sh_single_quote(dir_str),
+        sh_single_quote(tmp_str),
+        sh_single_quote(md_str),
+        sh_single_quote(md_str),
+    );
+    let osa_script = format!(
+        "do shell script {} with administrator privileges",
+        applescript_quote(&shell_cmd)
+    );
+    let status = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(osa_script)
+        .status()
+        .map_err(|e| e.to_string())?;
+    // tmp_path deletes itself on drop, whether or not the cp above ran.
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err("administrator authorization was cancelled or failed".to_string())
+    }
+}
+
+/// Land the `md` shim on `$PATH`, hardcoding this binary's path. Prefers
+/// `/usr/local/bin` (writable directly, or via one-time admin authorization —
+/// see the module doc); falls back to the always-writable `~/.local/bin` when
+/// neither works, e.g. the auth prompt was cancelled. Returns the fresh
+/// filesystem status. Best-effort: any I/O failure other than a cancelled
+/// prompt surfaces as `Err(String)`.
+#[tauri::command]
+pub fn install_cli(app: AppHandle) -> Result<CliStatus, String> {
+    let bin = current_bin()?;
+    let shim = shim_text(&bin);
+    let usr_local = Path::new(USR_LOCAL_BIN);
+
+    let landed_in_usr_local = if dir_writable(usr_local) {
+        write_shim_to(usr_local, &shim)?;
+        true
+    } else {
+        install_via_admin(&shim, usr_local).is_ok()
+    };
+    if !landed_in_usr_local {
+        write_shim_to(&home_local_bin(&app)?, &shim)?;
     }
     cli_status(app)
 }
@@ -269,6 +350,37 @@ mod tests {
         // quoted assignment.
         let s = shim_text("/weird/o'brien/app");
         assert!(s.contains(r#"bin='/weird/o'\''brien/app'"#));
+    }
+
+    // -- applescript_quote ------------------------------------------------------
+
+    #[test]
+    fn applescript_quote_wraps_in_double_quotes() {
+        assert_eq!(applescript_quote("/bin/cp a b"), r#""/bin/cp a b""#);
+    }
+
+    #[test]
+    fn applescript_quote_escapes_backslashes_and_double_quotes() {
+        // Escaping backslashes FIRST matters: if done after quote-escaping, an
+        // escaped quote's own backslash would get double-escaped.
+        assert_eq!(applescript_quote(r#"a"b\c"#), r#""a\"b\\c""#);
+    }
+
+    // -- write_shim_to (fs, but into an injected temp dir only) ----------------
+
+    #[test]
+    fn write_shim_to_creates_an_executable_shim_with_the_given_content() {
+        let dir = tempfile::tempdir().unwrap();
+        write_shim_to(dir.path(), "#!/bin/sh\necho hi\n").unwrap();
+
+        let md = dir.path().join("md");
+        assert_eq!(fs::read_to_string(&md).unwrap(), "#!/bin/sh\necho hi\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&md).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o755);
+        }
     }
 
     // -- choose_target_dir ----------------------------------------------------
