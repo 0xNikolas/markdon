@@ -87,7 +87,7 @@ test('Enter on the active preview row pins it (keyboard promotion)', async ({ pa
   ).toHaveAttribute('aria-current', 'true')
 })
 
-test('closing the active preview lands on the last pinned neighbour, not a blank doc', async ({
+test('closing the active preview lands on the pinned neighbour below, not a blank doc', async ({
   page,
 }) => {
   await pinFile(page, 'ideas.md')
@@ -98,10 +98,11 @@ test('closing the active preview lands on the last pinned neighbour, not a blank
   await previewRow.hover()
   await previewRow.getByRole('button', { name: 'Close notes.md (preview)', exact: true }).click()
 
-  // d36d448 fix: the preview renders as the LAST row, so its close neighbour
-  // is the last pinned entry. With the buffer cache the neighbour restores
-  // from its stashed buffer (a background disk reconcile follows) — asserting
-  // the restored CONTENT decouples this from reconcile timing.
+  // d36d448 fix: the preview renders as the TOP row, so its close neighbour is
+  // the first (most recent) pinned entry directly below it. With the buffer
+  // cache the neighbour restores from its stashed buffer (a background disk
+  // reconcile follows) — asserting the restored CONTENT decouples this from
+  // reconcile timing.
   await expect(
     openFilesStrip(page).getByRole('button', { name: 'ideas.md', exact: true }),
   ).toHaveAttribute('aria-current', 'true')

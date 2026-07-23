@@ -19,21 +19,21 @@ import {
 } from './openList'
 
 describe('addOpen', () => {
-  it('appends a new path to an empty list', () => {
+  it('adds a new path to an empty list', () => {
     expect(addOpen([], '/a.md')).toEqual(['/a.md'])
   })
 
-  it('appends a new path to the end, keeping existing order', () => {
-    expect(addOpen(['/a.md', '/b.md'], '/c.md')).toEqual(['/a.md', '/b.md', '/c.md'])
+  it('prepends a new path to the front (most recently opened first)', () => {
+    expect(addOpen(['/a.md', '/b.md'], '/c.md')).toEqual(['/c.md', '/a.md', '/b.md'])
   })
 
-  it('dedups: re-adding an already-open path is a no-op (keeps first position)', () => {
+  it('dedups: re-adding an already-open path is a no-op (keeps its position)', () => {
     expect(addOpen(['/a.md', '/b.md', '/c.md'], '/b.md')).toEqual(['/a.md', '/b.md', '/c.md'])
   })
 
   it('returns a new array reference even on a no-op dedup miss vs hit (referential purity)', () => {
     const list = ['/a.md']
-    expect(addOpen(list, '/a.md')).toBe(list) // no-op dedup: same reference is fine (append-if-absent)
+    expect(addOpen(list, '/a.md')).toBe(list) // no-op dedup: same reference is fine (prepend-if-absent)
     expect(addOpen(list, '/b.md')).not.toBe(list)
   })
 })
@@ -77,16 +77,16 @@ describe('neighbourAfterClose', () => {
     expect(neighbourAfterClose(['/a.md', '/b.md'], '/a.md', null)).toBeNull()
   })
 
-  it('an active PREVIEW appended after the pinned list falls back to the last pinned entry', () => {
-    // The preview path never lives in openList but renders as the LAST row;
-    // App.svelte appends it before the lookup so closing it activates the
-    // last pinned entry instead of blanking to a new doc.
-    expect(neighbourAfterClose(['/a.md', '/b.md', '/peek.md'], '/peek.md', '/peek.md')).toBe(
-      '/b.md',
+  it('an active PREVIEW prepended before the pinned list falls back to the first pinned entry', () => {
+    // The preview path never lives in openList but renders as the TOP row;
+    // App.svelte prepends it before the lookup so closing it activates the
+    // first (most recent) pinned entry instead of blanking to a new doc.
+    expect(neighbourAfterClose(['/peek.md', '/a.md', '/b.md'], '/peek.md', '/peek.md')).toBe(
+      '/a.md',
     )
   })
 
-  it('an active preview appended to an EMPTY pinned list still yields null (nothing to fall back to)', () => {
+  it('an active preview prepended to an EMPTY pinned list still yields null (nothing to fall back to)', () => {
     expect(neighbourAfterClose(['/peek.md'], '/peek.md', '/peek.md')).toBeNull()
   })
 })
@@ -191,7 +191,7 @@ describe('pinOpen / pinPreview (store transitions)', () => {
     previewPath.set(null)
   })
 
-  it('pinOpen appends to openList and vacates a matching preview', () => {
+  it('pinOpen prepends to openList and vacates a matching preview', () => {
     previewPath.set('/a.md')
     pinOpen('/a.md')
     expect(get(openList)).toEqual(['/a.md'])
@@ -211,11 +211,11 @@ describe('pinOpen / pinPreview (store transitions)', () => {
     expect(get(openList)).toEqual(['/a.md', '/b.md'])
   })
 
-  it('pinPreview promotes the current preview to the end of the pinned list', () => {
+  it('pinPreview promotes the current preview to the FRONT of the pinned list (top row)', () => {
     openList.set(['/a.md'])
     previewPath.set('/peek.md')
     pinPreview()
-    expect(get(openList)).toEqual(['/a.md', '/peek.md'])
+    expect(get(openList)).toEqual(['/peek.md', '/a.md'])
     expect(get(previewPath)).toBeNull()
   })
 
@@ -245,11 +245,11 @@ describe('neighbourInStrip', () => {
     expect(neighbourInStrip('/a.md', open, null, -1)).toBe('/c.md')
   })
 
-  it('includes the preview row, appended after every pinned row', () => {
-    expect(neighbourInStrip('/c.md', open, '/peek.md', 1)).toBe('/peek.md')
-    expect(neighbourInStrip('/peek.md', open, '/peek.md', 1)).toBe('/a.md') // wrap off the preview
-    expect(neighbourInStrip('/peek.md', open, '/peek.md', -1)).toBe('/c.md')
-    expect(neighbourInStrip('/a.md', open, '/peek.md', -1)).toBe('/peek.md') // backward wrap lands on it
+  it('includes the preview row, prepended before every pinned row (top)', () => {
+    expect(neighbourInStrip('/c.md', open, '/peek.md', 1)).toBe('/peek.md') // wrap off the bottom onto the top preview
+    expect(neighbourInStrip('/peek.md', open, '/peek.md', 1)).toBe('/a.md') // step down to the first pinned row
+    expect(neighbourInStrip('/peek.md', open, '/peek.md', -1)).toBe('/c.md') // wrap off the top onto the bottom row
+    expect(neighbourInStrip('/a.md', open, '/peek.md', -1)).toBe('/peek.md') // step up onto the preview
   })
 
   it('ignores a preview that is also pinned (the strip hides that row)', () => {
@@ -257,10 +257,12 @@ describe('neighbourInStrip', () => {
     expect(neighbourInStrip('/a.md', open, '/a.md', -1)).toBe('/c.md')
   })
 
-  it('enters the cycle from the untitled scratch (no row): next=first, previous=last', () => {
+  it('enters the cycle from the untitled scratch (no row): next=first (top), previous=last (bottom)', () => {
     expect(neighbourInStrip(null, open, null, 1)).toBe('/a.md')
     expect(neighbourInStrip(null, open, null, -1)).toBe('/c.md')
-    expect(neighbourInStrip(null, open, '/peek.md', -1)).toBe('/peek.md')
+    // previous from the scratch lands on the bottom row — the preview now sits
+    // at the TOP, so the last row is the last pinned entry.
+    expect(neighbourInStrip(null, open, '/peek.md', -1)).toBe('/c.md')
   })
 
   it('reaches even a single row from the untitled scratch', () => {
@@ -308,8 +310,8 @@ describe('stripOrder', () => {
     expect(stripOrder(['/a.md', '/b.md'], null)).toEqual(['/a.md', '/b.md'])
   })
 
-  it('appends the preview row last', () => {
-    expect(stripOrder(['/a.md'], '/p.md')).toEqual(['/a.md', '/p.md'])
+  it('prepends the preview row first (top of the strip)', () => {
+    expect(stripOrder(['/a.md'], '/p.md')).toEqual(['/p.md', '/a.md'])
   })
 
   it('draws no extra row for a preview that is also pinned', () => {

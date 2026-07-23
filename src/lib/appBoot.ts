@@ -196,7 +196,8 @@ export async function drainStartupFiles(
  * is the scratch buffer, NOT the window: while pinned tabs or a preview are
  * still alive, dismiss the scratch (guarded — unsaved edits still prompt) and
  * land back on the preview (kept as a preview, avoiding a stale italic row)
- * or the last pinned entry. Only when nothing else is open does Cmd+W fall
+ * or the most recent pinned entry (index 0, the top row). Only when nothing
+ * else is open does Cmd+W fall
  * through to closing the window — that truly-empty case is the VS Code
  * behavior.
  */
@@ -213,7 +214,7 @@ export function closeTabDecision(
 ): CloseTabDecision {
   if (docPath !== null) return { kind: 'close-file', path: docPath }
   if (preview !== null) return { kind: 'reopen-preview', path: preview }
-  if (pinned.length > 0) return { kind: 'reopen-pinned', path: pinned[pinned.length - 1] }
+  if (pinned.length > 0) return { kind: 'reopen-pinned', path: pinned[0] }
   return { kind: 'close-window' }
 }
 

@@ -181,10 +181,10 @@ describe('closeTabDecision', () => {
     })
   })
 
-  it('with no preview, lands on the LAST pinned entry', () => {
+  it('with no preview, lands on the FIRST (most recent, top) pinned entry', () => {
     expect(closeTabDecision(null, null, ['/w/a.md', '/w/b.md'])).toEqual({
       kind: 'reopen-pinned',
-      path: '/w/b.md',
+      path: '/w/a.md',
     })
   })
 

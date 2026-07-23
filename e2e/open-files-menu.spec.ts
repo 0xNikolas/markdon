@@ -58,8 +58,9 @@ test('Cmd+Shift+T reopens the closed row PINNED at its old index, re-read from d
 
   await page.keyboard.press('Meta+Shift+T')
   await expect(stripRows(page)).toHaveCount(3)
-  // Back at its old position (index 1, between notes and guide), pinned (no
-  // italic preview row), and active — reopen is a real switch.
+  // Back at its old position (index 1, between guide and notes in the
+  // newest-first strip), pinned (no italic preview row), and active — reopen is
+  // a real switch.
   await expect(stripRows(page).nth(1)).toContainText('ideas.md')
   await expect(openFilesStrip(page).locator('.open-file-row.preview')).toHaveCount(0)
   await expect(
@@ -81,9 +82,10 @@ test('reopen silently skips an entry whose file was deleted since the close', as
 
   await page.keyboard.press('Meta+Shift+T')
   // The deleted entry is skipped SILENTLY (no error banner) and the next
-  // stack entry (notes.md, closed from index 0) reopens in its place.
+  // stack entry (notes.md, closed from index 2 — the bottom row) reopens in
+  // its place (clamped to the end of the now-shorter list).
   await expect(stripRows(page)).toHaveCount(2)
-  await expect(stripRows(page).nth(0)).toContainText('notes.md')
+  await expect(stripRows(page).nth(1)).toContainText('notes.md')
   await expect(stripRows(page).filter({ hasText: 'ideas.md' })).toHaveCount(0)
   await expect(page.getByRole('alert')).toHaveCount(0)
   await expect(editor(page)).toContainText('hello notes')
@@ -95,6 +97,7 @@ test('strip rows are arrow-navigable via a roving tabindex; Enter activates a ro
   page,
 }) => {
   await pinThree(page)
+  // Newest-first strip, top-to-bottom: [guide, ideas, notes]; guide is active.
 
   // Exactly one row button is tabbable — the active row is the initial anchor.
   const tabbable = openFilesStrip(page).locator('.open-file-main[tabindex="0"]')
@@ -102,30 +105,30 @@ test('strip rows are arrow-navigable via a roving tabindex; Enter activates a ro
   await expect(tabbable).toHaveText(/guide\.md/)
 
   await openFilesStrip(page).getByRole('button', { name: 'guide.md', exact: true }).focus()
-  await page.keyboard.press('Home')
+  await page.keyboard.press('End')
   await expect(
     openFilesStrip(page).getByRole('button', { name: 'notes.md', exact: true }),
   ).toBeFocused()
 
-  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowUp')
   const ideas = openFilesStrip(page).getByRole('button', { name: 'ideas.md', exact: true })
   await expect(ideas).toBeFocused()
   // The roving anchor follows keyboard focus (still exactly one tab stop).
   await expect(tabbable).toHaveCount(1)
   await expect(tabbable).toHaveText(/ideas\.md/)
 
-  await page.keyboard.press('End')
+  await page.keyboard.press('Home')
   await expect(
     openFilesStrip(page).getByRole('button', { name: 'guide.md', exact: true }),
   ).toBeFocused()
-  // Clamped at the last row — no wrap (wrapping is Ctrl+Tab's job).
-  await page.keyboard.press('ArrowDown')
+  // Clamped at the first row — no wrap (wrapping is Ctrl+Tab's job).
+  await page.keyboard.press('ArrowUp')
   await expect(
     openFilesStrip(page).getByRole('button', { name: 'guide.md', exact: true }),
   ).toBeFocused()
 
   // Enter = native button activation: the focused row opens.
-  await page.keyboard.press('ArrowUp')
+  await page.keyboard.press('ArrowDown')
   await expect(ideas).toBeFocused()
   await page.keyboard.press('Enter')
   await expect(ideas).toHaveAttribute('aria-current', 'true')

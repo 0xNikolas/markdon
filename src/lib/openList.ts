@@ -2,8 +2,13 @@ import { get, writable, type Writable } from 'svelte/store'
 import { isSelfOrDescendant, rewritePrefix } from './paths'
 
 /**
- * The sidebar's "Open Files" list (MODE A): an ordered,
- * de-duplicated list of every opened document's PATH ONLY — never buffers.
+ * The sidebar's "Open Files" list (MODE A): a de-duplicated list of every
+ * opened document's PATH ONLY — never buffers — ordered MOST-RECENTLY-OPENED
+ * FIRST (a new open is prepended at index 0, so the top row is the newest).
+ * Re-activating or switching to an already-open row NEVER reorders it: a strip
+ * that reshuffled on every switch would jump under the pointer and make
+ * Ctrl+Tab loop over just the two most-recent rows. Opening order is therefore
+ * a stable record of first-open recency, not a live MRU.
  * The single-document model (doc.ts) is untouched: there is exactly one live
  * buffer, addressed by `$doc.path`. Switching to a list entry restores its
  * stashed buffer from the buffer cache (bufferCache.ts) when one exists, and
@@ -21,16 +26,23 @@ export const openList: Writable<string[]> = writable([])
 /**
  * The single-click PREVIEW slot (VS Code semantics): a normal live doc in the
  * `doc` store — editable, dirty-guarded — whose path is NOT in `openList`. It
- * renders as one extra italic row after the pinned rows. A new preview simply
- * replaces the old one (the previous previewed file vanishes from the strip),
- * and pinning — double-click, explicit open, or editing the buffer — moves the
- * path into `openList` and clears this slot. `null` means no preview row.
+ * renders as one extra italic row at the TOP of the strip — a preview is the
+ * most recent open by definition, so it sits above every pinned row. A new
+ * preview simply replaces the old one (the previous previewed file vanishes
+ * from the strip, its top slot unchanged), and pinning — double-click,
+ * explicit open, or editing the buffer — prepends the path into `openList`
+ * (index 0, the same top slot: no visible jump) and clears this slot. `null`
+ * means no preview row.
  */
 export const previewPath: Writable<string | null> = writable(null)
 
-/** Append `path` if absent; keep its first position on a redundant re-open. */
+/**
+ * Prepend `path` (most-recently-opened first) if absent; keep its current
+ * position on a redundant re-open, so switching back to an already-open row
+ * never reshuffles the strip.
+ */
 export function addOpen(list: string[], path: string): string[] {
-  return list.includes(path) ? list : [...list, path]
+  return list.includes(path) ? list : [path, ...list]
 }
 
 /** Remove `path`; a no-op (referential no-op too) when it isn't present. */
@@ -40,9 +52,11 @@ export function removeOpen(list: string[], path: string): string[] {
 
 /**
  * Insert `path` at `index` (clamped to the list's bounds) — Reopen Closed
- * File's "back at its old position" re-insert. Already-present paths are a
- * referential no-op, keeping their current position (the file was manually
- * reopened in the meantime; a duplicate row must never appear).
+ * File's "back at its old position" re-insert. Indexes count from the TOP
+ * (index 0 is the newest/top row), matching the newest-first list order, so a
+ * file closed at row N reopens at row N when it still fits. Already-present
+ * paths are a referential no-op, keeping their current position (the file was
+ * manually reopened in the meantime; a duplicate row must never appear).
  */
 export function insertOpenAt(list: string[], path: string, index: number): string[] {
   if (list.includes(path)) return list
@@ -51,14 +65,14 @@ export function insertOpenAt(list: string[], path: string, index: number): strin
 }
 
 /**
- * The strip's visible row order: the pinned rows plus the preview row
- * appended last when one is showing — exactly what OpenFilesStrip.svelte
- * renders (a preview that is also pinned draws no extra row, mirrored here).
- * Shared by cycling, bulk-close planning, and the close-time index recorded
- * for Reopen Closed File.
+ * The strip's visible row order, TOP to bottom: the preview row FIRST when one
+ * is showing (the most recent open), then the pinned rows (themselves newest
+ * first) — exactly what OpenFilesStrip.svelte renders (a preview that is also
+ * pinned draws no extra row, mirrored here). Shared by cycling, bulk-close
+ * planning, and the close-time index recorded for Reopen Closed File.
  */
 export function stripOrder(open: string[], preview: string | null): string[] {
-  return preview !== null && !open.includes(preview) ? [...open, preview] : open
+  return preview !== null && !open.includes(preview) ? [preview, ...open] : open
 }
 
 /**
@@ -126,9 +140,12 @@ export function clearPreviewInSubtree(preview: string | null, path: string): str
 }
 
 /**
- * Pin `path`: append it to `openList` and, when it was the previewed file,
- * vacate the preview slot — the single transition from "italic preview row"
- * to "pinned row". Safe for paths that were never previewed (plain open).
+ * Pin `path`: prepend it to `openList` (index 0, the top row — most recently
+ * opened) and, when it was the previewed file, vacate the preview slot — the
+ * single transition from "italic preview row" to "pinned row". Because the
+ * preview already rendered at the top, promoting it lands in the same visible
+ * slot with no jump. Safe for paths that were never previewed (plain open),
+ * and a no-op for an already-pinned path (it keeps its row).
  */
 export function pinOpen(path: string): void {
   openList.update((l) => addOpen(l, path))
@@ -143,12 +160,14 @@ export function pinPreview(): void {
 
 /**
  * The next/previous path for Ctrl+Tab file cycling, in STRIP ORDER: the
- * pinned rows (`open`, as displayed) plus the preview row appended last when
- * one is showing — the exact row order OpenFilesStrip.svelte renders (its
- * `previewRow` hides a preview that is also pinned, mirrored here).
- * Deliberately a simple wrap-around cycle over that visible order, NOT VS
- * Code's MRU picker overlay — this app's strip has no z-order to surface, and
- * a plain cycle stays predictable with no extra UI.
+ * preview row first (when one is showing), then the pinned rows (`open`, as
+ * displayed, newest first) — the exact row order OpenFilesStrip.svelte renders
+ * (its `previewRow` hides a preview that is also pinned, mirrored here).
+ * 'next' (dir +1) walks DOWN the strip from the active row — top is the most
+ * recent, so next steps toward older rows — and wraps off the bottom back to
+ * the top. Deliberately a simple wrap-around cycle over that visible order,
+ * NOT VS Code's MRU picker overlay — this app's strip has no z-order to
+ * surface, and a plain cycle stays predictable with no extra UI.
  *
  * `dir` is +1 (next) or -1 (previous), wrapping at either end. Returns null —
  * cycle from an active strip row with no other row to go to (fewer than 2

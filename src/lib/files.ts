@@ -182,6 +182,13 @@ function spawnDocumentWindow(path: string, readonly: boolean): Promise<void> {
  * per-entry readonly), MODE A pins it into the Open Files strip only —
  * paths-only, no read needed — and a MODE B spawn failure degrades to that
  * same visible pinned row instead of clobbering the active doc.
+ *
+ * Order (MODE A, newest-first strip): each `pinOpen` prepends at the top, so
+ * iterating `rest` forward leaves the LAST-drained rest entry highest; the
+ * FIRST entry opens asynchronously (its read_file awaited) and pinOpen-lands
+ * ABOVE them once resolved — so the batch settles as [active first, rest
+ * newest-first], the just-drained files clustered at the top with the one the
+ * user actually lands on sitting highest.
  */
 export function openDrainedEntries(
   entries: OpenedEntry[],

@@ -135,7 +135,7 @@ test('tree dblclick racing the discard overlay still pins (backdrop upgrade)', a
   ).toHaveAttribute('aria-current', 'true')
 })
 
-test('Cmd+W on a dirty untitled scratch lands on the last pinned tab, window survives', async ({
+test('Cmd+W on a dirty untitled scratch lands on the most recent pinned tab, window survives', async ({
   page,
 }) => {
   await pinFile(page, 'ideas.md')

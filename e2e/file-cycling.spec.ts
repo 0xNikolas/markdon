@@ -14,11 +14,12 @@ import {
 
 /**
  * Ctrl+Tab file cycling: next/previous over the Open Files strip in ROW
- * ORDER (pinned rows, then the italic preview row), wrapping at either end —
- * deliberately a simple visible-order cycle, not VS Code's MRU picker. The
- * bracket chords (Cmd+Shift+]/[ here — WebKit on macOS reports a mac
- * platform) drive the same cycle. Switches ride the buffer cache: instant,
- * no prompt, dirty edits intact.
+ * ORDER (the italic preview row on top, then the pinned rows newest-first),
+ * wrapping at either end — deliberately a simple visible-order cycle, not VS
+ * Code's MRU picker. 'next' walks DOWN from the active row. The bracket chords
+ * (Cmd+Shift+]/[ here — WebKit on macOS reports a mac platform) drive the same
+ * cycle. Switches ride the buffer cache: instant, no prompt, dirty edits
+ * intact.
  */
 
 test.beforeEach(async ({ page }) => {
@@ -33,38 +34,44 @@ async function expectActive(page: Page, name: string): Promise<void> {
   ).toHaveAttribute('aria-current', 'true')
 }
 
-/** Pin the three fixture files, landing active on guide.md. */
+/**
+ * Pin the three fixture files, landing active on guide.md. With newest-first
+ * ordering the strip reads top-to-bottom [guide, ideas, notes] (guide is the
+ * last — most recent — pin, so it sits at the top and is active).
+ */
 async function pinThree(page: Page): Promise<void> {
   await pinFile(page, 'notes.md')
   await pinFile(page, 'ideas.md')
   await pinFile(page, 'guide.md')
 }
 
-test('Ctrl+Tab cycles forward through the strip in row order, wrapping', async ({ page }) => {
+test('Ctrl+Tab cycles forward (down the strip) in row order, wrapping', async ({ page }) => {
   await pinThree(page)
-  await expectActive(page, 'guide.md')
+  await expectActive(page, 'guide.md') // top row
 
-  await page.keyboard.press('Control+Tab') // wrap off the last row
+  await page.keyboard.press('Control+Tab') // step down
+  await expectActive(page, 'ideas.md')
+
+  await page.keyboard.press('Control+Tab')
   await expectActive(page, 'notes.md')
   await expect(editor(page)).toContainText('hello notes')
 
-  await page.keyboard.press('Control+Tab')
-  await expectActive(page, 'ideas.md')
-
-  await page.keyboard.press('Control+Tab')
+  await page.keyboard.press('Control+Tab') // wrap off the last row back to the top
   await expectActive(page, 'guide.md')
 })
 
-test('Ctrl+Shift+Tab cycles backward, wrapping off the first row', async ({ page }) => {
+test('Ctrl+Shift+Tab cycles backward (up the strip), wrapping off the first row', async ({
+  page,
+}) => {
   await pinThree(page)
+
+  await page.keyboard.press('Control+Shift+Tab') // wrap off the top row to the bottom
+  await expectActive(page, 'notes.md')
 
   await page.keyboard.press('Control+Shift+Tab')
   await expectActive(page, 'ideas.md')
 
   await page.keyboard.press('Control+Shift+Tab')
-  await expectActive(page, 'notes.md')
-
-  await page.keyboard.press('Control+Shift+Tab') // wrap off the first row
   await expectActive(page, 'guide.md')
 })
 
@@ -72,30 +79,31 @@ test('Cmd+Shift+] and Cmd+Shift+[ drive the same cycle', async ({ page }) => {
   await pinThree(page)
 
   await page.keyboard.press('Meta+Shift+BracketRight')
-  await expectActive(page, 'notes.md')
-
-  await page.keyboard.press('Meta+Shift+BracketRight')
   await expectActive(page, 'ideas.md')
 
-  await page.keyboard.press('Meta+Shift+BracketLeft')
+  await page.keyboard.press('Meta+Shift+BracketRight')
   await expectActive(page, 'notes.md')
+
+  await page.keyboard.press('Meta+Shift+BracketLeft')
+  await expectActive(page, 'ideas.md')
 })
 
-test('the preview row joins the cycle as the last row and STAYS a preview', async ({ page }) => {
+test('the preview row joins the cycle as the top row and STAYS a preview', async ({ page }) => {
   await pinFile(page, 'notes.md')
   await pinFile(page, 'ideas.md')
-  // Single click = preview: the italic row renders after the pinned ones.
+  // Single click = preview: the italic row renders at the TOP, above the pinned
+  // ones (a preview is the most recent open). Strip: [guide(preview), ideas, notes].
   await treeRow(page, 'guide.md').click()
   await expectActive(page, 'guide.md')
   await expect(stripRows(page)).toHaveCount(3)
 
-  // Forward from the preview wraps to the first pinned row...
+  // Forward from the top preview steps down to the first pinned row...
   await page.keyboard.press('Control+Tab')
-  await expectActive(page, 'notes.md')
+  await expectActive(page, 'ideas.md')
   // ...and the preview row is still in the strip (cycling away never closed it).
   await expect(stripRows(page)).toHaveCount(3)
 
-  // Backward wraps straight onto the preview row — still a preview, not pinned.
+  // Backward steps straight back up onto the preview row — still a preview, not pinned.
   await page.keyboard.press('Control+Shift+Tab')
   await expect(
     openFilesStrip(page).getByRole('button', { name: 'guide.md (preview)', exact: true }),

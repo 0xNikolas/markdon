@@ -248,19 +248,20 @@
   // the live doc, then switches to the neighbour computed BEFORE removal
   // (previous, else next, else null -> falls back to newDoc()); the
   // neighbour open restores from the cache via openPath. The preview path is
-  // never in openList, but it RENDERS as the last row (after every pinned
-  // one), so closing an active preview appends it for the lookup — its
-  // visual previous neighbour is the last pinned entry, not a blank new doc.
+  // never in openList, but it RENDERS as the top row (above every pinned
+  // one), so closing an active preview prepends it for the lookup — its
+  // visual neighbour is the first (most recent) pinned entry, not a blank new
+  // doc.
   // Clearing state inside the guard keeps Cancel non-destructive.
   // Remove a NON-ACTIVE strip row (pinned or preview), evict its cache entry,
   // and record it for Reopen Closed File — the shared removal step for the
   // strip close button's background branch and the context menu's bulk closes
   // (whose plans only ever contain clean background rows). The reopen index
-  // is captured BEFORE removal: a pinned row's list position, a preview row's
-  // after-the-pinned-rows slot.
+  // is captured BEFORE removal: a pinned row's list position, or 0 for a
+  // preview row (it renders at the top, so it reopens pinned at the top).
   function closeBackgroundRow(path: string) {
     const isPreview = path === get(previewPath)
-    const index = isPreview ? get(openList).length : get(openList).indexOf(path)
+    const index = isPreview ? 0 : get(openList).indexOf(path)
     if (isPreview) previewPath.set(null)
     else openList.update((l) => removeOpen(l, path))
     evict(path)
@@ -292,9 +293,9 @@
       if (isDirty(cur)) revertBuffer(cur.savedContent)
       const list = get(openList)
       const isPreview = path === get(previewPath)
-      const lookup = isPreview ? [...list, path] : list
+      const lookup = isPreview ? [path, ...list] : list
       const next = neighbourAfterClose(lookup, path, get(doc).path)
-      const closedIndex = isPreview ? list.length : list.indexOf(path)
+      const closedIndex = isPreview ? 0 : list.indexOf(path)
       previewPath.update((pv) => (pv === path ? null : pv))
       openList.update((l) => removeOpen(l, path))
       evict(path) // close destroys: drop any (defensive) cache entry with the row
