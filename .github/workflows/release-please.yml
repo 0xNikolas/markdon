@@ -45,7 +45,10 @@ jobs:
             args: '--target universal-apple-darwin'
     runs-on: ${{ matrix.platform }}
     steps:
+      # Build the exact tagged release commit, not just the workflow-run SHA.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
       - uses: oven-sh/setup-bun@v2
       - uses: dtolnay/rust-toolchain@stable
         with:
