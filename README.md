@@ -1,5 +1,8 @@
 # markdon
 
+Contributors and coding agents: see [`AGENTS.md`](AGENTS.md) for the
+architecture, commands, and conventions.
+
 ## CLI (`md`)
 
 `md` is a terminal launcher that opens a markdown file or a folder in the
