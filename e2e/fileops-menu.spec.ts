@@ -75,7 +75,11 @@ test('Open in New Tab pins in THIS window and never spawns', async ({ page }) =>
   await expect(
     openFilesStrip(page).getByRole('button', { name: 'notes.md', exact: true }),
   ).toHaveAttribute('aria-current', 'true')
-  await expect(openFilesStrip(page).locator('.open-file-row.preview')).toHaveCount(0)
+  // notes.md landed PINNED, not previewed. (The unrelated boot auto-preview
+  // keeps its own italic row — a pinned open doesn't evict other previews.)
+  await expect(
+    openFilesStrip(page).getByRole('button', { name: 'notes.md (preview)', exact: true }),
+  ).toHaveCount(0)
   await expect(editor(page)).toContainText('hello notes')
   expect(await calls(page, 'open_document_window')).toHaveLength(0)
 })
@@ -102,8 +106,12 @@ test('Open in New Window / New Instance hand off without touching this window', 
     path: '/ws/notes.md',
   })
 
-  // The active doc never changed: no strip rows, no read of the file.
-  await expect(stripRows(page)).toHaveCount(0)
+  // The active doc never changed: the boot auto-preview is still the only
+  // strip row (and still the active doc), and notes.md was never read here.
+  await expect(stripRows(page)).toHaveCount(1)
+  await expect(
+    openFilesStrip(page).getByRole('button', { name: 'nested.md (preview)', exact: true }),
+  ).toHaveAttribute('aria-current', 'true')
   expect((await calls(page, 'read_file')).map((c) => c.args.path)).not.toContain('/ws/notes.md')
 })
 

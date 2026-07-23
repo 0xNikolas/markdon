@@ -1,5 +1,12 @@
 import { test, expect, type Page } from '@playwright/test'
-import { seedWorkspace, gotoApp, treeRow, editor, calls } from './support/workspaceFixture.ts'
+import {
+  seedWorkspace,
+  gotoApp,
+  treeRow,
+  editor,
+  calls,
+  dismissBootPreview,
+} from './support/workspaceFixture.ts'
 
 /**
  * Image paste-to-file (the c2d47cb production bug area): the Editor.svelte
@@ -92,7 +99,10 @@ test('pasting into an untitled doc stays a session blob: URL, no backend write',
 }) => {
   await seedWorkspace(page)
   await gotoApp(page)
-  await expect(editor(page)).toBeVisible() // boot doc is untitled
+  // Boot lands on the auto-previewed workspace file now; close it to get the
+  // untitled scratch this spec is about.
+  await dismissBootPreview(page)
+  await expect(editor(page)).toBeVisible()
 
   await pasteImage(page)
 

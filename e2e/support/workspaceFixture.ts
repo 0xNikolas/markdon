@@ -50,10 +50,35 @@ export async function seedWorkspace(page: Page, opts: SeedOptions = {}): Promise
   )
 }
 
-/** Load the app and wait for the restored workspace tree to render. */
+/**
+ * Load the app and wait for the restored workspace tree to render — plus the
+ * boot auto-preview to land: an unclaimed window auto-opens the workspace's
+ * first markdown file (depth-first render order — here sub/nested.md) as the
+ * italic preview row. Waiting for it keeps later tree clicks off the layout
+ * shift the mounting Open Files strip causes, and pins the boot state every
+ * spec now starts from.
+ */
 export async function gotoApp(page: Page): Promise<void> {
   await page.goto('/')
   await expect(workspaceTree(page)).toBeVisible()
+  await expect(bootPreviewRow(page)).toBeVisible()
+}
+
+/** The boot auto-preview's strip row (the fixture's first markdown file). */
+export function bootPreviewRow(page: Page): Locator {
+  return openFilesStrip(page).getByRole('button', { name: 'nested.md (preview)', exact: true })
+}
+
+/**
+ * Close the boot auto-preview so a spec can start from the clean untitled
+ * scratch the app booted with before auto-preview existed. Closing the active
+ * preview with nothing else open falls back to newDoc() and clears the
+ * preview slot — exactly the pre-auto-preview boot state.
+ */
+export async function dismissBootPreview(page: Page): Promise<void> {
+  await closeStripRow(page, 'nested.md')
+  await expect(page.locator('.filename')).toHaveText('Untitled')
+  await expect(stripRows(page)).toHaveCount(0)
 }
 
 // -- locators -----------------------------------------------------------------
@@ -113,7 +138,9 @@ export function emitTauri(page: Page, event: string, payload: unknown = null): P
  * the first click mounts the strip, which pushes the tree rows down between
  * the two physical clicks, so the second click lands on a different row.
  * Previewing first settles the layout; the dblclick then converts the
- * preview in place (same row count, no shift).
+ * preview in place (same row count, no shift). (The boot auto-preview means
+ * the strip is usually already mounted after gotoApp, but preview-first stays
+ * correct — and necessary for flows that dismissed the boot preview.)
  */
 export async function pinFile(page: Page, name: string): Promise<void> {
   await treeRow(page, name).click()

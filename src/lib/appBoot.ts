@@ -1,9 +1,12 @@
 import { invoke } from '@tauri-apps/api/core'
+import { get } from 'svelte/store'
 import { listenScoped, setWindowTitle, type Routed } from './windowing'
 import { doc, isDirty } from './doc'
 import { openPath, openDrainedEntries, type OpenedEntry } from './files'
+import { firstMarkdownPath } from './fileTree'
 import { initFileSync } from './fileSync'
-import { initWorkspace } from './workspace'
+import { openList, previewPath } from './openList'
+import { initWorkspace, workspace } from './workspace'
 import { exportTick, windowTitle } from './ui'
 import { exportDocument } from './export'
 import { reportError } from './errors'
@@ -136,13 +139,16 @@ export async function takeAssignedFile(): Promise<boolean> {
  * own window (MODE B); the rest surface without stealing activation. Each
  * entry carries its OWN readonly flag from Rust — Finder opens keep the
  * read-only safety net, argv files open editable. Called at boot (cold
- * launch) and on each `file:opened` ping.
+ * launch) and on each `file:opened` ping. Returns whether the drain yielded
+ * any entries at all, so the boot sequencing knows this window was claimed
+ * (see {@link drainStartupFiles}).
  */
 export async function drainOpenedFiles(
   openFirst: (path: string, readonly: boolean) => void,
-): Promise<void> {
+): Promise<boolean> {
   const entries = await invoke<OpenedEntry[]>('take_opened_files')
   openDrainedEntries(entries, openFirst)
+  return entries.length > 0
 }
 
 /**
@@ -156,12 +162,19 @@ export async function drainOpenedFiles(
  * and only falling back to the global drain when this window has no
  * assignment of its own, makes the two mutually exclusive instead of
  * concurrent.
+ *
+ * Returns whether ANYTHING claimed this window (a per-window assignment or at
+ * least one drained global entry) — the startup-file half of the "is this
+ * window truly unclaimed?" question the boot auto-preview asks (see
+ * {@link maybeAutoOpenBootPreview}).
  */
 export async function drainStartupFiles(
   openFirst: (path: string, readonly: boolean) => void,
-): Promise<void> {
+): Promise<boolean> {
   const hadAssignedFile = await takeAssignedFile()
-  if (!hadAssignedFile) await drainOpenedFiles(openFirst) // cold launch / main window: pick up the file the app was opened with
+  if (hadAssignedFile) return true
+  // Cold launch / main window: pick up the file the app was opened with.
+  return drainOpenedFiles(openFirst)
 }
 
 /**
@@ -193,21 +206,63 @@ export function closeTabDecision(
 }
 
 /**
+ * A window that boots with a restored/assigned workspace but NO document
+ * would otherwise land on a useless untitled scratch; instead, auto-open the
+ * workspace's first markdown file (tree render order — firstMarkdownPath).
+ * It opens as a PREVIEW deliberately: preview keeps the auto-open unobtrusive
+ * — an italic strip row the next single click simply replaces, promoted to a
+ * real pinned tab only if the user actually edits it. (An empty-state screen
+ * was rejected as new design surface.)
+ *
+ * Only fires when the window is truly unclaimed, re-checked here at fire
+ * time: the doc store still holds a clean, empty untitled scratch and nothing
+ * is open or previewed. The caller (bootApp) has already established the
+ * other two boundaries — the startup drains yielded nothing, and the
+ * workspace at hand arrived from the BOOT restore/handoff, not a later
+ * user-driven folder open. A workspace with no markdown files keeps the
+ * untitled scratch.
+ */
+export function maybeAutoOpenBootPreview(openPreview: (path: string) => void): void {
+  const ws = get(workspace)
+  if (ws.root === null || ws.tree === null) return
+  const d = get(doc)
+  if (d.path !== null || d.content !== '' || isDirty(d)) return
+  if (get(openList).length > 0 || get(previewPath) !== null) return
+  const first = firstMarkdownPath(ws.tree)
+  if (first !== null) openPreview(first)
+}
+
+/**
  * Run the whole boot sequence: subscribe the menu/window events, drain the
  * startup files (per-window hand-off first, then the global queue), start the
  * file watcher and workspace restore, and wire the store-driven native-chrome
  * mirrors. Returns one SYNC teardown for all of it — initFileSync and
  * initWorkspace return Promise<() => void>, resolved inside the teardown the
  * same way App.svelte's onMount cleanup did.
+ *
+ * `openBootPreview` is App's preview-open closure (its handleOpenFile with
+ * {preview: true}), invoked at most once for the boot auto-preview (see
+ * {@link maybeAutoOpenBootPreview}). The sequencing makes the startup drains
+ * win: the auto-preview waits for BOTH the boot workspace restore to settle
+ * (initWorkspace's callback — boot-time only by construction, so a folder the
+ * user opens mid-session never auto-opens) AND the startup-file drains to
+ * report whether anything claimed this window.
  */
 export function bootApp(opts: {
   menuEvents: MenuEventMap
   openStartupFile: (path: string, readonly: boolean) => void
+  openBootPreview: (path: string) => void
 }): () => void {
   const teardownEvents = wireEvents(opts.menuEvents)
-  void drainStartupFiles(opts.openStartupFile)
+  const startupClaimed = drainStartupFiles(opts.openStartupFile)
   const teardownSync = initFileSync() // watch the open file for external changes
-  const teardownWorkspace = initWorkspace() // restore + refresh the workspace tree
+  // Restore + refresh the workspace tree; once the boot restore settles, an
+  // unclaimed window auto-previews the workspace's first markdown file.
+  const teardownWorkspace = initWorkspace(() => {
+    void startupClaimed.then((claimed) => {
+      if (!claimed) maybeAutoOpenBootPreview(opts.openBootPreview)
+    })
+  })
   const teardownExport = initExportOnTick()
   const teardownReadonlyMenu = initReadonlyMenuSync()
   const teardownTitle = initWindowTitleSync()

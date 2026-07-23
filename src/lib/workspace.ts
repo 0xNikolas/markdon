@@ -226,10 +226,19 @@ export async function takeStartupWorkspace(): Promise<boolean> {
  * every root transition, torn down on close), whose debounced
  * `workspace:changed` events refresh the tree WITHOUT a refocus. Returns an
  * async teardown, matching `initFileSync`.
+ *
+ * `onBootRestoreSettled` fires exactly once, after the boot-time
+ * handoff/restore chain has fully settled (workspace adopted — the store is
+ * already set — or provably nothing to adopt). It is the only reliable
+ * boundary between "this workspace arrived at boot" and "the user opened a
+ * folder later": appBoot's auto-preview of the first workspace file must run
+ * on the former and never the latter, and a plain store subscription cannot
+ * tell the two apart when the boot restore found nothing.
  */
-export function initWorkspace(): Promise<() => void> {
-  takeStartupWorkspace().then((suppressRestore) => {
-    if (!suppressRestore) restoreWorkspace()
+export function initWorkspace(onBootRestoreSettled?: () => void): Promise<() => void> {
+  takeStartupWorkspace().then(async (suppressRestore) => {
+    if (!suppressRestore) await restoreWorkspace()
+    onBootRestoreSettled?.()
   })
 
   let lastPath: string | null = get(doc).path

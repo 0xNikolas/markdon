@@ -307,6 +307,11 @@
   onMount(() =>
     bootApp({
       openStartupFile,
+      // The boot auto-preview of an unclaimed window rides the same preview
+      // flow as a sidebar single click (openPath {preview: true} via the
+      // switch guard) — the doc is a clean scratch at that point, so the
+      // guard passes straight through.
+      openBootPreview: (path) => handleOpenFile(path, { preview: true }),
       menuEvents: {
         // newDoc replaces the doc without going through openPath, so the
         // pathed doc's stash is explicit here; open() stashes inside its

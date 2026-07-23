@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { leafNameError, visibleRowPaths, folderPaths, folderRows, pasteTargetDir } from './fileTree'
-import { tree } from './test-support/workspaceFixtures'
+import {
+  leafNameError,
+  visibleRowPaths,
+  folderPaths,
+  folderRows,
+  firstMarkdownPath,
+  pasteTargetDir,
+} from './fileTree'
+import { tree, dir, file } from './test-support/workspaceFixtures'
 
 describe('leafNameError', () => {
   it.each(['note.md', 'README', '.hidden', '..twodots', 'a b c.markdown'])(
@@ -60,6 +67,43 @@ describe('folderRows', () => {
 
   it('returns [] for a null tree', () => {
     expect(folderRows(null)).toEqual([])
+  })
+})
+
+describe('firstMarkdownPath', () => {
+  it('walks depth-first in render order: dirs before files, so the first md inside the first folder wins', () => {
+    // The fixture tree renders docs/ (note.md) before the root readme.md.
+    expect(firstMarkdownPath(tree)).toBe('/ws/docs/note.md')
+  })
+
+  it('skips non-markdown files, descending until a markdown file is found', () => {
+    const t = dir(
+      'ws',
+      '/ws',
+      [
+        dir('img', '/ws/img', [], [file('logo.svg', '/ws/img/logo.svg')]),
+        dir('docs', '/ws/docs', [dir('deep', '/ws/docs/deep', [], [file('Guide.MARKDOWN', '/ws/docs/deep/Guide.MARKDOWN')])], []),
+      ],
+      [file('notes.md', '/ws/notes.md')],
+    )
+    // img/ has no markdown; docs/deep's case-insensitive .MARKDOWN still
+    // precedes the root-level notes.md in render order.
+    expect(firstMarkdownPath(t)).toBe('/ws/docs/deep/Guide.MARKDOWN')
+  })
+
+  it('falls back to a root-level file when no folder holds any markdown', () => {
+    const t = dir('ws', '/ws', [dir('img', '/ws/img')], [
+      file('readme.txt', '/ws/readme.txt'),
+      file('a.md', '/ws/a.md'),
+    ])
+    expect(firstMarkdownPath(t)).toBe('/ws/a.md')
+  })
+
+  it('returns null for a null tree and for a tree with no markdown files', () => {
+    expect(firstMarkdownPath(null)).toBeNull()
+    expect(
+      firstMarkdownPath(dir('ws', '/ws', [dir('img', '/ws/img')], [file('a.txt', '/ws/a.txt')])),
+    ).toBeNull()
   })
 })
 
