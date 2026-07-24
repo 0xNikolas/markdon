@@ -856,13 +856,10 @@
          point beyond the File menu. -->
     <Sidebar
       activePath={$imageView ?? $doc.path}
-      openFiles={$openList}
-      previewPath={$previewPath}
       onOpenFile={handleOpenFile}
       onCloseFile={onCloseFile}
       onStripAction={handleStripAction}
       onNewFile={newUntitled}
-      dirtyPaths={$dirtyCached}
     />
     <div class="content">
       <!-- Doc-specific chrome is gated on $imageView===null: it keys off $doc/

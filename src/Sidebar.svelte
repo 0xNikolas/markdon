@@ -8,6 +8,7 @@
   import WorkspaceTree from './WorkspaceTree.svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { workspace, openWorkspace, closeWorkspace } from './lib/workspace'
+  import { openList, previewPath } from './lib/openList'
   import { openInNewWindow } from './lib/files'
   import { reportError } from './lib/errors'
   import {
@@ -34,12 +35,6 @@
 
   interface Props {
     activePath: string | null
-    openFiles: string[]
-    /** The single-click preview slot (openList.ts) — the strip's italic row. */
-    previewPath: string | null
-    /** Paths whose CACHED (background) buffers hold unsaved edits — the
-        strip renders a dirty dot on those rows (bufferCache.dirtyCached). */
-    dirtyPaths?: ReadonlySet<string>
     /** `preview` = single-click glance (always in-place); `inPlace` = the
         explicit Open in New Tab action, which bypasses openMode routing. */
     onOpenFile: (path: string, opts?: { preview?: boolean; inPlace?: boolean }) => void
@@ -50,9 +45,6 @@
   }
   let {
     activePath,
-    openFiles,
-    previewPath,
-    dirtyPaths = new Set(),
     onOpenFile,
     onCloseFile,
     onStripAction,
@@ -260,8 +252,10 @@
 
   // Paths currently in the Open Files strip (pinned rows + the italic preview
   // row) — the row context menu's Close item shows only for a file that's open.
+  // Read straight from the openList/previewPath module singletons (same stores
+  // OpenFilesStrip and App subscribe to) rather than threaded down as props.
   let openPaths = $derived(
-    new Set(previewPath !== null ? [...openFiles, previewPath] : openFiles),
+    new Set($previewPath !== null ? [...$openList, $previewPath] : $openList),
   )
 </script>
 
@@ -272,10 +266,7 @@
   oncontextmenu={onPanelContextMenu}
 >
   <OpenFilesStrip
-    {openFiles}
-    {previewPath}
     {activePath}
-    {dirtyPaths}
     {onOpenFile}
     {onCloseFile}
     {onStripAction}
