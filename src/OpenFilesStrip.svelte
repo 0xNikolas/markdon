@@ -10,13 +10,12 @@
 </script>
 
 <script lang="ts">
-  import { tick } from 'svelte'
   import Icon from './Icon.svelte'
   import { fileIcon, workspace } from './lib/workspace'
   import { basename } from './lib/treeState'
   import { stripOrder } from './lib/openList'
   import { stripKeyIntent } from './lib/stripNav'
-  import { clampMenuPosition } from './lib/sidebarMenu'
+  import ContextMenu, { type MenuItem } from './ContextMenu.svelte'
 
   interface Props {
     openFiles: string[]
@@ -86,22 +85,17 @@
   }
 
   // -- row context menu -------------------------------------------------------
-  // Same machinery as the workspace tree's FileOpsMenu in cursor mode
-  // (fixed-position, viewport-clamped via clampMenuPosition, dismissed by any
-  // outside pointer press or Escape) — rebuilt inline rather than reusing
-  // FileOpsMenu because the item set is disjoint (close variants vs fileops).
+  // The menu MECHANISM (positioning, roving focus, outside-press/Escape
+  // dismiss) is shared with the workspace tree's FileOpsMenu via ContextMenu;
+  // only the item set differs (close variants vs fileops), built here.
   let ctxMenu = $state<{ x: number; y: number; path: string } | null>(null)
-  let menuEl = $state<HTMLDivElement>()
-  let itemEls: HTMLButtonElement[] = $state([])
+  // The right-clicked row's path, snapshotted OUTSIDE reactivity: ContextMenu
+  // fires onClose() (nulling ctxMenu) before onSelect(), so onSelect must NOT
+  // read ctxMenu.path (a reactive read would recompute against the now-null
+  // ctxMenu and throw). Set once when the menu opens; constant for its life.
+  let menuPath = ''
 
-  interface MenuItem {
-    action: StripRowAction
-    label: string
-    enabled: boolean
-    /** Start a new visual group (divider rendered above). */
-    group?: boolean
-  }
-  let menuItems = $derived<MenuItem[]>([
+  let menuItems = $derived<MenuItem<StripRowAction>[]>([
     { action: 'close', label: 'Close', enabled: true },
     // With a single row there is nothing "other" to close.
     { action: 'close-others', label: 'Close Others', enabled: rows.length > 1 },
@@ -117,86 +111,10 @@
     // (empty-space deselect) out of it.
     e.preventDefault()
     e.stopPropagation()
+    menuPath = path
     ctxMenu = { x: e.clientX, y: e.clientY, path }
   }
-
-  // Measure the rendered menu, then clamp to the viewport (FileOpsMenu's
-  // cursor-mode pattern; the pre-measure paint is one frame at most).
-  let menuPos = $state<{ x: number; y: number } | null>(null)
-  $effect(() => {
-    if (!ctxMenu) {
-      menuPos = null
-      return
-    }
-    const w = menuEl?.offsetWidth ?? 176
-    const h = menuEl?.offsetHeight ?? 200
-    menuPos = clampMenuPosition(ctxMenu.x, ctxMenu.y, { w, h }, {
-      w: window.innerWidth,
-      h: window.innerHeight,
-    })
-  })
-
-  // Focus the first enabled item on open AND on re-target to another row
-  // (right-click row A then row B keeps this instance mounted — reading
-  // `ctxMenu` re-runs the effect), keeping the menu keyboard-operable.
-  $effect(() => {
-    void ctxMenu
-    void focusFirstItem()
-  })
-  async function focusFirstItem() {
-    await tick()
-    const first = menuItems.findIndex((it) => it.enabled)
-    if (first !== -1) itemEls[first]?.focus()
-  }
-
-  function enabledIndices(): number[] {
-    return menuItems.map((it, i) => (it.enabled ? i : -1)).filter((i) => i >= 0)
-  }
-
-  function onMenuKeydown(e: KeyboardEvent) {
-    const enabled = enabledIndices()
-    if (enabled.length === 0) return
-    const pos = enabled.indexOf(itemEls.findIndex((b) => b === document.activeElement))
-    switch (e.key) {
-      case 'Escape':
-        e.preventDefault()
-        e.stopPropagation()
-        ctxMenu = null
-        break
-      case 'ArrowDown':
-        e.preventDefault()
-        itemEls[enabled[(pos + 1) % enabled.length]]?.focus()
-        break
-      case 'ArrowUp':
-        e.preventDefault()
-        itemEls[enabled[pos <= 0 ? enabled.length - 1 : pos - 1]]?.focus()
-        break
-      case 'Home':
-        e.preventDefault()
-        itemEls[enabled[0]]?.focus()
-        break
-      case 'End':
-        e.preventDefault()
-        itemEls[enabled[enabled.length - 1]]?.focus()
-        break
-    }
-  }
-
-  function activateMenuItem(it: MenuItem) {
-    if (!it.enabled || !ctxMenu) return
-    const path = ctxMenu.path
-    ctxMenu = null
-    onStripAction(it.action, path)
-  }
-
-  // Close on any pointer press outside the menu (the opening right-click's
-  // own pointerdown precedes the menu mount, so it never self-dismisses).
-  function onWindowPointerDown(e: PointerEvent) {
-    if (ctxMenu && menuEl && !menuEl.contains(e.target as Node)) ctxMenu = null
-  }
 </script>
-
-<svelte:window onpointerdown={onWindowPointerDown} />
 
 {#if $workspace.tree !== null || rows.length > 0}
   <!-- VS Code "Open Editors"-style strip: every opened document, in- or
@@ -313,32 +231,15 @@
 {/if}
 
 {#if ctxMenu}
-  <div
-    bind:this={menuEl}
-    class="menu"
-    style={menuPos ? `left: ${menuPos.x}px; top: ${menuPos.y}px;` : `left: ${ctxMenu.x}px; top: ${ctxMenu.y}px;`}
-    role="menu"
-    tabindex="-1"
-    aria-label="Open file actions"
-    onkeydown={onMenuKeydown}
-  >
-    {#each menuItems as it, i (it.action)}
-      {#if it.group && i !== 0}
-        <div class="divider" role="separator"></div>
-      {/if}
-      <button
-        bind:this={itemEls[i]}
-        class="item"
-        role="menuitem"
-        tabindex={it.enabled ? 0 : -1}
-        disabled={!it.enabled}
-        aria-disabled={!it.enabled}
-        onclick={() => activateMenuItem(it)}
-      >
-        {it.label}
-      </button>
-    {/each}
-  </div>
+  <!-- onSelect reads the non-reactive `menuPath` snapshot (see its declaration):
+       ContextMenu nulls ctxMenu via onClose() before onSelect() runs. -->
+  <ContextMenu
+    items={menuItems}
+    at={ctxMenu}
+    ariaLabel="Open file actions"
+    onClose={() => (ctxMenu = null)}
+    onSelect={(a) => onStripAction(a, menuPath)}
+  />
 {/if}
 
 <style>
@@ -483,52 +384,5 @@
     border-radius: 50%;
     background: var(--accent);
     flex-shrink: 0;
-  }
-
-  /* Row context menu: FileOpsMenu's cursor-mode look, verbatim, so the two
-     read as one system (fixed, viewport-clamped, above sidebar chrome). */
-  .menu {
-    position: fixed;
-    z-index: 30; /* above sidebar chrome; below modals (z 100) */
-    min-width: 176px;
-    padding: 4px;
-    display: flex;
-    flex-direction: column;
-    background: var(--modal-bg);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    box-shadow: var(--shadow-popover);
-  }
-  .item {
-    display: block;
-    width: 100%;
-    text-align: left;
-    padding: 6px 10px;
-    border: 0;
-    border-radius: 4px;
-    background: none;
-    color: var(--fg-secondary);
-    font: 400 13px var(--font-ui);
-    cursor: pointer;
-    transition: background-color 0.1s ease, color 0.1s ease;
-  }
-  .item:not(:disabled):hover,
-  .item:not(:disabled):focus-visible {
-    background: var(--surface-hover);
-    color: var(--fg-strong);
-    outline: none;
-  }
-  .item:not(:disabled):active {
-    background: var(--surface-active);
-  }
-  .item:disabled {
-    color: var(--fg-faint);
-    opacity: 0.5;
-    cursor: default;
-  }
-  .divider {
-    height: 1px;
-    margin: 4px 6px;
-    background: var(--border);
   }
 </style>
