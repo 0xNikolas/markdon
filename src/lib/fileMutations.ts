@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core'
+import * as ipc from './ipc'
 import { get } from 'svelte/store'
 import { retargetPath, detachIfAffected } from './doc'
 import { reportFailure, reportNotice } from './errors'
@@ -28,25 +28,25 @@ import { pasteTargetDir, folderPaths } from './fileTree'
 // -- command wrappers ---------------------------------------------------------
 
 export function createFile(dir: string, name: string): Promise<string> {
-  return invoke<string>('create_file', { dir, name })
+  return ipc.createFile(dir, name)
 }
 export function createFolder(dir: string, name: string): Promise<string> {
-  return invoke<string>('create_folder', { dir, name })
+  return ipc.createFolder(dir, name)
 }
 export function renameEntry(path: string, newName: string): Promise<string> {
-  return invoke<string>('rename_entry', { path, newName })
+  return ipc.renameEntry(path, newName)
 }
 export function moveEntry(src: string, destDir: string): Promise<string> {
-  return invoke<string>('move_entry', { src, destDir })
+  return ipc.moveEntry(src, destDir)
 }
 export function copyEntry(src: string, destDir: string): Promise<string> {
-  return invoke<string>('copy_entry', { src, destDir })
+  return ipc.copyEntry(src, destDir)
 }
 export function duplicateEntry(path: string): Promise<string> {
-  return invoke<string>('duplicate_entry', { path })
+  return ipc.duplicateEntry(path)
 }
 export function deleteEntries(paths: string[]): Promise<void> {
-  return invoke('delete_entries', { paths })
+  return ipc.deleteEntries(paths)
 }
 
 // -- high-level operations (backend + doc-consistency + refresh) --------------

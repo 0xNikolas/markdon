@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core'
+import * as ipc from './ipc'
 import { get, writable, type Writable } from 'svelte/store'
 import { doc, openDoc, isDirty } from './doc'
 import { reportFailure } from './errors'
@@ -94,7 +94,7 @@ export async function reconcileWithDisk(path: string): Promise<void> {
   const loadId = before.loadId
   let disk: string
   try {
-    disk = await invoke<string>('read_file', { path })
+    disk = await ipc.readFile(path)
   } catch {
     // Expected during atomic writes — the file may be mid-write or removed.
     logInfo('external-change read skipped (file mid-write or removed)')
@@ -136,7 +136,7 @@ export async function initFileSync(): Promise<() => void> {
     watchStatus.set('idle')
     if (s.path) {
       const path = s.path
-      invoke('watch_file', { path }).then(
+      ipc.watchFile(path).then(
         () => {
           // Guard: a path switch while the invoke was in flight means this
           // resolution is for a file we no longer watch — don't go green.

@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core'
+import * as ipc from './ipc'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { get, writable, type Writable } from 'svelte/store'
 import { coalesce } from './coalesce'
@@ -92,10 +92,10 @@ function adopt(ws: Workspace): void {
 export async function openWorkspace(): Promise<void> {
   try {
     if (get(workspace).root !== null) {
-      await invoke('pick_folder_new_instance')
+      await ipc.pickFolderNewInstance()
       return
     }
-    const ws = await invoke<Workspace | null>('open_workspace_dialog')
+    const ws = await ipc.openWorkspaceDialog()
     if (ws === null) return // cancelled
     adopt(ws)
   } catch (e) {
@@ -112,7 +112,7 @@ export async function openWorkspace(): Promise<void> {
  */
 export async function listRecentWorkspaces(): Promise<string[]> {
   try {
-    return await invoke<string[]>('list_recent_workspaces')
+    return await ipc.listRecentWorkspaces()
   } catch (e) {
     logWarn('recent workspaces load failed', e)
     return []
@@ -161,10 +161,7 @@ export async function openRecentWorkspace(root: string): Promise<void> {
   const current = get(workspace).root
   if (current === root) return
   try {
-    const ws = await invoke<Workspace | null>('open_recent_workspace', {
-      root,
-      currentRoot: current,
-    })
+    const ws = await ipc.openRecentWorkspace(root, current)
     if (ws !== null) adopt(ws)
   } catch (e) {
     reportFailure('reopen workspace', e)
@@ -187,7 +184,7 @@ export async function openRecentWorkspace(root: string): Promise<void> {
 export async function closeWorkspace(): Promise<void> {
   const root = get(workspace).root
   try {
-    if (root !== null) await invoke('close_workspace', { root })
+    if (root !== null) await ipc.closeWorkspace(root)
   } catch (e) {
     reportFailure('close folder', e)
   }
@@ -208,7 +205,7 @@ export async function refreshWorkspace(): Promise<void> {
   const root = get(workspace).root
   if (root === null) return
   try {
-    const ws = await invoke<Workspace>('list_workspace', { root })
+    const ws = await ipc.listWorkspace(root)
     if (get(workspace).root !== root) return // root changed mid-walk: stale result
     adopt(ws)
   } catch (e) {
@@ -241,7 +238,7 @@ export async function refreshFromWatcher(): Promise<void> {
  */
 export async function restoreWorkspace(): Promise<void> {
   try {
-    const ws = await invoke<Workspace | null>('restore_workspace')
+    const ws = await ipc.restoreWorkspace()
     if (ws === null) return
     adopt(ws)
   } catch (e) {
@@ -266,9 +263,7 @@ export async function restoreWorkspace(): Promise<void> {
  */
 export async function takeStartupWorkspace(): Promise<boolean> {
   try {
-    const handoff = await invoke<{ workspace: Workspace | null; suppress_restore: boolean }>(
-      'take_startup_workspace',
-    )
+    const handoff = await ipc.takeStartupWorkspace()
     if (handoff.workspace !== null) adopt(handoff.workspace)
     return handoff.suppress_restore
   } catch (e) {

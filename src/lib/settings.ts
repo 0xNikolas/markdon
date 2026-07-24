@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core'
+import * as ipc from './ipc'
 import { writable, type Writable } from 'svelte/store'
 import { createEchoGuard } from './echoGuard'
 import { themePref, type ThemePref } from './theme'
@@ -132,8 +132,8 @@ function realEnv(): SettingsEnv {
     storage: window.localStorage,
     setVar: (name, value) => document.documentElement.style.setProperty(name, value),
     setTheme: (theme) => themePref.set(theme),
-    loadRemote: () => invoke<string | null>('load_prefs'),
-    saveRemote: (json) => invoke('save_prefs', { json }),
+    loadRemote: () => ipc.loadPrefs(),
+    saveRemote: (json) => ipc.savePrefs(json),
     onFocus: (cb) => {
       window.addEventListener('focus', cb)
       return () => window.removeEventListener('focus', cb)

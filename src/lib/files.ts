@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core'
+import * as ipc from './ipc'
 import { get } from 'svelte/store'
 import { doc, openDoc, restoreDoc, markSaved, isDirty } from './doc'
 import { reportFailure } from './errors'
@@ -10,11 +10,6 @@ import { reconcileWithDisk } from './fileSync'
 import { flushBufferEdits } from './bufferFlush'
 import * as bufferCache from './bufferCache'
 import { ASSERT_INVARIANTS } from './assertInvariant'
-
-interface OpenedFile {
-  path: string
-  content: string
-}
 
 /** One drained OpenedFiles entry (mirrors Rust `OpenedEntry` in lib.rs):
     Finder/OS-association opens arrive readonly, argv hand-offs editable. */
@@ -100,7 +95,7 @@ export async function openPath(
     return
   }
   try {
-    const content = await invoke<string>('read_file', { path })
+    const content = await ipc.readFile(path)
     openDoc(path, content, opts.readonly ?? false)
     if (opts.preview && !get(openList).includes(path)) {
       previewPath.set(path) // replaces any previous preview — VS Code behavior
@@ -121,7 +116,7 @@ export async function openPath(
 export async function open(): Promise<void> {
   try {
     // The dialog lives in Rust so the backend can vouch for the picked path.
-    const picked = await invoke<OpenedFile | null>('open_file_dialog')
+    const picked = await ipc.openFileDialog()
     if (picked === null) return // cancelled
     // Honor the openMode preference: 'window' spawns a fresh window for the
     // pick (re-read there); 'tab' opens the already-loaded content in place.
@@ -176,7 +171,7 @@ export function openInPreferredTarget(
 
 /** The raw spawn both window-open paths share; callers own error handling. */
 function spawnDocumentWindow(path: string, readonly: boolean): Promise<void> {
-  return invoke('open_document_window', { path, readonly })
+  return ipc.openDocumentWindow(path, readonly)
 }
 
 /**
@@ -229,7 +224,7 @@ export async function save(): Promise<void> {
   if (state.readonly) return // read-only docs are always clean; nothing to save
   if (state.path === null) return saveAs()
   try {
-    await invoke('write_file', { path: state.path, contents: state.content })
+    await ipc.writeFile(state.path, state.content)
     markSaved(state.path, state.content)
     // Best-effort File History snapshot: never awaited into the save
     // outcome, errors swallowed inside recordSave — a history failure must never
@@ -244,11 +239,9 @@ export async function saveAs(): Promise<void> {
   flushBufferEdits() // see save(): never write a buffer that trails the editor
   const state = get(doc)
   try {
-    const selected = await invoke<string | null>('save_file_dialog', {
-      defaultPath: state.path ?? 'untitled.md',
-    })
+    const selected = await ipc.saveFileDialog(state.path ?? 'untitled.md')
     if (selected === null) return // cancelled
-    await invoke('write_file', { path: selected, contents: state.content })
+    await ipc.writeFile(selected, state.content)
     markSaved(selected, state.content)
     // A background tab overwritten by this Save As must not later restore its
     // pre-overwrite buffer — the live doc IS that path's content now.
@@ -278,7 +271,7 @@ export async function saveCachedBuffer(path: string): Promise<boolean> {
   const entry = bufferCache.peek(path)
   if (entry === undefined || !isDirty(entry)) return true
   try {
-    await invoke('write_file', { path, contents: entry.content })
+    await ipc.writeFile(path, entry.content)
     bufferCache.markCachedSaved(path)
     readonlyMemory.unlock(path)
     void recordSave(path)

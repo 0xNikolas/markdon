@@ -1,8 +1,8 @@
-import { invoke } from '@tauri-apps/api/core'
+import * as ipc from './ipc'
 import { get } from 'svelte/store'
 import { listenScoped, setWindowTitle, type Routed } from './windowing'
 import { doc, isDirty, showEmptyState } from './doc'
-import { openPath, openDrainedEntries, type OpenedEntry } from './files'
+import { openPath, openDrainedEntries } from './files'
 import { initFileSync } from './fileSync'
 import { openList, previewPath } from './openList'
 import { initWorkspace, workspace, stampTabState, type WorkspaceTabs } from './workspace'
@@ -138,7 +138,7 @@ export function initWindowTitleSync(): () => void {
  */
 export async function takeAssignedFile(): Promise<boolean> {
   try {
-    const assigned = await invoke<{ path: string; readonly: boolean } | null>('take_window_file')
+    const assigned = await ipc.takeWindowFile()
     if (assigned) {
       openPath(assigned.path, { readonly: assigned.readonly })
       return true
@@ -165,7 +165,7 @@ export async function takeAssignedFile(): Promise<boolean> {
 export async function drainOpenedFiles(
   openFirst: (path: string, readonly: boolean) => void,
 ): Promise<boolean> {
-  const entries = await invoke<OpenedEntry[]>('take_opened_files')
+  const entries = await ipc.takeOpenedFiles()
   openDrainedEntries(entries, openFirst)
   return entries.length > 0
 }
@@ -236,7 +236,7 @@ export function closeTabDecision(
  */
 export async function loadWorkspaceTabs(root: string): Promise<WorkspaceTabs | null> {
   try {
-    return await invoke<WorkspaceTabs | null>('load_workspace_ui', { root })
+    return await ipc.loadWorkspaceUi(root)
   } catch (e) {
     logWarn('workspace ui load failed', e)
     return null
