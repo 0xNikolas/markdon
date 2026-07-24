@@ -9,6 +9,7 @@ import { readonlyMemory } from './readonlyMemory'
 import { reconcileWithDisk } from './fileSync'
 import { flushBufferEdits } from './bufferFlush'
 import * as bufferCache from './bufferCache'
+import { ASSERT_INVARIANTS } from './assertInvariant'
 
 interface OpenedFile {
   path: string
@@ -44,12 +45,20 @@ export function stashActive(): void {
   const dirty = isDirty(s)
   if (!pinned && !dirty) return // clean preview: volatile by design
   if (!pinned) pinOpen(s.path) // defensive: never cache-drop unsaved edits
-  bufferCache.stash(s.path, {
-    content: s.content,
-    savedContent: s.savedContent,
-    normalized: s.normalized,
-    view: bufferCache.captureViewState(),
-  })
+  // Read the openList AFTER the defensive pin above, so s.path is guaranteed
+  // present — the dev/test-only membership check (cache keys ⊆ openList) never
+  // false-positives. The ternary is statically `undefined` in a production
+  // build (ASSERT_INVARIANTS is false), so the store read is eliminated.
+  bufferCache.stash(
+    s.path,
+    {
+      content: s.content,
+      savedContent: s.savedContent,
+      normalized: s.normalized,
+      view: bufferCache.captureViewState(),
+    },
+    ASSERT_INVARIANTS ? get(openList) : undefined,
+  )
 }
 
 /**
