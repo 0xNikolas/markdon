@@ -1,7 +1,9 @@
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { get, writable, type Writable } from 'svelte/store'
+import { coalesce } from './coalesce'
 import { doc } from './doc'
+import { createKeyedEchoGuard } from './echoGuard'
 import { reportFailure } from './errors'
 import { logWarn, fireAndForget } from './logging'
 import { openList, previewPath } from './openList'
@@ -295,16 +297,13 @@ export interface WorkspaceTabs {
  * suppression cache: staleness on failure is harmless (the next differing
  * strip writes again).
  */
-const lastWrittenUi = new Map<string, string>()
+const uiGuard = createKeyedEchoGuard<string>()
 
 /** Test support: forget the per-root last-written guard and drop any pending
     debounced write. */
 export function resetTabRecording(): void {
-  lastWrittenUi.clear()
-  if (tabWriteTimer !== null) {
-    clearTimeout(tabWriteTimer)
-    tabWriteTimer = null
-  }
+  uiGuard.reset()
+  tabWrite.cancel() // drop, never flush — a reset must not persist
 }
 
 /**
@@ -331,7 +330,7 @@ function currentTabSnapshot(root: string): WorkspaceTabs {
  * currentTabSnapshot's field order.
  */
 export function stampTabState(root: string, state: WorkspaceTabs): void {
-  lastWrittenUi.set(root, JSON.stringify(state))
+  uiGuard.stamp(root, JSON.stringify(state))
 }
 
 /**
@@ -351,8 +350,8 @@ function recordTabState(): void {
   if (root === null) return
   const snapshot = currentTabSnapshot(root)
   const serialized = JSON.stringify(snapshot)
-  if (lastWrittenUi.get(root) === serialized) return
-  lastWrittenUi.set(root, serialized)
+  if (!uiGuard.shouldWrite(root, serialized)) return
+  uiGuard.stamp(root, serialized)
   fireAndForget('save_workspace_ui', 'workspace ui save failed', {
     root,
     tabs: snapshot.tabs,
@@ -369,14 +368,10 @@ function recordTabState(): void {
  * tail on window close.
  */
 const TAB_WRITE_DEBOUNCE_MS = 250
-let tabWriteTimer: ReturnType<typeof setTimeout> | null = null
+const tabWrite = coalesce(recordTabState, TAB_WRITE_DEBOUNCE_MS)
 
 function scheduleTabWrite(): void {
-  if (tabWriteTimer !== null) clearTimeout(tabWriteTimer)
-  tabWriteTimer = setTimeout(() => {
-    tabWriteTimer = null
-    recordTabState()
-  }, TAB_WRITE_DEBOUNCE_MS)
+  tabWrite.schedule()
 }
 
 /**
@@ -386,10 +381,7 @@ function scheduleTabWrite(): void {
  * A no-op when nothing is pending.
  */
 export function flushTabWrite(): void {
-  if (tabWriteTimer === null) return
-  clearTimeout(tabWriteTimer)
-  tabWriteTimer = null
-  recordTabState()
+  tabWrite.flush()
 }
 
 /**

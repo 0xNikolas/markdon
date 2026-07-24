@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { writable, type Writable } from 'svelte/store'
+import { createEchoGuard } from './echoGuard'
 import { themePref, type ThemePref } from './theme'
 
 /**
@@ -187,7 +188,7 @@ export function initSettings(env: SettingsEnv = realEnv()): () => void {
    * initial subscriber run never pushes the possibly-stale cache over the
    * file before the reconcile below has read it.
    */
-  let lastPersisted: string | null = bootRaw
+  const echoGuard = createEchoGuard(bootRaw)
   let active = true
 
   settings.set(boot)
@@ -204,8 +205,8 @@ export function initSettings(env: SettingsEnv = realEnv()): () => void {
     env.setVar('--editor-font-size', `${s.fontSize}px`)
     env.setVar('--editor-line-height', String(s.lineHeight))
     env.setTheme(s.theme) // themePref.set — theme.ts stamps data-theme + native titlebar
-    if (serialized === lastPersisted) return // echo of a remote apply (or boot)
-    lastPersisted = serialized
+    if (!echoGuard.shouldWrite(serialized)) return // echo of a remote apply (or boot)
+    echoGuard.stamp(serialized)
     // Best-effort: an IPC failure degrades to today's localStorage-only world.
     void env.saveRemote(serialized).catch(() => {})
   })
@@ -213,7 +214,7 @@ export function initSettings(env: SettingsEnv = realEnv()): () => void {
   const applyRemote = (remoteRaw: string) => {
     const normalized = JSON.stringify(parseSettings(remoteRaw))
     if (normalized === current) return
-    lastPersisted = normalized // pre-stamp so the apply doesn't echo a save
+    echoGuard.stamp(normalized) // pre-stamp so the apply doesn't echo a save
     settings.set(parseSettings(remoteRaw))
   }
 
