@@ -7,9 +7,9 @@ import { createKeyedEchoGuard } from './echoGuard'
 import { reportFailure } from './errors'
 import { logWarn, fireAndForget } from './logging'
 import { openList, previewPath } from './openList'
-import { isInsideRoot, workspaceName } from './ui'
+import { workspaceName } from './ui'
 import { listenScoped } from './windowing'
-import { basename } from './paths'
+import { basename, isInsideRoot } from './paths'
 
 /** A file leaf in the workspace tree (mirrors Rust `WorkspaceFile`). */
 export interface WorkspaceFile {

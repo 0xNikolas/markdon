@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from './Icon.svelte'
-  import { workspaceName, fileBreadcrumb, split, toggleSplit, requestExport } from './lib/ui'
+  import { workspaceName, split, toggleSplit, requestExport } from './lib/ui'
+  import { fileBreadcrumb } from './lib/paths'
   import { openOverlay } from './lib/overlay'
   import { workspace } from './lib/workspace'
   import { resolvedTheme } from './lib/theme'
