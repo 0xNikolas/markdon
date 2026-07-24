@@ -1,5 +1,5 @@
 import { writable, type Writable } from 'svelte/store'
-import { fireAndForget, formatUnknown, logError, logInfo } from './logging'
+import { fireAndForget, logError, logInfo } from './logging'
 
 export const errorMessage: Writable<string | null> = writable(null)
 
@@ -13,14 +13,14 @@ export function clearError(): void {
 }
 
 /**
- * Report a failed action as a "Could not ${action}: …" banner, rendering the
- * caught value through logging.formatUnknown — so a Tauri Result<T,String>
- * rejection surfaces as its string verbatim (unchanged from the old
- * `String(e)` shape), while a genuine JS Error carries its message + stack into
- * both the banner and the log line. A thin front for {@link reportError}.
+ * Report a failed action as a "Could not ${action}: …" banner. Renders the
+ * caught value with `String(e)` — byte-identical to the ~28 inline
+ * `reportError(\`Could not X: ${String(e)}\`)` catch sites this replaced (a
+ * Tauri Result<T,String> rejection is already a string; a real Error stringifies
+ * to "Name: message"). A thin front for {@link reportError}.
  */
 export function reportFailure(action: string, e: unknown): void {
-  reportError(`Could not ${action}: ${formatUnknown(e)}`)
+  reportError(`Could not ${action}: ${String(e)}`)
 }
 
 /**

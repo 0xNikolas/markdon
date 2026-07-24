@@ -63,12 +63,10 @@ describe('error sink funnel', () => {
     expect(logPluginMocks.error.mock.calls).toEqual([['Could not save file: disk full']])
   })
 
-  it('reportFailure carries an Error message and stack into banner and log', () => {
+  it('reportFailure stringifies an Error to "Name: message" — byte-identical to String(e)', () => {
     const e = new Error('boom')
     reportFailure('save file', e)
-    const msg = get(errorMessage)!
-    expect(msg).toContain('Could not save file: boom')
-    expect(msg).toContain(e.stack!)
-    expect(logPluginMocks.error.mock.calls).toEqual([[msg]])
+    expect(get(errorMessage)).toBe('Could not save file: Error: boom')
+    expect(logPluginMocks.error.mock.calls).toEqual([['Could not save file: Error: boom']])
   })
 })
