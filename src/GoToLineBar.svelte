@@ -4,8 +4,7 @@
   import { closeOverlay } from './lib/overlay'
   import { goToSourceLine, clearPendingLine } from './lib/sourceEditor'
   import { parseGoto, lineCount } from './lib/gotoLine'
-  import { focusTrap } from './lib/focusTrap'
-  import { portal } from './lib/portal'
+  import Popover from './Popover.svelte'
   import { autofocus } from './lib/autofocus'
   import { get } from 'svelte/store'
 
@@ -57,67 +56,24 @@
     clearPendingLine()
     closeOverlay()
   }
-
-  // Outside-click dismiss (mirrors FileOpsMenu's onWindowPointerDown pattern
-  // rather than a clickable backdrop div, which would need its own a11y
-  // role/keyboard handling for no benefit -- Esc already covers dismissal).
-  let popoverEl = $state<HTMLElement>()
-  function onWindowPointerDown(e: PointerEvent) {
-    if (popoverEl && !popoverEl.contains(e.target as Node)) close()
-  }
 </script>
 
-<svelte:window onpointerdown={onWindowPointerDown} />
-
-<div class="backdrop" use:portal>
-  <div
-    bind:this={popoverEl}
-    class="popover"
-    role="dialog"
-    aria-modal="true"
-    aria-label="Go to Line"
-    tabindex="-1"
-    use:focusTrap
-    onkeydown={onKeydown}
-  >
-    <input
-      use:autofocus
-      type="text"
-      value={value}
-      oninput={onInput}
-      placeholder="Line, or line:col"
-      aria-label="Line, or line:col"
-      aria-invalid={error}
-      data-autofocus
-      class:error
-    />
-    <span class="hint">{error ? 'Invalid line' : `1–${total}`}</span>
-  </div>
-</div>
+<Popover variant="bar" ariaLabel="Go to Line" onDismiss={close} {onKeydown}>
+  <input
+    use:autofocus
+    type="text"
+    value={value}
+    oninput={onInput}
+    placeholder="Line, or line:col"
+    aria-label="Line, or line:col"
+    aria-invalid={error}
+    data-autofocus
+    class:error
+  />
+  <span class="hint">{error ? 'Invalid line' : `1–${total}`}</span>
+</Popover>
 
 <style>
-  .backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 40;
-    pointer-events: none;
-  }
-  .popover {
-    position: absolute;
-    top: 64px;
-    left: 50%;
-    transform: translateX(-50%);
-    pointer-events: auto;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 10px;
-    background: var(--modal-bg);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    box-shadow: var(--shadow-popover);
-    font: 13px var(--font-ui);
-  }
   input {
     width: 220px;
     box-sizing: border-box;

@@ -5,8 +5,7 @@
   import { recencyOf } from './lib/recency'
   import { closeOverlay } from './lib/overlay'
   import { quickOpenSections } from './lib/quickOpen'
-  import { focusTrap } from './lib/focusTrap'
-  import { portal } from './lib/portal'
+  import Popover from './Popover.svelte'
   import { autofocus } from './lib/autofocus'
 
   /**
@@ -98,30 +97,12 @@
     }
   }
 
-  // Outside-click dismiss (GoToLineBar's onWindowPointerDown pattern — the
-  // backdrop is pointer-events:none, so a click outside lands on the app).
-  let panelEl = $state<HTMLElement>()
-  function onWindowPointerDown(e: PointerEvent) {
-    if (panelEl && !panelEl.contains(e.target as Node)) closeOverlay()
-  }
 </script>
 
-<svelte:window onpointerdown={onWindowPointerDown} />
-
-<div class="backdrop" use:portal>
-  <div
-    bind:this={panelEl}
-    class="panel"
-    role="dialog"
-    aria-modal="true"
-    aria-label="Quick Open"
-    tabindex="-1"
-    use:focusTrap
-    onkeydown={onKeydown}
-  >
-    <!-- Combobox pattern: the input stays focused (rows are never tabbable)
-         and aria-activedescendant tracks the keyboard selection. -->
-    <input
+<Popover variant="palette" ariaLabel="Quick Open" onDismiss={closeOverlay} {onKeydown}>
+  <!-- Combobox pattern: the input stays focused (rows are never tabbable)
+       and aria-activedescendant tracks the keyboard selection. -->
+  <input
       use:autofocus
       type="text"
       role="combobox"
@@ -172,39 +153,9 @@
     {:else}
       <p class="no-match" role="status">No matching files</p>
     {/if}
-  </div>
-</div>
+</Popover>
 
 <style>
-  /* Same shell as GoToLineBar: full-window fixed layer that eats no pointer
-     events itself (outside clicks reach the app and dismiss via the window
-     pointerdown handler); only the panel is interactive. */
-  .backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 40;
-    pointer-events: none;
-  }
-  /* Top-aligned like VS Code's quick pick, sharing GoToLineBar's 64px drop. */
-  .panel {
-    position: absolute;
-    top: 64px;
-    left: 50%;
-    transform: translateX(-50%);
-    pointer-events: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    width: 520px;
-    max-width: calc(100vw - 48px);
-    box-sizing: border-box;
-    padding: 8px;
-    background: var(--modal-bg);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    box-shadow: var(--shadow-popover);
-    font: 13px var(--font-ui);
-  }
   input {
     width: 100%;
     box-sizing: border-box;

@@ -63,6 +63,7 @@
   import HistoryModal from './HistoryModal.svelte'
   import QuickOpen from './QuickOpen.svelte'
   import Sidebar from './Sidebar.svelte'
+  import Modal from './Modal.svelte'
   import { searchUi, openFind, openReplace, closeFind, shouldForceCloseFind } from './lib/searchPlugin'
   import { openSourceSearch, clearPendingLine } from './lib/sourceEditor'
   import { split, emptyState, imageView } from './lib/ui'
@@ -86,7 +87,6 @@
   import { revealLog, reportError, reportNotice } from './lib/errors'
   import { exportDocument } from './lib/export'
   import { flushBufferEdits } from './lib/bufferFlush'
-  import { focusTrap, dialogDismissHandlers } from './lib/focusTrap'
 
   // True while `save()` is in flight (native dialogs aren't window-parented,
   // so the modal stays clickable underneath them without this guard).
@@ -805,19 +805,6 @@
     syncReadonlyMenu(get(doc).readonly)
   }
 
-  // Esc cancels the guard modal, same as clicking Cancel -- but stays inert
-  // while a save is in flight (the buttons are disabled(saving) too).
-  // stopPropagation keeps this from also tripping the window-level Escape
-  // handler (which only acts on the find bar, and skips while the discard
-  // overlay is up anyway, but this mirrors SettingsModal's pattern).
-  // Only the Escape half of dialogDismissHandlers is adopted here: this modal
-  // has no backdrop-click-to-close (the saving guard belongs to `cancel`, not
-  // to a bare close call, so wiring onBackdropClick too would newly add a
-  // dismiss path that ignores it).
-  const { onKeydown: onModalKeydown } = dialogDismissHandlers(() => {
-    if (!saving) cancel()
-  })
-
   // The default Save resolution: the active doc's ordinary save(). An
   // overlay-supplied `save` (cached-tab close, window-close save-all) wins
   // when present — those flows' dirty buffers live in the buffer cache, not
@@ -939,24 +926,20 @@
 </main>
 
 {#if $activeOverlay?.kind === 'discard'}
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="modal-backdrop" ondblclick={onBackdropDblClick}>
-    <div
-      class="modal"
-      role="dialog"
-      aria-modal="true"
-      tabindex="-1"
-      use:focusTrap
-      onkeydown={onModalKeydown}
-    >
-      <p>You have unsaved changes. Save them before continuing?</p>
-      <div class="actions">
-        <button class="danger" disabled={saving} onclick={discard}>Don't Save</button>
-        <button disabled={saving} data-autofocus onclick={cancel}>Cancel</button>
-        <button class="primary" disabled={saving} onclick={saveAndContinue}>Save</button>
-      </div>
+  <!-- Esc cancels the guard, same as Cancel -- but stays inert while a save is
+       in flight (the buttons are disabled(saving) too). onClose adopts only the
+       Escape half of the shell's dismiss (no backdrop-click-to-close): the
+       saving guard belongs to `cancel`, and stopPropagation (inside the shell)
+       keeps this from also tripping the window-level Escape handler.
+       onBackdropDblClick retargets a preview-open deferred behind this modal. -->
+  <Modal onClose={() => { if (!saving) cancel() }} {onBackdropDblClick}>
+    <p>You have unsaved changes. Save them before continuing?</p>
+    <div class="modal-actions" style="margin-top:12px">
+      <button class="btn-ghost btn-danger" disabled={saving} onclick={discard}>Don't Save</button>
+      <button class="btn-ghost" disabled={saving} data-autofocus onclick={cancel}>Cancel</button>
+      <button class="btn-ghost btn-primary" disabled={saving} onclick={saveAndContinue}>Save</button>
     </div>
-  </div>
+  </Modal>
 {/if}
 
 {#if $activeOverlay?.kind === 'settings'}
@@ -981,47 +964,6 @@
      bar. min-height/width:0 lets the editor scroll instead of pushing layout. */
   .body { display: flex; flex: 1; min-height: 0; }
   .content { display: flex; flex-direction: column; flex: 1; min-width: 0; }
-  .modal-backdrop {
-    position: fixed; inset: 0; background: var(--backdrop);
-    display: flex; align-items: center; justify-content: center;
-  }
-  .modal {
-    background: var(--modal-bg); color: var(--fg); padding: 20px; border-radius: 8px;
-    border: 1px solid var(--border);
-    font: 14px var(--font-ui); max-width: 320px;
-  }
-  .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
-  .actions button {
-    padding: 6px 14px;
-    border-radius: 6px;
-    background: var(--surface);
-    border: 1px solid transparent;
-    color: var(--fg-secondary);
-    font: inherit;
-    cursor: pointer;
-    transition: background-color 0.1s ease, border-color 0.1s ease, color 0.1s ease;
-  }
-  .actions button:not(:disabled):hover { background: var(--surface-hover); }
-  .actions button:not(:disabled):active { background: var(--surface-active); }
-  .actions button:disabled { opacity: 0.5; cursor: default; }
-  .danger {
-    background: transparent;
-    border-color: var(--danger);
-    color: var(--danger);
-  }
-  .danger:not(:disabled):hover { background: var(--danger-tint); }
-  .danger:not(:disabled):active { background: var(--danger-tint-strong); }
-  /* Solid-fill bg uses --accent-solid, not bare --accent: white (--on-accent)
-     text on --accent is only 3.31:1, below WCAG AA 4.5:1 for normal text;
-     --accent-solid and its hover/active shades clear 4.5:1+ in both themes. */
-  .primary {
-    background: var(--accent-solid);
-    border-color: transparent;
-    color: var(--on-accent);
-    font-weight: 600;
-  }
-  .primary:not(:disabled):hover { background: var(--accent-solid-hover); }
-  .primary:not(:disabled):active { background: var(--accent-solid-active); }
 
   .reload-bar {
     display: flex;
