@@ -1,6 +1,7 @@
 import { writable, type Writable } from 'svelte/store'
 import { isSelfOrDescendant, rewritePrefix } from './paths'
 import { isDirty } from './doc'
+import { ASSERT_INVARIANTS } from './assertInvariant'
 
 /**
  * The buffer cache behind instant tab switches: when the active document is
@@ -67,8 +68,24 @@ function enforceCap(): void {
   }
 }
 
-/** Stash (or refresh) `path`'s entry; delete+set keeps Map order = LRU order. */
-export function stash(path: string, entry: CachedBuffer): void {
+/**
+ * Stash (or refresh) `path`'s entry; delete+set keeps Map order = LRU order.
+ *
+ * `pinned` is the current openList (the pinned-set), passed in — dev/test only —
+ * so this module never imports openList and the ~40 isolated bufferCache/files/
+ * fileMutations unit tests that call stash() WITHOUT it stay decoupled. When
+ * supplied, it enforces the membership invariant (cache keys ⊆ openList): only
+ * the real production choke-point (files.ts stashActive, which pins any dirty
+ * pathed doc first) opts in by passing the set. Statically dead code in a
+ * production build (ASSERT_INVARIANTS is false), so it costs nothing there.
+ */
+export function stash(path: string, entry: CachedBuffer, pinned?: readonly string[]): void {
+  if (ASSERT_INVARIANTS && pinned !== undefined && !pinned.includes(path)) {
+    throw new Error(
+      `bufferCache invariant violated: stash('${path}') for a path not in openList ` +
+        '(cache keys must be ⊆ openList — pinned paths only). Pin the path before stashing.',
+    )
+  }
   cache.delete(path)
   cache.set(path, entry)
   enforceCap()

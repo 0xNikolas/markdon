@@ -1,5 +1,6 @@
 import { get, writable, type Writable } from 'svelte/store'
 import { isSelfOrDescendant, rewritePrefix } from './paths'
+import { ASSERT_INVARIANTS } from './assertInvariant'
 
 /**
  * The sidebar's "Open Files" list (MODE A): a de-duplicated list of every
@@ -150,6 +151,18 @@ export function clearPreviewInSubtree(preview: string | null, path: string): str
 export function pinOpen(path: string): void {
   openList.update((l) => addOpen(l, path))
   previewPath.update((p) => (p === path ? null : p))
+  // Invariant (dev/test only): the preview slot and the pinned list stay
+  // disjoint. pinOpen is the transition that could seat a preview in the pinned
+  // list, so it is the enforcement point. Statically dead in a production build.
+  if (ASSERT_INVARIANTS) {
+    const preview = get(previewPath)
+    if (preview !== null && get(openList).includes(preview)) {
+      throw new Error(
+        `openList invariant violated: previewPath (${preview}) is also in openList ` +
+          `after pinOpen('${path}'). The preview slot and pinned list must stay disjoint.`,
+      )
+    }
+  }
 }
 
 /** Pin the current preview, if any (dblclick on the row, or editing the buffer). */

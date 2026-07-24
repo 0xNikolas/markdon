@@ -56,6 +56,24 @@ describe('stash / take / peek', () => {
   })
 })
 
+describe('membership invariant (cache keys ⊆ openList)', () => {
+  it('throws when the optional pinned-set is supplied and lacks the key', () => {
+    expect(() => stash('/ws/x.md', clean(), [])).toThrow(/⊆ openList|not in openList/)
+    expect(() => stash('/ws/x.md', clean(), ['/ws/other.md'])).toThrow(/⊆ openList|not in openList/)
+    expect(peek('/ws/x.md')).toBeUndefined() // threw before mutating the cache
+  })
+
+  it('is silent — and stashes — when the pinned-set contains the key', () => {
+    expect(() => stash('/ws/x.md', clean(), ['/ws/x.md'])).not.toThrow()
+    expect(peek('/ws/x.md')).toBeDefined()
+  })
+
+  it('is a no-op when the pinned-set is omitted (isolated callers stay decoupled)', () => {
+    expect(() => stash('/ws/x.md', clean())).not.toThrow()
+    expect(peek('/ws/x.md')).toBeDefined()
+  })
+})
+
 describe('LRU cap over clean entries', () => {
   it('evicts the oldest CLEAN entry beyond the cap', () => {
     for (let i = 0; i < MAX_CLEAN_CACHED + 1; i++) stash(`/ws/c${i}.md`, clean())

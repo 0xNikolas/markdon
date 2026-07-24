@@ -225,6 +225,21 @@ describe('pinOpen / pinPreview (store transitions)', () => {
     expect(get(openList)).toEqual(['/a.md'])
     expect(get(previewPath)).toBeNull()
   })
+
+  it('throws when pinOpen leaves a DIFFERENT previewed path seated in openList', () => {
+    // Seed the violating pre-state: /a.md is both previewed and (about to be)
+    // pinned. pinOpen('/b.md') prepends /b.md but leaves preview '/a.md' — which
+    // is already in openList — so the preview/pinned disjointness is broken.
+    openList.set(['/a.md'])
+    previewPath.set('/a.md')
+    expect(() => pinOpen('/b.md')).toThrow(/disjoint|previewPath/)
+  })
+
+  it('stays silent when pinOpen clears the matching preview (no violation)', () => {
+    previewPath.set('/a.md')
+    expect(() => pinOpen('/a.md')).not.toThrow()
+    expect(get(previewPath)).toBeNull()
+  })
 })
 
 describe('neighbourInStrip', () => {
