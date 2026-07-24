@@ -28,8 +28,7 @@
   } from './lib/fileMutations'
   import { pasteTargetDir, folderPaths } from './lib/fileTree'
   import { collapsed, startRename, stemLength, basename } from './lib/treeState'
-  import { focusTrap } from './lib/focusTrap'
-  import { portal } from './lib/portal'
+  import Modal from './Modal.svelte'
   import { get } from 'svelte/store'
   import { selectionForContextMenu, isSelectionClearingTarget } from './lib/sidebarMenu'
 
@@ -348,27 +347,13 @@
 {/if}
 
 {#if deleteConfirm}
-  <div class="modal-backdrop" use:portal>
-    <div
-      class="modal"
-      role="dialog"
-      aria-modal="true"
-      tabindex="-1"
-      use:focusTrap
-      onkeydown={(e) => {
-        if (e.key === 'Escape') {
-          e.stopPropagation()
-          deleteConfirm = null
-        }
-      }}
-    >
-      <p>Move <strong>{deleteConfirm.label}</strong> to the Trash?</p>
-      <div class="actions">
-        <button data-autofocus onclick={() => (deleteConfirm = null)}>Cancel</button>
-        <button class="danger" onclick={confirmDelete}>Move to Trash</button>
-      </div>
+  <Modal onClose={() => (deleteConfirm = null)}>
+    <p>Move <strong>{deleteConfirm.label}</strong> to the Trash?</p>
+    <div class="modal-actions">
+      <button class="btn-ghost" data-autofocus onclick={() => (deleteConfirm = null)}>Cancel</button>
+      <button class="btn-ghost btn-danger" onclick={confirmDelete}>Move to Trash</button>
     </div>
-  </div>
+  </Modal>
 {/if}
 
 <style>
@@ -452,54 +437,11 @@
     color: var(--fg-secondary);
   }
 
-  /* Delete confirmation modal (folder or multi-item deletes). Mirrors the
-     App.svelte unsaved-changes modal so the two read as one system. */
-  .modal-backdrop {
-    position: fixed;
-    inset: 0;
-    background: var(--backdrop);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 40;
-  }
-  .modal {
-    background: var(--modal-bg);
-    color: var(--fg);
-    padding: 20px;
-    border-radius: 8px;
-    border: 1px solid var(--border);
-    font: 14px var(--font-ui);
-    max-width: 320px;
-  }
-  .modal p {
+  /* Delete-confirm text (folder or multi-item deletes): the confirm <p> renders
+     inside the shared <Modal>, but is authored here so it carries this
+     component's scope — kept margin-0 (the empty-panel <p>s override via their
+     own classes). Shell/button styling now lives in Modal + app.css globals. */
+  p {
     margin: 0;
-  }
-  .actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-top: 16px;
-  }
-  .actions button {
-    padding: 6px 14px;
-    border-radius: 6px;
-    background: var(--surface);
-    border: 1px solid transparent;
-    color: var(--fg-secondary);
-    font: inherit;
-    cursor: pointer;
-    transition: background-color 0.1s ease, border-color 0.1s ease, color 0.1s ease;
-  }
-  .actions button:hover {
-    background: var(--surface-hover);
-  }
-  .actions .danger {
-    background: transparent;
-    border-color: var(--danger);
-    color: var(--danger);
-  }
-  .actions .danger:hover {
-    background: var(--danger-tint);
   }
 </style>

@@ -161,7 +161,7 @@
         <div class="footer-actions">
           <button class="secondary" onclick={closeOverlay}>Close</button>
           <button
-            class="primary"
+            class="btn-primary"
             disabled={selectedId === null || readonly}
             title={readonly ? 'Enable editing first' : undefined}
             onclick={revert}
@@ -403,20 +403,8 @@
   .secondary:active {
     background: var(--surface-active);
   }
-  /* --accent-solid (not bare --accent): white text on --accent is below WCAG AA;
-     --accent-solid and its shades clear 4.5:1+ in both themes. */
-  .primary {
-    background: var(--accent-solid);
-    color: var(--on-accent);
-  }
-  .primary:not(:disabled):hover {
-    background: var(--accent-solid-hover);
-  }
-  .primary:not(:disabled):active {
-    background: var(--accent-solid-active);
-  }
-  .primary:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
+  /* The Revert button adopts the global .btn-primary (app.css) atop this
+     component's own `.footer-actions button` base — a color-only modifier, so
+     the swap is a zero-pixel change (accent-solid fill, white text, 600 weight
+     the base already sets). */
 </style>

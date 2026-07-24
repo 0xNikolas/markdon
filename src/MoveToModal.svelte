@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { focusTrap, dialogDismissHandlers } from './lib/focusTrap'
-  import { portal } from './lib/portal'
+  import Modal from './Modal.svelte'
   import { workspace } from './lib/workspace'
   import { isSelfOrDescendant, dirname } from './lib/paths'
   import { folderRows } from './lib/fileTree'
@@ -25,53 +24,30 @@
     }
     return false
   }
-
-  const { onKeydown } = dialogDismissHandlers(() => onCancel())
 </script>
 
-<div class="modal-backdrop" use:portal>
-  <div class="modal" role="dialog" aria-modal="true" tabindex="-1" use:focusTrap onkeydown={onKeydown}>
-    <p class="title">Move to…</p>
-    <div class="list" role="listbox" aria-label="Destination folder">
-      {#each rows as row (row.path)}
-        <button
-          class="row"
-          role="option"
-          aria-selected="false"
-          disabled={disabled(row.path)}
-          style="padding-left:{10 + row.depth * 14}px"
-          onclick={() => onConfirm(row.path)}
-        >
-          {row.label}
-        </button>
-      {/each}
-    </div>
-    <div class="actions">
-      <button type="button" data-autofocus onclick={onCancel}>Cancel</button>
-    </div>
+<Modal width="340px" onClose={onCancel}>
+  <p class="title">Move to…</p>
+  <div class="list" role="listbox" aria-label="Destination folder">
+    {#each rows as row (row.path)}
+      <button
+        class="row"
+        role="option"
+        aria-selected="false"
+        disabled={disabled(row.path)}
+        style="padding-left:{10 + row.depth * 14}px"
+        onclick={() => onConfirm(row.path)}
+      >
+        {row.label}
+      </button>
+    {/each}
   </div>
-</div>
+  <div class="modal-actions">
+    <button type="button" class="btn-ghost" data-autofocus onclick={onCancel}>Cancel</button>
+  </div>
+</Modal>
 
 <style>
-  .modal-backdrop {
-    position: fixed;
-    inset: 0;
-    background: var(--backdrop);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 40;
-  }
-  .modal {
-    background: var(--modal-bg);
-    color: var(--fg);
-    padding: 20px;
-    border-radius: 8px;
-    border: 1px solid var(--border);
-    font: 14px var(--font-ui);
-    width: 340px;
-    max-width: calc(100vw - 32px);
-  }
   .title {
     margin: 0 0 12px;
     font: 600 13px var(--font-ui);
@@ -109,23 +85,5 @@
   .row:disabled {
     opacity: 0.4;
     cursor: default;
-  }
-  .actions {
-    display: flex;
-    justify-content: flex-end;
-    margin-top: 16px;
-  }
-  .actions button {
-    padding: 6px 14px;
-    border-radius: 6px;
-    background: var(--surface);
-    border: 1px solid transparent;
-    color: var(--fg-secondary);
-    font: inherit;
-    cursor: pointer;
-    transition: background-color 0.1s ease;
-  }
-  .actions button:hover {
-    background: var(--surface-hover);
   }
 </style>

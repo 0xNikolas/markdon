@@ -125,3 +125,68 @@ body { background: var(--bg); color: var(--fg); }
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
+
+/* Shared modal footer + button classes, promoted from the byte-copied blocks
+   in App (discard), Sidebar (delete-confirm), NameModal and MoveToModal.
+   Named `.modal-actions` (not `.actions`) so it never collides with the
+   unrelated `.actions` rows in EmptyState/Banner. `.btn-ghost` is a
+   self-contained neutral base; `.btn-primary`/`.btn-danger` are COLOR-ONLY
+   modifiers (no padding/radius/font-size) meant to layer on a base
+   (`btn-ghost btn-primary`, or HistoryModal's own `.footer-actions button`),
+   so adopting them is a zero-pixel change. */
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+.btn-ghost {
+  padding: 6px 14px;
+  border-radius: 6px;
+  background: var(--surface);
+  border: 1px solid transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  cursor: pointer;
+  transition: background-color 0.1s ease, border-color 0.1s ease, color 0.1s ease;
+}
+.btn-ghost:not(:disabled):hover {
+  background: var(--surface-hover);
+}
+.btn-ghost:not(:disabled):active {
+  background: var(--surface-active);
+}
+.btn-ghost:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* Solid-fill bg uses --accent-solid, not bare --accent: white (--on-accent)
+   text on --accent is only 3.31:1, below WCAG AA 4.5:1; --accent-solid and its
+   hover/active shades clear 4.5:1+ in both themes. */
+.btn-primary {
+  background: var(--accent-solid);
+  border-color: transparent;
+  color: var(--on-accent);
+  font-weight: 600;
+}
+.btn-primary:not(:disabled):hover {
+  background: var(--accent-solid-hover);
+}
+.btn-primary:not(:disabled):active {
+  background: var(--accent-solid-active);
+}
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.btn-danger {
+  background: transparent;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.btn-danger:not(:disabled):hover {
+  background: var(--danger-tint);
+}
+.btn-danger:not(:disabled):active {
+  background: var(--danger-tint-strong);
+}
