@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { getVersion } from '@tauri-apps/api/app'
-  import { invoke } from '@tauri-apps/api/core'
+  import * as ipc from './lib/ipc'
   import Icon from './Icon.svelte'
   import { closeOverlay } from './lib/overlay'
   import { settings, updateSetting, type Settings } from './lib/settings'
@@ -40,7 +40,7 @@
 
   async function refreshCli() {
     try {
-      cli = await invoke<CliStatus>('cli_status')
+      cli = await ipc.cliStatus()
     } catch (e) {
       reportError(`Could not check the \`md\` command status: ${String(e)}`)
     }
@@ -53,7 +53,7 @@
   async function toggleCli() {
     const installing = !cli?.installed
     try {
-      cli = await invoke<CliStatus>(installing ? 'install_cli' : 'uninstall_cli')
+      cli = installing ? await ipc.installCli() : await ipc.uninstallCli()
     } catch (e) {
       reportError(
         `Could not ${installing ? 'install' : 'uninstall'} the \`md\` command: ${String(e)}`,

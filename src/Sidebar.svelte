@@ -6,7 +6,7 @@
   import OpenFilesStrip, { type StripRowAction } from './OpenFilesStrip.svelte'
   import SidebarHeader from './SidebarHeader.svelte'
   import WorkspaceTree from './WorkspaceTree.svelte'
-  import { invoke } from '@tauri-apps/api/core'
+  import * as ipc from './lib/ipc'
   import { workspace, openWorkspace, closeWorkspace } from './lib/workspace'
   import { openList, previewPath } from './lib/openList'
   import { openInNewWindow } from './lib/files'
@@ -143,7 +143,7 @@
         // workspace, and lifecycle). The command re-ensures the grant, so
         // only paths this instance could already read can be handed off.
         if (sel.length === 1) {
-          invoke('open_file_new_instance', { path: sel[0] }).catch((e) =>
+          ipc.openFileNewInstance(sel[0]).catch((e) =>
             reportError(`Could not open a new app instance: ${String(e)}`),
           )
         }
@@ -155,7 +155,7 @@
         // opened, is accepted. A file deleted from disk after listing fails
         // ensure's canonicalize and surfaces the banner rather than crashing.
         if (sel.length === 1) {
-          invoke('reveal_path', { path: sel[0] }).catch((e) =>
+          ipc.revealPath(sel[0]).catch((e) =>
             reportError(`Could not reveal file: ${String(e)}`),
           )
         }

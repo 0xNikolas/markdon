@@ -14,7 +14,8 @@
 // ~/note.md never exposes the whole home tree to the display channel), plus a
 // per-file grant for each pasted image and for each subdirectory image ref
 // resolved through resolve_image_asset.
-import { invoke, convertFileSrc } from '@tauri-apps/api/core'
+import { convertFileSrc } from '@tauri-apps/api/core'
+import * as ipc from './ipc'
 import { get } from 'svelte/store'
 import { doc } from './doc'
 import { reportFailure } from './errors'
@@ -60,7 +61,7 @@ export async function uploadPastedImage(file: File): Promise<string> {
   if (docPath === null || ext === null) return URL.createObjectURL(file)
   try {
     const dataB64 = bytesToBase64(new Uint8Array(await file.arrayBuffer()))
-    return await invoke<string>('save_pasted_image', { docPath, dataB64, ext })
+    return await ipc.savePastedImage(docPath, dataB64, ext)
   } catch (e) {
     reportFailure('save pasted image', e)
     return URL.createObjectURL(file)
@@ -111,7 +112,7 @@ export function resolveImageSrc(src: string, docPath: string | null): string | P
   const dir = dirname(docPath)
   const joined = joinRelative(dir, decoded)
   if (dirname(joined) === dir) return convertFileSrc(joined)
-  return invoke<string>('resolve_image_asset', { docPath, rel: decoded }).then(
+  return ipc.resolveImageAsset(docPath, decoded).then(
     (resolved) => convertFileSrc(resolved),
     () => convertFileSrc(joined),
   )

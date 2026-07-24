@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core'
+import * as ipc from './ipc'
 import { get } from 'svelte/store'
 import { doc } from './doc'
 import { settings, type Settings } from './settings'
@@ -200,16 +200,15 @@ export async function exportDocument(): Promise<void> {
       // both the print job title and the helper window title from it, so the
       // "Save as PDF" sheet defaults to `<docTitle>.pdf` (the HTML <title>
       // baked in by buildExportHtml carries the same value as a backstop).
-      await invoke('export_pdf', { html: contents, title: docTitle(state.path) })
+      await ipc.exportPdf(contents, docTitle(state.path))
       return
     }
 
-    const selected = await invoke<string | null>('save_file_dialog', {
-      defaultPath: deriveExportFilename(state.path, format),
-      filters: [exportFilter(format)],
-    })
+    const selected = await ipc.saveFileDialog(deriveExportFilename(state.path, format), [
+      exportFilter(format),
+    ])
     if (selected === null) return // cancelled
-    await invoke('write_file', { path: selected, contents })
+    await ipc.writeFile(selected, contents)
   } catch (e) {
     reportFailure('export', e)
   }

@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core'
+import * as ipc from './ipc'
 import { writable, type Writable } from 'svelte/store'
 import { logWarn } from './logging'
 
@@ -36,14 +36,14 @@ export const selectedVersionId: Writable<string | null> = writable(null)
 
 /** Load the version list for `path` (newest-first, straight from Rust). */
 export async function loadVersions(path: string): Promise<HistoryEntry[]> {
-  const list = await invoke<HistoryEntry[]>('list_history', { path })
+  const list = await ipc.listHistory(path)
   versions.set(list)
   return list
 }
 
 /** Read one version's full content for the read-only preview. */
 export async function readVersion(path: string, id: string): Promise<string> {
-  return invoke<string>('read_history_version', { path, id })
+  return ipc.readHistoryVersion(path, id)
 }
 
 /**
@@ -54,7 +54,7 @@ export async function readVersion(path: string, id: string): Promise<string> {
  */
 async function record(path: string, trigger: HistoryEntry['trigger']): Promise<void> {
   try {
-    await invoke('record_history', { path, trigger })
+    await ipc.recordHistory(path, trigger)
   } catch (e) {
     logWarn(`history: could not record ${trigger} snapshot`, e)
   }

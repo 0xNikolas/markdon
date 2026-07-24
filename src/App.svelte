@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { getCurrentWindow } from '@tauri-apps/api/window'
-  import { invoke } from '@tauri-apps/api/core'
+  import * as ipc from './lib/ipc'
   import { get } from 'svelte/store'
   import {
     doc,
@@ -353,7 +353,7 @@
       const entry = takeClosed()
       if (entry === null) return
       try {
-        await invoke('read_file', { path: entry.path }) // existence probe
+        await ipc.readFile(entry.path) // existence probe
       } catch {
         continue // file is gone (deleted/renamed since the close): skip silently
       }
@@ -408,9 +408,7 @@
       case 'reveal':
         // reveal_path is allowlist-gated in Rust (AllowedPaths::ensure), so
         // only paths this window was actually granted can be revealed.
-        invoke('reveal_path', { path }).catch((e) =>
-          reportError(`Could not reveal file: ${String(e)}`),
-        )
+        ipc.revealPath(path).catch((e) => reportError(`Could not reveal file: ${String(e)}`))
         break
     }
   }
