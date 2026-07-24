@@ -4,7 +4,7 @@ import {
   isQuickOpenKey,
   fileCycleDirection,
   isReopenClosedKey,
-} from './ui'
+} from './keys'
 
 /**
  * The one declarative shortcut table. It is the SINGLE source of truth for the

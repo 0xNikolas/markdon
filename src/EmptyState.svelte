@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { homeDir } from '@tauri-apps/api/path'
-  import { isMacPlatform } from './lib/ui'
+  import { isMacPlatform } from './lib/keys'
   import {
     workspace,
     listRecentWorkspaces,

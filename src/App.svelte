@@ -65,7 +65,8 @@
   import Sidebar from './Sidebar.svelte'
   import { searchUi, openFind, openReplace, closeFind, shouldForceCloseFind } from './lib/searchPlugin'
   import { openSourceSearch, clearPendingLine } from './lib/sourceEditor'
-  import { split, emptyState, imageView, isMacPlatform } from './lib/ui'
+  import { split, emptyState, imageView } from './lib/ui'
+  import { isMacPlatform } from './lib/keys'
   import {
     matchKeydown,
     menuItemIds,

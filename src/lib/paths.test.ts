@@ -7,6 +7,9 @@ import {
   basename,
   dirname,
   splitExt,
+  fileBreadcrumb,
+  isInsideRoot,
+  windowTitle,
 } from './paths'
 
 describe('isSelfOrDescendant', () => {
@@ -174,5 +177,114 @@ describe('splitExt', () => {
 
   it('gives an extension-less name an empty ext', () => {
     expect(splitExt('README')).toEqual({ stem: 'README', ext: '' })
+  })
+})
+
+describe('isInsideRoot', () => {
+  it('is true for a file at or nested under the root', () => {
+    expect(isInsideRoot('/ws/project/file.md', '/ws/project')).toBe(true)
+    expect(isInsideRoot('/ws/project/sub/folders/file.md', '/ws/project')).toBe(true)
+  })
+
+  it('is false for a path outside the root', () => {
+    expect(isInsideRoot('/Users/nicu/other/todo.md', '/ws/project')).toBe(false)
+  })
+
+  it('does not treat a sibling directory sharing a name prefix as inside the root', () => {
+    // /ws/proj is NOT an ancestor of /ws/project2 even though the string is a prefix.
+    expect(isInsideRoot('/ws/project2/file.md', '/ws/proj')).toBe(false)
+  })
+
+  it('is false for a segment-less root (would otherwise vacuously match everything)', () => {
+    expect(isInsideRoot('/Users/nicu/notes/secret.md', '/')).toBe(false)
+    expect(isInsideRoot('/Users/nicu/notes/secret.md', '')).toBe(false)
+  })
+})
+
+describe('fileBreadcrumb', () => {
+  it('is just "Untitled" with no crumbs for a null path', () => {
+    expect(fileBreadcrumb(null, null, null)).toEqual({ crumbs: [], filename: 'Untitled' })
+    expect(fileBreadcrumb(null, '/ws/project', 'project')).toEqual({ crumbs: [], filename: 'Untitled' })
+  })
+
+  it('splits a workspace file into root name + intermediate folders + filename', () => {
+    expect(fileBreadcrumb('/ws/project/sub/folders/filename.md', '/ws/project', 'project')).toEqual({
+      crumbs: ['project', 'sub', 'folders'],
+      filename: 'filename.md',
+    })
+  })
+
+  it('has no intermediate crumbs for a file exactly at the workspace root', () => {
+    expect(fileBreadcrumb('/ws/project/filename.md', '/ws/project', 'project')).toEqual({
+      crumbs: ['project'],
+      filename: 'filename.md',
+    })
+  })
+
+  it('falls back to parent-folder + filename when there is no open workspace', () => {
+    expect(fileBreadcrumb('/Users/nicu/notes/todo.md', null, null)).toEqual({
+      crumbs: ['notes'],
+      filename: 'todo.md',
+    })
+  })
+
+  it('falls back to parent-folder + filename for a path outside the open workspace', () => {
+    expect(fileBreadcrumb('/Users/nicu/other/todo.md', '/ws/project', 'project')).toEqual({
+      crumbs: ['other'],
+      filename: 'todo.md',
+    })
+  })
+
+  it('does not treat a sibling directory sharing a name prefix as inside the workspace', () => {
+    // /ws/proj is NOT an ancestor of /ws/project2 even though the string is a prefix.
+    expect(fileBreadcrumb('/ws/project2/file.md', '/ws/proj', 'proj')).toEqual({
+      crumbs: ['project2'],
+      filename: 'file.md',
+    })
+  })
+
+  it('has no crumbs for a top-level file with no parent folder in its path', () => {
+    expect(fileBreadcrumb('todo.md', null, null)).toEqual({ crumbs: [], filename: 'todo.md' })
+  })
+
+  it('never leaks full ancestry when the workspace root has no path segments', () => {
+    // Root '/' (or '') would make the ancestry check vacuously true; must fall
+    // back to the parent-only form instead of exposing the whole path.
+    expect(fileBreadcrumb('/Users/nicu/notes/secret.md', '/', 'Macintosh HD')).toEqual({
+      crumbs: ['notes'],
+      filename: 'secret.md',
+    })
+    expect(fileBreadcrumb('/Users/nicu/notes/secret.md', '', 'x')).toEqual({
+      crumbs: ['notes'],
+      filename: 'secret.md',
+    })
+  })
+})
+
+describe('windowTitle', () => {
+  it('shows "Untitled" for a null path', () => {
+    expect(windowTitle(null, false)).toBe('Untitled — Markdon')
+  })
+
+  it('shows the filename for a clean doc', () => {
+    expect(windowTitle('/ws/notes/a.md', false)).toBe('a.md — Markdon')
+  })
+
+  it('prefixes a bullet while the doc is dirty', () => {
+    expect(windowTitle('/ws/notes/a.md', true)).toBe('• a.md — Markdon')
+    expect(windowTitle(null, true)).toBe('• Untitled — Markdon')
+  })
+
+  it('falls back safely on trailing-slash and segment-less paths', () => {
+    // Mirrors fileBreadcrumb's segment filtering: empty segments never surface.
+    expect(windowTitle('/ws/notes/', false)).toBe('notes — Markdon')
+    expect(windowTitle('/', false)).toBe('Untitled — Markdon')
+  })
+
+  it('renders plain "Markdon" while the empty page is shown — empty wins over everything', () => {
+    expect(windowTitle(null, false, true)).toBe('Markdon')
+    // The empty page implies a pristine pathless doc, but stale-looking
+    // inputs must not leak a filename or bullet either.
+    expect(windowTitle('/ws/a.md', true, true)).toBe('Markdon')
   })
 })
