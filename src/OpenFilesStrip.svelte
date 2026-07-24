@@ -13,19 +13,13 @@
   import Icon from './Icon.svelte'
   import { fileIcon, workspace } from './lib/workspace'
   import { basename } from './lib/treeState'
-  import { stripOrder } from './lib/openList'
+  import { stripOrder, openList, previewPath } from './lib/openList'
+  import { dirtyCached } from './lib/bufferCache'
   import { stripKeyIntent } from './lib/stripNav'
   import ContextMenu, { type MenuItem } from './ContextMenu.svelte'
 
   interface Props {
-    openFiles: string[]
-    /** The single-click preview slot (openList.ts) — the strip's italic row. */
-    previewPath: string | null
     activePath: string | null
-    /** Rows whose stashed background buffers hold unsaved edits (a dirty dot
-        makes the invisible cache state visible; the active row's dirtiness is
-        already the Header's Edited badge). Previews are never cached. */
-    dirtyPaths?: ReadonlySet<string>
     onOpenFile: (path: string, opts?: { preview?: boolean; inPlace?: boolean }) => void
     onCloseFile: (path: string) => void
     /** Row context-menu action (Close variants / Copy Path / Reveal); the
@@ -33,20 +27,22 @@
     onStripAction: (action: StripRowAction, path: string) => void
   }
   let {
-    openFiles,
-    previewPath,
     activePath,
-    dirtyPaths = new Set(),
     onOpenFile,
     onCloseFile,
     onStripAction,
   }: Props = $props()
 
+  // The open-file list, single-click preview slot, and cached-dirty set are
+  // read straight from their module-singleton stores (openList/previewPath in
+  // ./lib/openList, dirtyCached in ./lib/bufferCache) — the same stores App
+  // and QuickOpen subscribe to — rather than threaded down as props.
+
   // The italic preview row, rendered only while the previewed path isn't
-  // pinned — pinning moves it into openFiles and the slot clears, so a
+  // pinned — pinning moves it into openList and the slot clears, so a
   // lingering equal value must not draw a duplicate row.
   let previewRow = $derived(
-    previewPath !== null && !openFiles.includes(previewPath) ? previewPath : null,
+    $previewPath !== null && !$openList.includes($previewPath) ? $previewPath : null,
   )
 
   // -- keyboard navigation (roving tabindex over the row buttons) -------------
@@ -56,7 +52,7 @@
   // buttons with one tab stop is valid a11y — so only the tabindex is roved
   // (stripNav.ts holds the pure ArrowUp/Down/Home/End decisions; Enter/Space
   // are native button activation).
-  let rows = $derived(stripOrder(openFiles, previewRow))
+  let rows = $derived(stripOrder($openList, previewRow))
   // The preview row renders FIRST (top slot) when present, so DOM
   // data-strip-index matches `rows` (stripOrder = preview-first): preview is
   // index 0 and pinned row i is index i + pinOffset. Keeping the two index
@@ -188,7 +184,7 @@
         </button>
       </div>
     {/if}
-    {#each openFiles as path, i (path)}
+    {#each $openList as path, i (path)}
       <!-- Two sibling buttons, not a nested button-in-button: the row opens
            the file, the small trailing button closes it (stopPropagation
            so a close click never also switches to it first). The row-level
@@ -214,7 +210,7 @@
           <span class="active-bar"></span>
           <Icon name={fileIcon(basename(path))} size={16} />
           <span class="name">{basename(path)}</span>
-          {#if dirtyPaths.has(path)}
+          {#if $dirtyCached.has(path)}
             <span class="dirty-dot" role="img" aria-label="Unsaved changes"></span>
           {/if}
         </button>
